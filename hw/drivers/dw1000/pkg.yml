@@ -1,0 +1,9 @@
+pkg.name: hw/drivers/dw1000
+pkg.description: DW1000 driver
+pkg.author: "Stephane D'Alu <stephane.dalu@insa-lyon.fr>"
+pkg.homepage: "http://perso.citi-lab.fr/sdalu/"
+pkg.keywords:
+    - dw1000
+
+pkg.deps:
+    - "@apache-mynewt-core/kernel/os"
