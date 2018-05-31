@@ -340,8 +340,7 @@ void _dw1000_clocks(dw1000_t dw, int mode) {
 
     // Read current value
     uint8_t pmsc_ctrl0[2];
-    _dw1000_reg_read(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0,
-		    pmsc_ctrl0, 2);
+    _dw1000_reg_read(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0, pmsc_ctrl0, 2);
 
     // Change value according to mode
     switch(mode) {
@@ -351,11 +350,13 @@ void _dw1000_clocks(dw1000_t dw, int mode) {
 	break;
 
     case DW1000_CLOCK_SYS_XTI:
-	pmsc_ctrl0[0] = 0x01 | (pmsc_ctrl0[0] & 0xFC);
+	pmsc_ctrl0[0] &= ~DW1000_MSK_PMSC_CTRL0_SYSCLKS;
+	pmsc_ctrl0[0] |=  DW1000_VAL_PMSC_CTRL0_SYSCLKS_19M;
         break;
 
     case DW1000_CLOCK_SYS_PLL:
-	pmsc_ctrl0[0] = 0x02 | (pmsc_ctrl0[0] & 0xFC);
+	pmsc_ctrl0[0] &= ~DW1000_MSK_PMSC_CTRL0_SYSCLKS;
+	pmsc_ctrl0[0] |=  DW1000_VAL_PMSC_CTRL0_SYSCLKS_125M;
         break;
 
     case DW1000_CLOCK_TX_CONTINOUSFRAME:
@@ -369,7 +370,7 @@ void _dw1000_clocks(dw1000_t dw, int mode) {
 	
     case DW1000_CLOCK_READ_ACC_OFF:
 	pmsc_ctrl0[0] = pmsc_ctrl0[0] & 0xB3;
-	pmsc_ctrl0[1] = 0x7F & pmsc_ctrl0[1];
+	pmsc_ctrl0[1] = pmsc_ctrl0[1] & 0x7F;
         break;
 
     case DW1000_CLOCK_LDE:
