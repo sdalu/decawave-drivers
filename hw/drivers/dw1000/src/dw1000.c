@@ -413,7 +413,8 @@ void _dw1000_softreset(dw1000_t dw) {
     // Clear wake-up configuration
     _dw1000_reg_write8 (dw, DW1000_REG_AON, DW1000_OFF_AON_CFG0, 0x00);
     // Upload new configuration
-    _dw1000_reg_write8 (dw, DW1000_REG_AON, DW1000_OFF_AON_CTRL, 0x02);  // SAVE
+    _dw1000_reg_write8 (dw, DW1000_REG_AON, DW1000_OFF_AON_CTRL,
+			DW1000_FLG_AON_CTRL_SAVE);
 
     // Reset All (HIF, TX, RX, PMSC) (put flags to 0)
     _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
