@@ -332,22 +332,17 @@ void _dw1000_spi_header(uint8_t reg,  size_t offset, bool write,
 static
 void _dw1000_clocks(dw1000_t dw, int mode) {
     /* PMSC CTRL0 is a 4-byte length field
-     * Here we are only interested in the first 2 bytes
-     *
-     * According to official deca_device.c, it seems that in this
-     * case lower byte must be transfered first, so we will perform
-     * two SPI transactions (DW1000 SPI being MSB first)
+     * Here we are only interested in the first byte (holding SYSCLKS)
      */
 
     // Read current value
-    uint8_t pmsc_ctrl0[2];
-    _dw1000_reg_read(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0, pmsc_ctrl0, 2);
+    uint8_t pmsc_ctrl0[1];
+    _dw1000_reg_read(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0, pmsc_ctrl0, 1);
 
     // Change value according to mode
     switch(mode) {
     case DW1000_CLOCK_SEQUENCING:
-	pmsc_ctrl0[0] = 0x00;
-	pmsc_ctrl0[1] =        (pmsc_ctrl0[1] & 0xFE);
+	pmsc_ctrl0[0] &= ~DW1000_MSK_PMSC_CTRL0_SYSCLKS;
 	break;
 
     case DW1000_CLOCK_SYS_XTI:
@@ -371,8 +366,6 @@ void _dw1000_clocks(dw1000_t dw, int mode) {
     // Force sending lower byte (ie: sys/tx/rx clocks) first
     _dw1000_reg_write(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0,
 		     &pmsc_ctrl0[0], 1);
-    _dw1000_reg_write(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0 + 1,
-		     &pmsc_ctrl0[1], 1);
 }
 
 
