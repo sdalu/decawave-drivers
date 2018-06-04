@@ -358,8 +358,6 @@ struct dw1000 {
 #define DW1000_CLOCK_SYS_XTI               1
 #define DW1000_CLOCK_SYS_PLL               2
 #define DW1000_CLOCK_TX_CONTINOUSFRAME     3
-#define DW1000_CLOCK_READ_ACC_ON           4
-#define DW1000_CLOCK_READ_ACC_OFF          5
 #define DW1000_CLOCK_LDE                   6
 
 

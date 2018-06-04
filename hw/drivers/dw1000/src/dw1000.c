@@ -363,16 +363,6 @@ void _dw1000_clocks(dw1000_t dw, int mode) {
 	pmsc_ctrl0[0] = 0x22 | (pmsc_ctrl0[0] & 0xCC);	
         break;
 
-    case DW1000_CLOCK_READ_ACC_ON:
-	pmsc_ctrl0[0] = 0x48 | (pmsc_ctrl0[0] & 0xB3);
-	pmsc_ctrl0[1] = 0x80 |  pmsc_ctrl0[1];
-        break;
-	
-    case DW1000_CLOCK_READ_ACC_OFF:
-	pmsc_ctrl0[0] = pmsc_ctrl0[0] & 0xB3;
-	pmsc_ctrl0[1] = pmsc_ctrl0[1] & 0x7F;
-        break;
-
     case DW1000_CLOCK_LDE:
 	pmsc_ctrl0[0] = 0x01;
 	pmsc_ctrl0[1] = 0x03;
