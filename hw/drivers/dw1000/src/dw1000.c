@@ -8,6 +8,7 @@
  *  DS  = Datasheet
  *  UM  = User Manual (2.08)
  *  APS = Application Note
+ *  MN  = MyNewt Decawave driver
  * 
  * Some references are also made to the official decawave driver:
  *  deca_device.c
@@ -363,11 +364,6 @@ void _dw1000_clocks(dw1000_t dw, int mode) {
 	pmsc_ctrl0[0] = 0x22 | (pmsc_ctrl0[0] & 0xCC);	
         break;
 
-    case DW1000_CLOCK_LDE:
-	pmsc_ctrl0[0] = 0x01;
-	pmsc_ctrl0[1] = 0x03;
-	break;
-	
     default:
         break;
     }
@@ -890,6 +886,7 @@ msg_t dw1000_initialise(dw1000_t dw) {
     _dw1000_softreset(dw);
     
     // Clock need to be running at XTAL value for safe reading of OTP
+    // or loading microcode (see MN: _dw1000_phy_load_microcode)
     _dw1000_clocks(dw, DW1000_CLOCK_SYS_XTI); 
 
     // Clock PLL lock detect tune.
@@ -942,8 +939,6 @@ msg_t dw1000_initialise(dw1000_t dw) {
     // Dealing with LDE (leading edge detect) code
     // UM §7.2.46.3: Load code or clear run bit
     if (cfg->lde_loading) { //-> Loading of LDE code
-	_dw1000_clocks(dw, DW1000_CLOCK_LDE);
-
 	// Start the LDE load
 	_dw1000_reg_write16(dw, DW1000_REG_OTP_IF, DW1000_OFF_OTP_CTRL,
 			   DW1000_FLG_OTP_CTRL_LDELOAD);
@@ -958,8 +953,6 @@ msg_t dw1000_initialise(dw1000_t dw) {
 			   DW1000_FLG_PMSC_CTRL1_LDERUNE);
     }
 
-    // --[HERE]-- clocks are now in LDE or SYS_XTI mode -----------------
-       
     // Return clocks to default behaviour
     _dw1000_clocks(dw, DW1000_CLOCK_SEQUENCING); 
 
