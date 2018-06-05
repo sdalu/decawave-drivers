@@ -732,10 +732,9 @@ void _dw1000_reg_write(dw1000_t dw,
     _dw1000_spi_header(reg, offset, true, hdr, &hlen);
 
     // Perform write
-    spiSelect  (dw->config->spi);
-    spiSend    (dw->config->spi, hlen,   hdr);   // Send register request 
-    spiSend    (dw->config->spi, length, data);  // Write data
-    spiUnselect(dw->config->spi);
+    _dw1000_spi_send(dw->config->spi,  // SPI handler
+		     hlen, hdr,        // Send register request 
+		     length, data);    // Write data
 }
 
 
@@ -762,10 +761,9 @@ void _dw1000_reg_read(dw1000_t dw,
     _dw1000_spi_header(reg, offset, false, hdr, &hlen);
 
     // Perform read
-    spiSelect  (dw->config->spi);
-    spiSend    (dw->config->spi, hlen,   hdr);   // Send register request 
-    spiReceive (dw->config->spi, length, data);  // Read data
-    spiUnselect(dw->config->spi);
+    _dw1000_spi_recv(dw->config->spi,  // SPI handler
+		     hlen,   hdr,      // Send register request 
+		     length, data);    // Read data
 }
 
 
@@ -862,7 +860,7 @@ msg_t dw1000_initialise(dw1000_t dw) {
     const DW1000Config *cfg = dw->config;
 
     // Start SPI at low speed
-    spiStart(cfg->spi, cfg->spi_low_cfg);
+    _dw1000_spi_low_speed(cfg->spi);
 
     // Read and validate device ID
     dw->id.device = _dw1000_reg_read32(dw, DW1000_REG_DEV_ID, 0);    
@@ -964,9 +962,8 @@ msg_t dw1000_initialise(dw1000_t dw) {
     _dw1000_reg_write32(dw, DW1000_REG_SYS_CFG, DW1000_OFF_NONE, sys_cfg);
     dw->reg.sys_cfg = sys_cfg;
     
-    // Switch SPI to high speed (if defined)
-    if (cfg->spi_high_cfg)
-	spiStart(cfg->spi, cfg->spi_high_cfg);
+    // Switch SPI to high speed (if supported)
+    _dw1000_spi_high_speed(cfg->spi);
 
     // GPIO for LEDs
     if (cfg->leds) {
