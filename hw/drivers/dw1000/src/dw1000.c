@@ -825,18 +825,18 @@ void dw1000_otp_read(dw1000_t dw,
  */
 void dw1000_hardreset(dw1000_t dw) {
     // Sanity check
-    if (dw->config->reset == PAL_NOLINE)
+    if (dw->config->reset == DW1000_IOLINE_NONE)
 	return;
 
     // Perform hard reset
     // DS §1.2: Reset pin must be de-asserter at least 10 ns.
-    palClearLine(dw->config->reset);
+    _dw1000_ioline_clear(dw->config->reset);
     _dw1000_delay_usec(1); // Be large, using 1µs instead of 10ns
-    palSetLine(dw->config->reset);
+    _dw1000_ioline_set(dw->config->reset);
 
     // Ensure wake up after reset
-    if (dw->config->wakeup != PAL_NOLINE)
-	palSetLine(dw->config->wakeup);
+    if (dw->config->wakeup != DW1000_IOLINE_NONE)
+	_dw1000_ioline_set(dw->config->wakeup);
 
     // Seems that 5ms should be enough to have the chip running
     // but not quite sure about it see UM §2.4
@@ -1005,7 +1005,7 @@ msg_t dw1000_initialise(dw1000_t dw) {
     uint32_t gpio_mode =
 	_dw1000_reg_read32(dw, DW1000_REG_GPIO_CTRL, DW1000_OFF_GPIO_MODE);
     gpio_mode &= ~(DW1000_MSK_GPIO_MSGP8);
-    gpio_mode |= ((cfg->irq == PAL_NOLINE)
+    gpio_mode |= ((cfg->irq == DW1000_IOLINE_NONE)
 		  ? DW1000_VAL_GPIO_8_GPIO
 		  : DW1000_VAL_GPIO_8_IRQ) << DW1000_SFT_GPIO_MSGP8;    
     _dw1000_reg_write32(dw, DW1000_REG_GPIO_CTRL, DW1000_OFF_GPIO_MODE,

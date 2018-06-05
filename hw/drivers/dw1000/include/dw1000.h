@@ -260,15 +260,15 @@ typedef struct {
     /**
      * @brief IRQ line
      */
-    ioline_t   irq;
+    dw1000_ioline_t   irq;
     /**
      * @brief Reset line
      */
-    ioline_t   reset;
+    dw1000_ioline_t   reset;
     /**
      * @brief WakeUp line
      */
-    ioline_t   wakeup;
+    dw1000_ioline_t   wakeup;
     /**
      * @brief Cristal trimming (optional)
      */
