@@ -2059,35 +2059,6 @@ void dw1000_rx_get_power_estimate(dw1000_t dw,
 
 
 
-/**
- * @brief Send a frame at a precise time
- *
- * @note According to the DW1000_TX_NO_AUTO_CRC flag, if unset
- *       transmitted frame will have the CRC automatically computed
- *       and appended to the frame so frame length wil be length+2; if
- *       set, transmitted frame length will be of the specified length
- *       but a CRC-16-CCITT must be explicitely embedded in the frame
- *       data
- *
- * @param dw        driver context
- * @param data      data to send
- * @param length    length of the data
- * @param tx_mode   a set of the following flags are supported:
- *                  DW1000_TX_RESPONSE_EXPECTED,  
- *                  DW1000_TX_RANGING, DW1000_TX_NO_AUTO_CRC
- */
-msg_t dw1000StartDelayedSend(dw1000_t dw, uint64_t time,
-			     uint8_t *data, size_t length, uint8_t tx_mode) {
-
-    tx_mode |= DW1000_TX_DELAYED_START;
-
-    dw1000_txrx_set_time(dw, time);
-    dw1000_tx_write_frame_data(dw, data, length, 0);
-    if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
-	length += 2;
-    dw1000_tx_fctrl(dw, length+2, 0, tx_mode);
-    return dw1000_tx_start(dw, tx_mode);
-}
 
 
 

@@ -465,8 +465,6 @@ void dw1000_interrupt(dw1000_t dw, uint32_t bitmask, bool enable);
 bool dw1000_process_events(dw1000_t dw);
 
 
-msg_t dw1000StartSend(dw1000_t dw,
-		      uint8_t *data, size_t length, uint8_t tx_mode);
 
 
 void dw1000_otp_read(dw1000_t dw,
