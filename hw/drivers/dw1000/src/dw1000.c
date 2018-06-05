@@ -850,10 +850,10 @@ void dw1000_hardreset(dw1000_t dw) {
  *
  * @param[in]  dw       driver context
  * 
- * @retval MSG_OK       DW1000 successfully initialized
- * @retval MSG_RESET    Chip not identified as DW1000
+ * @retval  0           DW1000 successfully initialized
+ * @retval -1           Chip not identified as DW1000
  */
-msg_t dw1000_initialise(dw1000_t dw) {
+int dw1000_initialise(dw1000_t dw) {
     // We won't bother to read default register value. We assume
     // values are at their defaults due to reset performed inside
 
@@ -865,7 +865,7 @@ msg_t dw1000_initialise(dw1000_t dw) {
     // Read and validate device ID
     dw->id.device = _dw1000_reg_read32(dw, DW1000_REG_DEV_ID, 0);    
     if (dw->id.device != DW1000_ID_DEVICE) {
-        return MSG_RESET;
+        return -1;
     }
 
     // Retrieve Chip and Lot identification
@@ -1015,7 +1015,7 @@ msg_t dw1000_initialise(dw1000_t dw) {
 		       cfg->tx_antenna_delay);
 
     // Yeah!
-    return MSG_OK;
+    return 0;
 }
 
 
@@ -1355,11 +1355,11 @@ void dw1000_tx_write_frame_data(dw1000_t dw,
  * @param tx_mode    a set of the following flags are supported:
  *                   DW1000_TX_DELAYED_START, DW1000_TX_RESPONSE_EXPECTED
  *
- * @retval MSG_OK    Transmission started
- * @retval MSG_RESET It was not possible to start transmission.
+ * @retval  0        Transmission started
+ * @retval -1        It was not possible to start transmission.
  *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
  */
-msg_t dw1000_tx_start(dw1000_t dw, uint8_t tx_mode) {
+int dw1000_tx_start(dw1000_t dw, uint8_t tx_mode) {
     uint8_t sys_ctrl  = DW1000_FLG_SYS_CTRL_TXSTRT;
   
     // Set wait for response flag
@@ -1390,7 +1390,7 @@ msg_t dw1000_tx_start(dw1000_t dw, uint8_t tx_mode) {
 	uint16_t tx_ok = 0 ;
         tx_ok = _dw1000_reg_read16(dw, DW1000_REG_SYS_STATUS, off);
         if ((tx_ok & msk) == 0)
-            return MSG_OK;
+            return 0;
 
 	// From official deca_device.c:
 	// Transmit Delayed Send set over Half a Period away or Power Up error
@@ -1403,10 +1403,10 @@ msg_t dw1000_tx_start(dw1000_t dw, uint8_t tx_mode) {
 			  DW1000_FLG_SYS_CTRL_TRXOFF);
 	dw->wait4resp = 0;
 
-	return MSG_RESET;
+	return -1;
     }
 
-    return MSG_OK;
+    return 0;
 }
 
 
@@ -1430,12 +1430,12 @@ msg_t dw1000_tx_start(dw1000_t dw, uint8_t tx_mode) {
  *                  DW1000_TX_DELAYED_START, DW1000_TX_RESPONSE_EXPECTED,  
  *                  DW1000_TX_RANGING, DW1000_TX_NO_AUTO_CRC
  *
- * @retval MSG_OK    Transmission started
- * @retval MSG_RESET It was not possible to start transmission.
+ * @retval  0        Transmission started
+ * @retval -1        It was not possible to start transmission.
  *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
  */
-msg_t dw1000_tx_send(dw1000_t dw,
-			uint8_t *data, size_t length, uint8_t tx_mode) {
+int dw1000_tx_send(dw1000_t dw,
+		   uint8_t *data, size_t length, uint8_t tx_mode) {
 
     // Write data to DW TX buffer
     dw1000_tx_write_frame_data(dw, data, length, 0);
@@ -1572,12 +1572,14 @@ void dw1000_rx_off(dw1000_t dw) {
  * @param rx_mode   Receiving mode 
  *                   - @p DW1000_RX_IDLE_ON_DELAY_ERROR
  *                   - @p DW1000_RX_DELAYED_START
- * @retval MSG_OK    Reception started
- * @retval MSG_RESET It was not possible to start receiving.
+ * @retval  0        Reception started
+ * @retval  1        Reception started, but delayed start was not
+ *                   respected.
+ * @retval -1        It was not possible to start receiving.
  *                   (Can happen when @p DW1000_RX_DELAYED_START
  *                   and @p DW1000_RX_IDLE_ON_DELAY_ERROR are set)
  */
-msg_t dw1000_rx_start(dw1000_t dw, int8_t rx_mode) {
+int dw1000_rx_start(dw1000_t dw, int8_t rx_mode) {
     // Sync double buffer unless explicitely disabled
     if (! (rx_mode & DW1000_RX_NO_DBLBUF_SYNC)) {
         dw1000_rx_sync_dblbuf(dw);
@@ -1604,14 +1606,15 @@ msg_t dw1000_rx_start(dw1000_t dw, int8_t rx_mode) {
             dw1000_rx_off(dw); 
 	    // Keep it off on error if requested
             if (rx_mode & DW1000_RX_IDLE_ON_DELAY_ERROR)
-		return MSG_RESET; 
+		return -1;
 	    // Fallback to immediate start
 	    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
-			       DW1000_FLG_SYS_CTRL_RXENAB);
+				DW1000_FLG_SYS_CTRL_RXENAB);
+	    return 1;
         }
     }
 
-    return MSG_OK;
+    return 0;
 }
 
 

@@ -435,7 +435,7 @@ struct dw1000 {
 
 void dw1000_init(dw1000_t dw, const DW1000Config *cfg);
 
-msg_t dw1000_initialise(dw1000_t dw);
+int dw1000_initialise(dw1000_t dw);
 
 void dw1000_hardreset(dw1000_t dw);
 
@@ -483,7 +483,7 @@ void dw1000_tx_set_rx_activation_delay(dw1000_t dw, uint32_t delay);
 
 void dw1000_tx_write_frame_data(dw1000_t dw, uint8_t *data, size_t length, size_t offset);
 
-msg_t dw1000_tx_send(dw1000_t dw,
+int dw1000_tx_send(dw1000_t dw,
 		     uint8_t *data, size_t length, uint8_t tx_mode);
 
 
@@ -499,7 +499,7 @@ void dw1000_rx_get_info(dw1000_t dw, dw1000_rxinfo_t *rxinfo);
 
 void dw1000_rx_read_frame_data(dw1000_t dw, uint8_t *data, size_t length, size_t offset);
 
-msg_t dw1000_rx_start(dw1000_t dw, int8_t rx_mode);
+int dw1000_rx_start(dw1000_t dw, int8_t rx_mode);
 
 void dw1000_rx_get_time_tracking(dw1000_t dw,
 				 int32_t *offset, uint32_t *interval);
