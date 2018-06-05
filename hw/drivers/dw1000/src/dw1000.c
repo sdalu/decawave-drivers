@@ -399,7 +399,7 @@ void _dw1000_softreset(dw1000_t dw) {
     _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
 		      0x00);
     // DW1000 takes 10µs to lock clock PLL after reset (automatic after reset)
-    osalThreadSleepMicroseconds(50); // Be large
+    _dw1000_delay_usec(15); // Be large
     // Clear reset (put flags to 1)
     _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
 		      0xF0);
@@ -831,7 +831,7 @@ void dw1000_hardreset(dw1000_t dw) {
     // Perform hard reset
     // DS §1.2: Reset pin must be de-asserter at least 10 ns.
     palClearLine(dw->config->reset);
-    osalThreadSleepMicroseconds(1); // Be large	using 1µs
+    _dw1000_delay_usec(1); // Be large	using 1µs
     palSetLine(dw->config->reset);
 
     // Ensure wake up after reset
@@ -840,7 +840,7 @@ void dw1000_hardreset(dw1000_t dw) {
 
     // Seems that 5ms should be enough to have the chip running
     // but not quite sure about it see UM §2.4
-    osalThreadSleepMilliseconds(10);
+    _dw1000_delay_msec(10);
 }
 
 
@@ -937,7 +937,7 @@ msg_t dw1000_initialise(dw1000_t dw) {
 			   DW1000_FLG_OTP_CTRL_LDELOAD);
 
 	// Official deca_device.c says that loading code can take up to 120 µs
-	osalThreadSleepMicroseconds(500); // Be large
+	_dw1000_delay_usec(500); // Be large
     
 	// Remain us, that sleep mode must load the LDE code at wake-up
         dw->sleep_mode |= DW1000_FLG_AON_WCFG_ONW_LLDE;
@@ -1251,7 +1251,7 @@ void dw1000_read_temp_vbat(dw1000_t dw, uint16_t *temp, uint16_t *vbat) {
     // UM 7.2.43.1: TC_SARC
     //   The enable should set for a minimum of 2.5 μs to allow the SAR
     //   time to complete its reading.
-    osalThreadSleepMicroseconds(5); // Be large
+    _dw1000_delay_usec(5); // Be large
 
     // Reading voltage and temperature at once
     uint8_t tempvbat[2];
