@@ -246,17 +246,9 @@ typedef struct {
     uint8_t    leds_blink_time;
     /**
      * @brief SPI driver
+     * @note Config for low speed is <3MHz, for high speed < 20MHz
      */
-    SPIDriver *spi;
-    /**
-     * @brief SPI config for low speed (<3MHz)
-     */
-    const SPIConfig *spi_low_cfg;
-    /**
-     * @brief SPI config for high speed (<20MHz)
-     * @note  Can be set to NULL if only using low speed
-     */
-    const SPIConfig *spi_high_cfg;
+    dw1000_spi_driver_t *spi;
     /**
      * @brief IRQ line
      */

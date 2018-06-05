@@ -846,7 +846,7 @@ void dw1000_hardreset(dw1000_t dw) {
  * @brief Perform initialisation/reset of the DW1000
  *
  * @note  The SPI bus frequency will be momentary set to
- *        the low speed defined in @p DW1000Config
+ *        the low speed.
  *
  * @param[in]  dw       driver context
  * 
