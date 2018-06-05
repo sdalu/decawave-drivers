@@ -294,8 +294,8 @@ static inline
 void _dw1000_spi_header(uint8_t reg,  size_t offset, bool write,
 			uint8_t *hdr, size_t *hlen) {
     // Sanity check
-    osalDbgAssert(reg    <= 0x3F,    "invalid register number");
-    osalDbgAssert(offset <= 0x7FFFu, "out of range offset");
+    DW1000_ASSERT(reg    <= 0x3F,    "invalid register number");
+    DW1000_ASSERT(offset <= 0x7FFFu, "out of range offset");
 
     // Start by assuming register with offset 0
     //  and compute additionnal header bytes due to offset
@@ -423,7 +423,7 @@ void _dw1000_radio_tuning(dw1000_t dw) {
 
     /* Sanity check
      */
-    osalDbgAssert(radio != NULL, "radio parameter not defined");
+    DW1000_ASSERT(radio != NULL, "radio parameter not defined");
 
 
     /* Retrieve channel/PRF/Bitrate table helpers
@@ -610,7 +610,7 @@ void _dw1000_radio_tuning(dw1000_t dw) {
 	case  8: dw->rxpacc_adj = -10; break;
 	case 16: dw->rxpacc_adj = -18; break;
 	case 64: dw->rxpacc_adj = -82; break;
-	default: osalDbgAssert(0, "invalid register number");
+	default: DW1000_ASSERT(0, "invalid register number");
 	}
     } else {
 #endif
@@ -722,9 +722,9 @@ void _dw1000_radio_tuning(dw1000_t dw) {
 void _dw1000_reg_write(dw1000_t dw,
     uint8_t reg, size_t offset, void* data, size_t length) {
     // Sanity check
-    osalDbgAssert(reg    <= 0x3F,               "invalid register number");
-    osalDbgAssert(offset <= 0x7FFFu,            "out of range offset");
-    osalDbgAssert(length <= (0x8000u - offset), "out of range length");
+    DW1000_ASSERT(reg    <= 0x3F,               "invalid register number");
+    DW1000_ASSERT(offset <= 0x7FFFu,            "out of range offset");
+    DW1000_ASSERT(length <= (0x8000u - offset), "out of range length");
 
     // Build SPI header
     uint8_t hdr[DW1000_SPI_HEADER_MAX_LENGTH];
@@ -752,9 +752,9 @@ void _dw1000_reg_write(dw1000_t dw,
 void _dw1000_reg_read(dw1000_t dw,
     uint8_t reg, size_t offset, void* data, size_t length) {
     // Sanity check
-    osalDbgAssert(reg    <= 0x3F,               "invalid register number");
-    osalDbgAssert(offset <= 0x7FFFu,            "out of range offset");
-    osalDbgAssert(length <= (0x8000u - offset), "out of range length");
+    DW1000_ASSERT(reg    <= 0x3F,               "invalid register number");
+    DW1000_ASSERT(offset <= 0x7FFFu,            "out of range offset");
+    DW1000_ASSERT(length <= (0x8000u - offset), "out of range length");
 
     // Build SPI header
     uint8_t hdr[DW1000_SPI_HEADER_MAX_LENGTH];
@@ -784,8 +784,8 @@ void _dw1000_reg_read(dw1000_t dw,
 void dw1000_otp_read(dw1000_t dw,
 		     uint16_t address, uint32_t *data, size_t length) {
     // Sanity check
-    osalDbgAssert(address <= 0x07FFu, "address is 11-bit encoded");
-    osalDbgAssert(length  <= (0x0800u - address), "out of range");
+    DW1000_ASSERT(address <= 0x07FFu, "address is 11-bit encoded");
+    DW1000_ASSERT(length  <= (0x0800u - address), "out of range");
 
     // Assuming we have exclusive use of the OTP_CTRL,
     // so we don't care about previously assigned value
@@ -1091,33 +1091,33 @@ void dw1000_configure(dw1000_t dw, dw1000_radio_t radio) {
     /* Guard against out of range value
      */
 #if DW1000_WITH_PROPRIETARY_SFD
-    osalDbgAssert((radio->proprietary.sfd == 0) ||
+    DW1000_ASSERT((radio->proprietary.sfd == 0) ||
 		  (radio->proprietary.sfd == 1),
 		  "invalid sfd flag");
 #endif
     
-    osalDbgAssert((radio->bitrate == DW1000_BITRATE_110KBPS ) ||
+    DW1000_ASSERT((radio->bitrate == DW1000_BITRATE_110KBPS ) ||
 		  (radio->bitrate == DW1000_BITRATE_850KBPS ) ||
 		  (radio->bitrate == DW1000_BITRATE_6800KBPS),
 		  "invalid bit rate");
 
-    osalDbgAssert((radio->channel >= 1) &&
+    DW1000_ASSERT((radio->channel >= 1) &&
 		  (radio->channel <= 7) &&
 		  (radio->channel != 6),
 		  "invalid channel");
 
-    osalDbgAssert((radio->prf == DW1000_PRF_4MHZ ) ||
+    DW1000_ASSERT((radio->prf == DW1000_PRF_4MHZ ) ||
 		  (radio->prf == DW1000_PRF_16MHZ) ||
 		  (radio->prf == DW1000_PRF_64MHZ),
 		  "invalid PRF value");
 
-    osalDbgAssert((radio->tx_pcode >= 1) && (radio->tx_pcode <= 24),
+    DW1000_ASSERT((radio->tx_pcode >= 1) && (radio->tx_pcode <= 24),
 		  "invalid TX pcode value");
 
-    osalDbgAssert((radio->rx_pcode >= 1) && (radio->rx_pcode <= 24),
+    DW1000_ASSERT((radio->rx_pcode >= 1) && (radio->rx_pcode <= 24),
 		  "invalid RX pcode value");
 	
-    osalDbgAssert((radio->tx_plen == DW1000_PLEN_64  ) ||
+    DW1000_ASSERT((radio->tx_plen == DW1000_PLEN_64  ) ||
 		  (radio->tx_plen == DW1000_PLEN_1024) ||
 		  (radio->tx_plen == DW1000_PLEN_4096) ||
 #if DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH
@@ -1130,7 +1130,7 @@ void dw1000_configure(dw1000_t dw, dw1000_radio_t radio) {
 		  0,
 		  "invalid preambule length");
 
-    osalDbgAssert((radio->rx_pac == DW1000_PAC8 ) ||
+    DW1000_ASSERT((radio->rx_pac == DW1000_PAC8 ) ||
 		  (radio->rx_pac == DW1000_PAC16) ||
 		  (radio->rx_pac == DW1000_PAC32) ||
 		  (radio->rx_pac == DW1000_PAC64),
@@ -1138,10 +1138,10 @@ void dw1000_configure(dw1000_t dw, dw1000_radio_t radio) {
     
     /* Guard against value unsupported by DW1000
      */
-    osalDbgAssert(radio->prf != DW1000_PRF_4MHZ,
+    DW1000_ASSERT(radio->prf != DW1000_PRF_4MHZ,
 		  "PRF at 4MHz is unsupported by DW1000 receiver");
 
-    osalDbgAssert(((radio->prf == DW1000_PRF_64MHZ) &&
+    DW1000_ASSERT(((radio->prf == DW1000_PRF_64MHZ) &&
 		   (radio->tx_pcode >= 9) && (radio->tx_pcode <= 24)) ||
 		  ((radio->prf == DW1000_PRF_16MHZ) &&
 		   (radio->tx_pcode >= 1) && (radio->tx_pcode <=  8)),
@@ -1300,7 +1300,7 @@ void dw1000_txrx_set_time(dw1000_t dw, uint64_t time) {
 inline
 void dw1000_tx_fctrl(dw1000_t dw, size_t length, size_t offset,
 		     uint8_t tx_mode) {
-    osalDbgAssert(
+    DW1000_ASSERT(
 #if DW1000_WITH_PROPRIETARY_LONG_FRAME
 		  (dw->radio->proprietary.long_frames && (length <= 1023)) ||
 #endif
@@ -1883,7 +1883,7 @@ void dw1000_rx_get_info(dw1000_t dw, dw1000_rxinfo_t *rxinfo) {
  *                       (between 0 .. @p DW1000_MAX_TX_RX_ACTIVATION_DELAY)
  */
 void dw1000_tx_set_rx_activation_delay(dw1000_t dw, uint32_t delay) {
-    osalDbgAssert(delay <= DW1000_MAX_TX_RX_ACTIVATION_DELAY,
+    DW1000_ASSERT(delay <= DW1000_MAX_TX_RX_ACTIVATION_DELAY,
 		  "out of range delay");
 
     uint32_t val =
@@ -1999,7 +1999,7 @@ double _dw1000_rx_power_correction(dw1000_t dw, double p) {
 	// PRF of 4MHZ is unsupported by DW1000
 	// FALLTHROUGH
     default:
-	osalDbgAssert(0, "unsupported PRF value");
+	DW1000_ASSERT(0, "unsupported PRF value");
 	break;
     }
 
@@ -2023,7 +2023,7 @@ double _dw1000_rx_power_correction(dw1000_t dw, double p) {
 void dw1000_rx_get_power_estimate(dw1000_t dw,
 				  double *signal, double *firstpath) {
     // PRF of 4MHZ is unsupported by DW1000
-    osalDbgAssert((dw->radio->prf == DW1000_PRF_16MHZ) ||
+    DW1000_ASSERT((dw->radio->prf == DW1000_PRF_16MHZ) ||
 		  (dw->radio->prf == DW1000_PRF_64MHZ),
 		  "unsupported PRF value");
 
