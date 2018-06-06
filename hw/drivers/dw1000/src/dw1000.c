@@ -26,6 +26,11 @@
 
 
 /*
+ * For double buffering enabled, this code need to be check
+ * for correctness
+ */
+
+/*
  * UM §9.3  : Data rate, preamble length, PRF
  * UM §4.1.1: Preamble detection
  *
@@ -953,10 +958,17 @@ int dw1000_initialise(dw1000_t dw) {
     // UM §7.2.45.8: Other bits defaults to 0
     _dw1000_reg_write16(dw, DW1000_REG_AON, DW1000_OFF_AON_CFG1, 0x0000);
     
-    // Read system register / store local copy
+    // Read system register / store local copy.
+    //   Configuring: double buffer / smart power / irq polarity
+    //
+    // UM §7.2.6: the reserved bits should always be set to 0
+    //  
     // WARN: Disabling Smart Power by default, as Smart Power can impact
     //       ranging calculation when applying correction bias
-    uint32_t sys_cfg = _dw1000_reg_read32(dw, DW1000_REG_SYS_CFG, 0);
+    uint32_t sys_cfg = _dw1000_reg_read32(dw, DW1000_REG_SYS_CFG, 0) &
+	               DW1000_MSK_SYS_CFG;
+    if (cfg->dblbuff) { sys_cfg &= ~DW1000_FLG_SYS_CFG_DIS_DRXB; }
+    else              { sys_cfg |=  DW1000_FLG_SYS_CFG_DIS_DRXB; }
     sys_cfg |=  DW1000_FLG_SYS_CFG_HIRQ_POL;
     sys_cfg |=  DW1000_FLG_SYS_CFG_DIS_STXP;   // Disable Smart Power
     _dw1000_reg_write32(dw, DW1000_REG_SYS_CFG, DW1000_OFF_NONE, sys_cfg);
