@@ -729,13 +729,13 @@ void _dw1000_reg_write(dw1000_t dw,
 
     // Build SPI header
     uint8_t hdr[DW1000_SPI_HEADER_MAX_LENGTH];
-    size_t hlen;
-    _dw1000_spi_header(reg, offset, true, hdr, &hlen);
+    size_t hdrlen;
+    _dw1000_spi_header(reg, offset, true, hdr, &hdrlen);
 
     // Perform write
     _dw1000_spi_send(dw->config->spi,  // SPI handler
-		     hlen, hdr,        // Send register request 
-		     length, data);    // Write data
+		     hdr,  hdrlen,     // Send register request 
+		     data, length);    // Write data
 }
 
 
@@ -758,13 +758,13 @@ void _dw1000_reg_read(dw1000_t dw,
 
     // Build SPI header
     uint8_t hdr[DW1000_SPI_HEADER_MAX_LENGTH];
-    size_t hlen;
-    _dw1000_spi_header(reg, offset, false, hdr, &hlen);
+    size_t hdrlen;
+    _dw1000_spi_header(reg, offset, false, hdr, &hdrlen);
 
     // Perform read
     _dw1000_spi_recv(dw->config->spi,  // SPI handler
-		     hlen,   hdr,      // Send register request 
-		     length, data);    // Read data
+		     hdr,  hdrlen,     // Send register request 
+		     data, length);    // Read data
 }
 
 
