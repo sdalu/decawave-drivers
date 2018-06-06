@@ -24,10 +24,10 @@
 
 
 
-
-#include "bswap.h"
-#include "dw1000_otp.h"
-#include "dw1000_reg.h"
+#include "dw1000/osal.h"
+#include "dw1000/dw1000_bswap.h"
+#include "dw1000/dw1000_otp.h"
+#include "dw1000/dw1000_reg.h"
 
 
 

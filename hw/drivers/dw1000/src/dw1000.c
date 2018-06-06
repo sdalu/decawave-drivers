@@ -46,9 +46,10 @@
 
 #include <ch.h>
 #include <hal.h>
-
-#include "dw1000.h"
 #include <math.h>
+
+#include "dw1000/osal.h"
+#include "dw1000/dw1000.h"
 
 
 /*===========================================================================*/
