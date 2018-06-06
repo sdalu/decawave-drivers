@@ -44,8 +44,6 @@
 
 
 
-#include <ch.h>
-#include <hal.h>
 #include <math.h>
 
 #include "dw1000/osal.h"
