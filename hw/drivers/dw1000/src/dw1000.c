@@ -977,6 +977,9 @@ int dw1000_initialise(dw1000_t dw) {
     // Switch SPI to high speed (if supported)
     _dw1000_spi_high_speed(cfg->spi);
 
+    // Ensure interrupt disabled by default
+    dw1000_interrupt(dw, DW1000_MSK_SYS_MASK, false);
+    
     // GPIO for LEDs
     if (cfg->leds) {
 	// Ensure kHZ clock is running and enable de-bouncing clock.
