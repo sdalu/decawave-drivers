@@ -1649,7 +1649,7 @@ bool dw1000_process_events(dw1000_t dw) {
 	//   and deduce length and ranging
 	size_t length;
 	bool   ranging;
-	dw1000_rx_frame_info(dw, &length, &ranging);
+	dw1000_rx_get_frame_info(dw, &length, &ranging);
 	    
 #if DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011
         // HOTFIX: From the official deca_device.c:
