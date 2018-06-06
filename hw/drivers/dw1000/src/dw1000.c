@@ -862,6 +862,13 @@ int dw1000_initialise(dw1000_t dw) {
     // Start SPI at low speed
     _dw1000_spi_low_speed(cfg->spi);
 
+    // Ensure reset state
+    _dw1000_softreset(dw);
+    
+    // Clock need to be running at XTAL value for safe reading of OTP
+    // or loading microcode (see MN: _dw1000_phy_load_microcode)
+    _dw1000_clocks(dw, DW1000_CLOCK_SYS_XTI);
+
     // Read and validate device ID
     dw->id.device = _dw1000_reg_read32(dw, DW1000_REG_DEV_ID, 0);    
     if (dw->id.device != DW1000_ID_DEVICE) {
@@ -873,13 +880,6 @@ int dw1000_initialise(dw1000_t dw) {
     dw->id.chip = dw1000_otp_get(dw, DW1000_OTP_CHIP_ID) & DW1000_MSK_CHIP_ID;
     dw->id.lot  = dw1000_otp_get(dw, DW1000_OTP_LOT_ID ) & DW1000_MSK_LOT_ID;
     
-    // Ensure reset state
-    _dw1000_softreset(dw);
-    
-    // Clock need to be running at XTAL value for safe reading of OTP
-    // or loading microcode (see MN: _dw1000_phy_load_microcode)
-    _dw1000_clocks(dw, DW1000_CLOCK_SYS_XTI); 
-
     // Clock PLL lock detect tune.
     //  (Default value for the while register is 0)
     // UM §7.2.37.1: Ensure reliable operation of the clock PLL lock
