@@ -316,8 +316,9 @@ void _dw1000_spi_header(uint8_t reg,  size_t offset, bool write,
     }
 
     // Toggle write flag
-    if (write)
+    if (write) {
 	hdr[0] |= 0x80;
+    }
 }
 
 
@@ -395,14 +396,14 @@ void _dw1000_softreset(dw1000_t dw) {
 			DW1000_FLG_AON_CTRL_SAVE);
 
     // Reset All (HIF, TX, RX, PMSC) (put flags to 0)
-    _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
-		      0x00);
+    _dw1000_reg_write8 (dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
+			0x00);
     // DW1000 takes 10µs to lock clock PLL after reset (automatic after reset)
     _dw1000_delay_usec(12); // Be large, using 12µs instead of 10µs
     // Clear reset (put flags to 1)
-    _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
-		      0xF0);
-
+    _dw1000_reg_write8 (dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
+			0xF0);
+    
     // Reset internal flags
     dw->wait4resp = 0;
 }
@@ -427,8 +428,8 @@ void _dw1000_radio_tuning(dw1000_t dw) {
 
     /* Retrieve channel/PRF/Bitrate table helpers
      */
-    const struct channel_tunning *ci =
-	&channel_tunning[channel_table_mapping[radio->channel]];
+    const struct channel_tunning *ci = &channel_tunning
+	                                [channel_table_mapping[radio->channel]];
     const struct prf_tunning     *pi = &prf_tunning[radio->prf];   
     const struct bitrate_tunning *bi = &bitrate_tunning[radio->bitrate];
   
@@ -443,7 +444,7 @@ void _dw1000_radio_tuning(dw1000_t dw) {
     //  (Using prf_tunning)
     const uint16_t lde_cfg2 = pi->lde_cfg2;
 
-    // UM §7.2.47.7: lde_repc must be divided by 8 for 110Kb/s bitrate
+    // UM §7.2.47.7: LDE_REPC must be divided by 8 for 110Kb/s bitrate
     //  (Using lde_repc_tunning)
     uint16_t lde_repc = lde_repc_tunning[radio->rx_pcode];
     if (radio->bitrate == DW1000_BITRATE_110KBPS)
@@ -913,7 +914,7 @@ int dw1000_initialise(dw1000_t dw) {
     // Configure XTAL trim (5 bits)
     // UM §7.2.44.5: bits 7/6/5 must be kept at 0/1/1
     _dw1000_reg_write8(dw, DW1000_REG_FS_CTRL, DW1000_OFF_FS_XTALT,
-		      (3 << 5) | (dw->xtrim & 0x1F));
+		       (3 << 5) | (dw->xtrim & 0x1F));
 
     // Automatically load LDO tune from OTP and kick it
     // UM §2.4.1.3: Only first byte of OTP_LDOTUNE need to be checked 
@@ -921,7 +922,7 @@ int dw1000_initialise(dw1000_t dw) {
     if (ldo_tune & 0xFF) {
 	// Kick LDO
 	_dw1000_reg_write8(dw, DW1000_REG_OTP_IF, DW1000_OFF_OTP_SF,
-			  DW1000_FLG_OTP_SF_LDO_KICK); 
+			   DW1000_FLG_OTP_SF_LDO_KICK); 
 	// Remain us, that sleep mode must kick LDO tune at wake-up
 	dw->sleep_mode |= DW1000_FLG_AON_WCFG_ONW_LLDO;
     }
@@ -931,7 +932,7 @@ int dw1000_initialise(dw1000_t dw) {
     if (cfg->lde_loading) { //-> Loading of LDE code
 	// Start the LDE load
 	_dw1000_reg_write16(dw, DW1000_REG_OTP_IF, DW1000_OFF_OTP_CTRL,
-			   DW1000_FLG_OTP_CTRL_LDELOAD);
+			    DW1000_FLG_OTP_CTRL_LDELOAD);
 
 	// Official deca_device.c says that loading code can take up to 120 µs
 	_dw1000_delay_usec(150); // Be large, using 150µs instead of 120µs
@@ -940,7 +941,7 @@ int dw1000_initialise(dw1000_t dw) {
         dw->sleep_mode |= DW1000_FLG_AON_WCFG_ONW_LLDE;
     } else {                       //-> Disable LDE running (as no code loaded)
 	_dw1000_reg_clear32(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL1,
-			   DW1000_FLG_PMSC_CTRL1_LDERUNE);
+			    DW1000_FLG_PMSC_CTRL1_LDERUNE);
     }
 
     // Return clocks to default behaviour
@@ -1479,7 +1480,7 @@ void dw1000_rx_reset(dw1000_t dw) {
  */
 inline
 void dw1000_rx_read_frame_data(dw1000_t dw,
-			 uint8_t *data, size_t length, size_t offset) {
+			       uint8_t *data, size_t length, size_t offset) {
     // Protect device from overreading the buffer
     if (offset > 1024)
 	return;
@@ -1942,7 +1943,7 @@ void dw1000_rx_get_time_tracking(dw1000_t dw,
 
 
 /**
- * @brief Get the preamble acculumation count
+ * @brief Get the preamble accumulation count
  *
  * @param[in]  dw       driver context
  *
