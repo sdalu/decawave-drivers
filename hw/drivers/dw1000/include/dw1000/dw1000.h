@@ -291,7 +291,7 @@ typedef struct {
 	void (*rx_ok     )(dw1000_t dw, size_t length, bool ranging,
 			                                     uint32_t status);
     } cb;
-} DW1000Config;
+} dw1000_config_t;
 
 
 
@@ -299,7 +299,7 @@ typedef struct {
  * @brief DW1000 driver context
  */
 struct dw1000 {
-    const DW1000Config *config;
+    const dw1000_config_t *config;
 
     dw1000_radio_t radio;
 
@@ -425,7 +425,7 @@ struct dw1000 {
 
 
 
-void dw1000_init(dw1000_t dw, const DW1000Config *cfg);
+void dw1000_init(dw1000_t dw, const dw1000_config_t *cfg);
 
 int dw1000_initialise(dw1000_t dw);
 

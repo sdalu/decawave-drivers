@@ -857,7 +857,7 @@ int dw1000_initialise(dw1000_t dw) {
     // We won't bother to read default register value. We assume
     // values are at their defaults due to reset performed inside
 
-    const DW1000Config *cfg = dw->config;
+    const dw1000_config_t *cfg = dw->config;
 
     // Start SPI at low speed
     _dw1000_spi_low_speed(cfg->spi);
@@ -1022,7 +1022,7 @@ int dw1000_initialise(dw1000_t dw) {
 /**
  * @brief Blink a set of LEDs.
  *
- * @note  LEDs need to have been configured @p DW1000Config object.
+ * @note  LEDs need to have been configured @p dw1000_config_t object.
  *
  * @param[in]  dw       driver context
  * @param[in]  leds     leds to blink using a led mask
@@ -1072,7 +1072,7 @@ void _dw1000_reg_clear32(dw1000_t dw,
  * @param dw        driver context
  * @param cfg       driver configuration
  */
-void dw1000_init(dw1000_t dw, const DW1000Config *cfg) {
+void dw1000_init(dw1000_t dw, const dw1000_config_t *cfg) {
     dw->config = cfg;
 }
 
@@ -1624,7 +1624,7 @@ int dw1000_rx_start(dw1000_t dw, int8_t rx_mode) {
  * @note  This *can't* be used in interrupt handler, due to SPI request
  */
 bool dw1000_process_events(dw1000_t dw) {
-    const DW1000Config *cfg = dw->config;
+    const dw1000_config_t *cfg = dw->config;
     
     // UM §7.2.17: System Event Status Register
     // It's a 5 bytes register, the last byte contain low-status information
