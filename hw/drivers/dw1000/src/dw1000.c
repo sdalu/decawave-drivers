@@ -969,6 +969,7 @@ int dw1000_initialise(dw1000_t dw) {
 	               DW1000_MSK_SYS_CFG;
     if (cfg->dblbuff) { sys_cfg &= ~DW1000_FLG_SYS_CFG_DIS_DRXB; }
     else              { sys_cfg |=  DW1000_FLG_SYS_CFG_DIS_DRXB; }
+    if (cfg->rxauto)  { sys_cfg |=  DW1000_FLG_SYS_CFG_RXAUTR;   }
     sys_cfg |=  DW1000_FLG_SYS_CFG_HIRQ_POL;
     sys_cfg |=  DW1000_FLG_SYS_CFG_DIS_STXP;   // Disable Smart Power
     _dw1000_reg_write32(dw, DW1000_REG_SYS_CFG, DW1000_OFF_NONE, sys_cfg);

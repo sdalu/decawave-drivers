@@ -239,7 +239,18 @@ typedef struct dw1000 *dw1000_t;
  * @brief DW1000 Configuration
  */
 typedef struct {
+    /**
+     * @brief Use of double buffer
+     */
+    uint8_t    dblbuff:1;
+    /**
+     * @brief Loading of Leading Edge detection code
+     */
     uint8_t    lde_loading:1;
+    /**
+     * @brief Automatically re-eanbling of receiver (except for timeout)
+     */
+    uint8_t    rxauto:1;
     /**
      * @brief Define led blink time in 14ms unit
      */
@@ -269,10 +280,6 @@ typedef struct {
      * @brief Set of LED wired to DW1000
      */
     uint8_t    leds;
-    /**
-     * @brief Use of double buffer
-     */
-    bool       dblbuff; 
     /**
      * @brief Delay to take into account for antenna reception
      */
