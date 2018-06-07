@@ -978,9 +978,6 @@ int dw1000_initialise(dw1000_t dw) {
     // Switch SPI to high speed (if supported)
     _dw1000_spi_high_speed(cfg->spi);
 
-    // Ensure interrupt disabled by default
-    dw1000_interrupt(dw, DW1000_MSK_SYS_MASK, false);
-    
     // GPIO for LEDs
     if (cfg->leds) {
 	// Ensure kHZ clock is running and enable de-bouncing clock.
@@ -1029,6 +1026,14 @@ int dw1000_initialise(dw1000_t dw) {
 		       cfg->rx_antenna_delay);
     _dw1000_reg_write16(dw, DW1000_REG_TX_ANTD, DW1000_OFF_NONE,
 		       cfg->tx_antenna_delay);
+
+    // By default enable interrupt corresponding to the registered callbacks
+    uint32_t sys_mask = 0;
+    if (cfg->cb.tx_done   ) { sys_mask |= DW1000_FLG_SYS_MASK_MTXFRS;     }
+    if (cfg->cb.rx_timeout) { sys_mask |= DW1000_MSK_SYS_MASK_ALL_RX_TO;  }
+    if (cfg->cb.rx_error  ) { sys_mask |= DW1000_MSK_SYS_MASK_ALL_RX_ERR; }
+    if (cfg->cb.rx_ok     ) { sys_mask |= DW1000_FLG_SYS_MASK_MRXFCG;     }
+    dw1000_interrupt(dw, sys_mask, true);
 
     // Yeah!
     return 0;

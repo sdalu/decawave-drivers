@@ -292,9 +292,54 @@ typedef struct {
      * @brief callbacks
      */
     struct {
+	/**
+	 * @brief Callback for TX done.
+	 *
+	 * The callback will be triggered for the following events
+	 * (unless the default interuption mask is changed):
+	 *     - Transmit frame sent (TXFRS)
+	 *
+	 * Default interruption mask: DW1000_FLG_SYS_MASK_MTXFRS
+	 */
 	void (*tx_done   )(dw1000_t dw, uint32_t status);
+
+	/**
+	 * @brief Callback for RX timeout.
+	 *
+	 * The callback will be triggered for the following events
+	 * (unless the default interuption mask is changed):
+	 *     - Receive frame wait timeout (RXRFTO)
+	 *     - Preamble detection timeout (RXPTO)
+	 *
+	 * Default interruption mask: DW1000_MSK_SYS_MASK_ALL_RX_TO
+	 */
 	void (*rx_timeout)(dw1000_t dw, uint32_t status);
+
+	/**
+	 * @brief Callback for RX error.
+	 *
+	 * The callback will be triggered for the following events
+	 * (unless the default interuption mask is changed):
+	 *     - Receiver PHY header error (RXPHE)
+	 *     - Receiver FCS Error (RXFCE)
+	 *     - Receiver Reed Solomon frame sync (RXRFSL)
+	 *     - Leading edge detection processing error (LDEERR)
+	 *     - Receive SFD timeout (RXSFDTO)
+	 *     - Automatic frame filtering rejection (AFFREJ)
+	 *
+	 * Default interruption mask: DW1000_MSK_SYS_MASK_ALL_RX_ERR
+	 */
 	void (*rx_error  )(dw1000_t dw, uint32_t status);
+
+	/**
+	 * @brief Callback for RX ok
+	 *
+	 * The callback will be triggered for the following events
+	 * (unless the default interuption mask is changed):
+	 *     - Receiver FCS Good (RXFCG)
+	 *
+	 * Default interruption mask: DW1000_FLG_SYS_MASK_MRXFCG
+	 */
 	void (*rx_ok     )(dw1000_t dw, size_t length, bool ranging,
 			                                     uint32_t status);
     } cb;
