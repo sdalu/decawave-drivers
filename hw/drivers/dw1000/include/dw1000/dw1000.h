@@ -14,18 +14,6 @@
  */
 
 
-#define DW1000_WITH_DWM1000_EVK_COMPATIBILITY   TRUE
-
-#ifndef DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH
-#define DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH TRUE
-#endif
-#define DW1000_WITH_PROPRIETARY_SFD 		TRUE
-#define DW1000_WITH_SFD_TIMEOUT 		0
-#define DW1000_WITH_SFD_TIMEOUT_DEFAULT 	0
-#define DW1000_WITH_PROPRIETARY_LONG_FRAME 	0
-
-
-
 #include "dw1000/osal.h"
 #include "dw1000/dw1000_bswap.h"
 #include "dw1000/dw1000_otp.h"
@@ -100,21 +88,21 @@
  * @brief Add support for proprietary long frame
  */
 #if !defined(DW1000_WITH_PROPRIETARY_LONG_FRAME) || defined(__DOXYGEN__)
-#define DW1000_WITH_PROPRIETARY_LONG_FRAME TRUE
+#define DW1000_WITH_PROPRIETARY_LONG_FRAME FALSE
 #endif
 
 /**
  * @brief Add support for user defined SFD timeout
  */
 #if !defined(DW1000_WITH_SFD_TIMEOUT) || defined(__DOXYGEN__)
-#define DW1000_WITH_SFD_TIMEOUT TRUE
+#define DW1000_WITH_SFD_TIMEOUT FALSE
 #endif
 
 /**
  * @brief Use default SFD timeout value instead of computed one
  */
 #if !defined(DW1000_WITH_SFD_TIMEOUT_DEFAULT) || defined(__DOXYGEN__)
-#define DW1000_WITH_SFD_TIMEOUT_DEFAULT TRUE
+#define DW1000_WITH_SFD_TIMEOUT_DEFAULT FALSE
 #endif
 
 /**
