@@ -1,0 +1,12 @@
+pkg.name: port/mynewt/osal
+pkg.description: OS Abstration Layer for Decawave drivers.
+pkg.author: "Stephane D'Alu <stephane.dalu@insa-lyon.fr>"
+pkg.homepage: "http://perso.citi-lab.fr/sdalu/"
+pkg.keywords:
+    - osal
+    - decawave
+    - dw1000
+
+pkg.deps:
+    - "@apache-mynewt-core/kernel/os"
+
