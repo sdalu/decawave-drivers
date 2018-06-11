@@ -1296,7 +1296,7 @@ void dw1000_read_temp_vbat(dw1000_t *dw, uint16_t *temp, uint16_t *vbat) {
  */
 inline
 void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time) {
-    time = cpu_to_le64(time);
+    time = dw1000_cpu_to_le64(time);
     _dw1000_reg_write(dw, DW1000_REG_DX_TIME, DW1000_OFF_NONE, &time, 5);
 }
 

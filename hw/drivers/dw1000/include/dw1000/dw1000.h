@@ -560,7 +560,7 @@ static inline
 uint32_t dw1000_otp_get(dw1000_t *dw, uint16_t address) {
     uint32_t data;
     dw1000_otp_read(dw, address, &data, 1);
-    return le32_to_cpu(data);
+    return dw1000_le32_to_cpu(data);
 }
 
 /**
@@ -590,7 +590,7 @@ void _dw1000_reg_write8(dw1000_t *dw,
 static inline
 void _dw1000_reg_write16(dw1000_t *dw,
     uint8_t reg, size_t offset, uint16_t data) {
-    data = cpu_to_le16(data);
+    data = dw1000_cpu_to_le16(data);
     _dw1000_reg_write(dw, reg, offset, &data, sizeof(data));
 }
 
@@ -606,7 +606,7 @@ void _dw1000_reg_write16(dw1000_t *dw,
 static inline
 void _dw1000_reg_write32(dw1000_t *dw,
     uint8_t reg, size_t offset, uint32_t data) {
-    data = cpu_to_le32(data);
+    data = dw1000_cpu_to_le32(data);
     _dw1000_reg_write(dw, reg, offset, &data, sizeof(data));
 }
 
@@ -643,7 +643,7 @@ uint16_t _dw1000_reg_read16(dw1000_t *dw,
     uint8_t reg, size_t offset) {
     uint16_t data;
     _dw1000_reg_read(dw, reg, offset, &data, sizeof(data));
-    return le16_to_cpu(data);
+    return dw1000_le16_to_cpu(data);
 }
 
 /**
@@ -661,7 +661,7 @@ uint32_t _dw1000_reg_read32(dw1000_t *dw,
     uint8_t reg, size_t offset) {
     uint32_t data;
     _dw1000_reg_read(dw, reg, offset, &data, sizeof(data));
-    return le32_to_cpu(data);
+    return dw1000_le32_to_cpu(data);
 }
 
 
@@ -802,7 +802,7 @@ uint64_t dw1000_get_system_time(dw1000_t *dw) {
     _dw1000_reg_read(dw, DW1000_REG_SYS_TIME, DW1000_OFF_NONE,
 		    ((uint8_t *)(&sys_time)) + 0, 5);
 
-    return le64_to_cpu(sys_time);
+    return dw1000_le64_to_cpu(sys_time);
 }
 
 /**
@@ -817,7 +817,7 @@ uint64_t dw1000_rx_get_rmarker_time(dw1000_t *dw) {
     uint64_t rx_time = 0;
     _dw1000_reg_read(dw, DW1000_REG_RX_TIME, DW1000_OFF_RX_TIME_RX_STAMP,
 		    ((uint8_t *)(&rx_time)), 5);
-    return le64_to_cpu(rx_time);
+    return dw1000_le64_to_cpu(rx_time);
 }
 
 
@@ -833,7 +833,7 @@ uint64_t dw1000_tx_get_rmarker_time(dw1000_t *dw) {
     uint64_t tx_time = 0;
     _dw1000_reg_read(dw, DW1000_REG_TX_TIME, DW1000_OFF_TX_TIME_TX_STAMP,
 		    ((uint8_t *)(&tx_time)), 5);
-    return le64_to_cpu(tx_time);
+    return dw1000_le64_to_cpu(tx_time);
 }
 
 
