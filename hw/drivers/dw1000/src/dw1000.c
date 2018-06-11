@@ -1374,7 +1374,8 @@ void dw1000_tx_write_frame_data(dw1000_t *dw,
  *
  * @param dw         driver context
  * @param tx_mode    a set of the following flags are supported:
- *                   DW1000_TX_DELAYED_START, DW1000_TX_RESPONSE_EXPECTED
+ *                   DW1000_TX_DELAYED_START, DW1000_TX_RESPONSE_EXPECTED,
+ *                   DW1000_TX_NO_AUTO_CRC
  *
  * @retval  0        Transmission started
  * @retval -1        It was not possible to start transmission.
@@ -1392,7 +1393,12 @@ int dw1000_tx_start(dw1000_t *dw, uint8_t tx_mode) {
     // Set delayed start flag
     if (tx_mode & DW1000_TX_DELAYED_START)
         sys_ctrl |= DW1000_FLG_SYS_CTRL_TXDLYS;
-	    
+
+    // Set suppression of auto-FCS transmission
+    if (tx_mode & DW1000_TX_NO_AUTO_CRC) {
+	sys_ctrl |= DW1000_FLG_SYS_CTRL_SFCST;
+    }
+
     // Write to SYS_CTRL register, which will trigger transmit
     _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL, sys_ctrl);
 
@@ -1437,7 +1443,7 @@ int dw1000_tx_start(dw1000_t *dw, uint8_t tx_mode) {
  *
  * @note   According to the @p DW1000_TX_NO_AUTO_CRC flag, if unset
  *         transmitted frame will have the CRC automatically computed
- *         and appended to the frame so trnasmitted frame will be length+2; if
+ *         and appended to the frame so transmitted frame will be length+2; if
  *         set, transmitted frame length will be of the specified length
  *         but a CRC-16-CCITT must be explicitely embedded in the frame data
  *
