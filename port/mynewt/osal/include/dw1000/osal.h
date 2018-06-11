@@ -5,6 +5,7 @@
 #include <syscfg/syscfg.h>
 #include <os/os.h>
 #include <hal/hal_gpio.h>
+#include <hal/hal_spi.h>
 
 
 /*----------------------------------------------------------------------*/
@@ -58,6 +59,7 @@ _dw1000_ioline_clear(dw1000_ioline_t line) {
 typedef struct dw1000_spi_driver {
     int             id;
     dw1000_ioline_t cs_pin;
+    struct hal_spi_settings settings;
 } dw1000_spi_driver_t;
 
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,
