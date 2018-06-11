@@ -235,7 +235,7 @@ typedef struct dw1000_radio {
 /**
  * @brief DW1000 driver context
  */
-typedef struct dw1000 *dw1000_t;
+typedef struct dw1000 dw1000_t;
 
 /**
  * @brief DW1000 Configuration
@@ -303,7 +303,7 @@ typedef struct {
 	 *
 	 * Default interruption mask: DW1000_FLG_SYS_MASK_MTXFRS
 	 */
-	void (*tx_done   )(dw1000_t dw, uint32_t status);
+	void (*tx_done   )(dw1000_t *dw, uint32_t status);
 
 	/**
 	 * @brief Callback for RX timeout.
@@ -315,7 +315,7 @@ typedef struct {
 	 *
 	 * Default interruption mask: DW1000_MSK_SYS_MASK_ALL_RX_TO
 	 */
-	void (*rx_timeout)(dw1000_t dw, uint32_t status);
+	void (*rx_timeout)(dw1000_t *dw, uint32_t status);
 
 	/**
 	 * @brief Callback for RX error.
@@ -331,7 +331,7 @@ typedef struct {
 	 *
 	 * Default interruption mask: DW1000_MSK_SYS_MASK_ALL_RX_ERR
 	 */
-	void (*rx_error  )(dw1000_t dw, uint32_t status);
+	void (*rx_error  )(dw1000_t *dw, uint32_t status);
 
 	/**
 	 * @brief Callback for RX ok
@@ -342,7 +342,7 @@ typedef struct {
 	 *
 	 * Default interruption mask: DW1000_FLG_SYS_MASK_MRXFCG
 	 */
-	void (*rx_ok     )(dw1000_t dw, size_t length, bool ranging,
+	void (*rx_ok     )(dw1000_t *dw, size_t length, bool ranging,
 			                                     uint32_t status);
     } cb;
 } dw1000_config_t;
@@ -479,79 +479,79 @@ struct dw1000 {
 
 
 
-void dw1000_init(dw1000_t dw, const dw1000_config_t *cfg);
+void dw1000_init(dw1000_t *dw, const dw1000_config_t *cfg);
 
-int dw1000_initialise(dw1000_t dw);
+int dw1000_initialise(dw1000_t *dw);
 
-void dw1000_hardreset(dw1000_t dw);
+void dw1000_hardreset(dw1000_t *dw);
 
 
 
-void _dw1000_reg_read(dw1000_t dw,
+void _dw1000_reg_read(dw1000_t *dw,
    uint8_t reg, size_t offset, void* data, size_t length);
 
-void _dw1000_reg_write(dw1000_t dw,
+void _dw1000_reg_write(dw1000_t *dw,
    uint8_t reg, size_t offset, void* data, size_t length);
 
-void _dw1000_reg_set32(dw1000_t dw,
+void _dw1000_reg_set32(dw1000_t *dw,
 		      uint8_t reg, size_t offset, uint32_t value);
 
-void _dw1000_reg_clear32(dw1000_t dw,
+void _dw1000_reg_clear32(dw1000_t *dw,
 			uint8_t reg, size_t offset, uint32_t value);
 
 
-void dw1000_leds_blink(dw1000_t dw, uint8_t leds);
+void dw1000_leds_blink(dw1000_t *dw, uint8_t leds);
 
 
-void dw1000_configure(dw1000_t dw, dw1000_radio_t radio);
+void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio);
 
 
-void dw1000_interrupt(dw1000_t dw, uint32_t bitmask, bool enable);
+void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable);
 
-bool dw1000_process_events(dw1000_t dw);
-
-
+bool dw1000_process_events(dw1000_t *dw);
 
 
-void dw1000_otp_read(dw1000_t dw,
+
+
+void dw1000_otp_read(dw1000_t *dw,
 		     uint16_t address, uint32_t *data, size_t length);
 
 
 
 
-void dw1000_read_temp_vbat(dw1000_t dw, uint16_t *temp, uint16_t *vbat);
+void dw1000_read_temp_vbat(dw1000_t *dw, uint16_t *temp, uint16_t *vbat);
 
 
 
-void dw1000_txrx_set_time(dw1000_t dw, uint64_t time);
+void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time);
 
-void dw1000_tx_set_rx_activation_delay(dw1000_t dw, uint32_t delay);
+void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay);
 
-void dw1000_tx_write_frame_data(dw1000_t dw, uint8_t *data, size_t length, size_t offset);
+void dw1000_tx_write_frame_data(dw1000_t *dw, uint8_t *data, size_t length, size_t offset);
 
-int dw1000_tx_send(dw1000_t dw,
+int dw1000_tx_send(dw1000_t *dw,
 		     uint8_t *data, size_t length, uint8_t tx_mode);
 
 
 
 
-void dw1000_rx_reset(dw1000_t dw);
-void dw1000_rx_set_timeout(dw1000_t dw, uint16_t timeout);
+void dw1000_rx_reset(dw1000_t *dw);
+void dw1000_rx_set_timeout(dw1000_t *dw, uint16_t timeout);
 
-void dw1000_rx_set_frame_filtering(dw1000_t dw, uint16_t bitmask);
+void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask);
 
-void dw1000_rx_get_info(dw1000_t dw, dw1000_rxinfo_t *rxinfo);
+void dw1000_rx_get_info(dw1000_t *dw, dw1000_rxinfo_t *rxinfo);
 
 
-void dw1000_rx_read_frame_data(dw1000_t dw, uint8_t *data, size_t length, size_t offset);
+void dw1000_rx_read_frame_data(dw1000_t *dw, uint8_t *data, size_t length, size_t offset);
 
-int dw1000_rx_start(dw1000_t dw, int8_t rx_mode);
+int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode);
 
-void dw1000_rx_get_time_tracking(dw1000_t dw,
+void dw1000_rx_get_time_tracking(dw1000_t *dw,
 				 int32_t *offset, uint32_t *interval);
 
 
-void dw1000_rx_get_power_estimate(dw1000_t dw,
+void dw1000_rx_get_power_estimate(dw1000_t *dw,
 				  double *signal, double *firstpath);
 
 
@@ -569,7 +569,7 @@ void dw1000_rx_get_power_estimate(dw1000_t dw,
  * @return 32bit word from OTP memory
  */
 static inline
-uint32_t dw1000_otp_get(dw1000_t dw, uint16_t address) {
+uint32_t dw1000_otp_get(dw1000_t *dw, uint16_t address) {
     uint32_t data;
     dw1000_otp_read(dw, address, &data, 1);
     return le32_to_cpu(data);
@@ -585,7 +585,7 @@ uint32_t dw1000_otp_get(dw1000_t dw, uint16_t address) {
  * @param[in]  data     byte to write
  */
 static inline
-void _dw1000_reg_write8(dw1000_t dw,
+void _dw1000_reg_write8(dw1000_t *dw,
     uint8_t reg, size_t offset, uint8_t data) {
     _dw1000_reg_write(dw, reg, offset, &data, sizeof(data));
 }
@@ -600,7 +600,7 @@ void _dw1000_reg_write8(dw1000_t dw,
  * @param[in]  data     16-bit word to write
  */
 static inline
-void _dw1000_reg_write16(dw1000_t dw,
+void _dw1000_reg_write16(dw1000_t *dw,
     uint8_t reg, size_t offset, uint16_t data) {
     data = cpu_to_le16(data);
     _dw1000_reg_write(dw, reg, offset, &data, sizeof(data));
@@ -616,7 +616,7 @@ void _dw1000_reg_write16(dw1000_t dw,
  * @param[in]  data     32-bit word to write
  */
 static inline
-void _dw1000_reg_write32(dw1000_t dw,
+void _dw1000_reg_write32(dw1000_t *dw,
     uint8_t reg, size_t offset, uint32_t data) {
     data = cpu_to_le32(data);
     _dw1000_reg_write(dw, reg, offset, &data, sizeof(data));
@@ -633,7 +633,7 @@ void _dw1000_reg_write32(dw1000_t dw,
  * @return byte
  */
 static inline
-uint8_t _dw1000_reg_read8(dw1000_t dw,
+uint8_t _dw1000_reg_read8(dw1000_t *dw,
     uint8_t reg, size_t offset) {
     uint8_t data;
     _dw1000_reg_read(dw, reg, offset, &data, sizeof(data));
@@ -651,7 +651,7 @@ uint8_t _dw1000_reg_read8(dw1000_t dw,
  * @return 16-bit word
  */
 static inline
-uint16_t _dw1000_reg_read16(dw1000_t dw,
+uint16_t _dw1000_reg_read16(dw1000_t *dw,
     uint8_t reg, size_t offset) {
     uint16_t data;
     _dw1000_reg_read(dw, reg, offset, &data, sizeof(data));
@@ -669,7 +669,7 @@ uint16_t _dw1000_reg_read16(dw1000_t dw,
  * @return 32-bit word
  */
 static inline
-uint32_t _dw1000_reg_read32(dw1000_t dw,
+uint32_t _dw1000_reg_read32(dw1000_t *dw,
     uint8_t reg, size_t offset) {
     uint32_t data;
     _dw1000_reg_read(dw, reg, offset, &data, sizeof(data));
@@ -685,7 +685,7 @@ uint32_t _dw1000_reg_read32(dw1000_t dw,
  * @param[in]  dw       driver context
  */
 static inline
-uint32_t dw1000_tx_is_status_done(dw1000_t dw) {
+uint32_t dw1000_tx_is_status_done(dw1000_t *dw) {
     // UM §7.2.17: System Event Status Register
     //  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
     //     we will use only the first 4 bytes to access
@@ -703,7 +703,7 @@ uint32_t dw1000_tx_is_status_done(dw1000_t dw) {
  * @param[in]  dw       driver context
  */
 static inline
-uint32_t dw1000_rx_is_status_done(dw1000_t dw) {
+uint32_t dw1000_rx_is_status_done(dw1000_t *dw) {
     // UM §7.2.17: System Event Status Register
     //  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
     //     we will use only the first 4 bytes to access
@@ -722,7 +722,7 @@ uint32_t dw1000_rx_is_status_done(dw1000_t dw) {
  * @param dw        driver context
  */
 static inline
-void dw1000_tx_clear_status_done(dw1000_t dw) {
+void dw1000_tx_clear_status_done(dw1000_t *dw) {
     // Trigger clearing of TX frame sent event by setting it 1
     // UM §7.2.17: System Event Status Register
     _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
@@ -735,7 +735,7 @@ void dw1000_tx_clear_status_done(dw1000_t dw) {
  * @param[in]  dw       driver context
  */
 static inline
-void dw1000_rx_clear_status_done(dw1000_t dw) {
+void dw1000_rx_clear_status_done(dw1000_t *dw) {
     // Trigger clearing of RX frame received event by setting them to 1
     // UM §7.2.17: System Event Status Register
     _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
@@ -751,7 +751,7 @@ void dw1000_rx_clear_status_done(dw1000_t dw) {
  *                      a value of 0 disable the timeout.
  */
 static inline
-void dw1000_rx_set_timeout_preamble(dw1000_t dw, uint16_t timeout) {
+void dw1000_rx_set_timeout_preamble(dw1000_t *dw, uint16_t timeout) {
     _dw1000_reg_write16(dw, DW1000_REG_DRX_CONF, DW1000_OFF_DRX_PRETOC,
 		       timeout);
 }
@@ -765,7 +765,7 @@ void dw1000_rx_set_timeout_preamble(dw1000_t dw, uint16_t timeout) {
  * @param[out] ranging   indicate a ranging frame
  */
 static inline
-void dw1000_rx_get_frame_info(dw1000_t dw, size_t *length, bool *ranging) {
+void dw1000_rx_get_frame_info(dw1000_t *dw, size_t *length, bool *ranging) {
     const uint32_t rx_finfo =
 	_dw1000_reg_read32(dw, DW1000_REG_RX_FINFO, DW1000_OFF_NONE);
 
@@ -794,7 +794,7 @@ void dw1000_rx_get_frame_info(dw1000_t dw, size_t *length, bool *ranging) {
  * @return frame size (including CRC)
  */
 static inline
-size_t dw1000_rx_get_frame_length(dw1000_t dw) {
+size_t dw1000_rx_get_frame_length(dw1000_t *dw) {
     size_t length;
     dw1000_rx_get_frame_info(dw, &length, NULL);
     return length;
@@ -809,7 +809,7 @@ size_t dw1000_rx_get_frame_length(dw1000_t dw) {
  * @return system time (40-bit clock)
  */
 static inline
-uint64_t dw1000_get_system_time(dw1000_t dw) {
+uint64_t dw1000_get_system_time(dw1000_t *dw) {
     uint64_t sys_time = 0;
     _dw1000_reg_read(dw, DW1000_REG_SYS_TIME, DW1000_OFF_NONE,
 		    ((uint8_t *)(&sys_time)) + 0, 5);
@@ -825,7 +825,7 @@ uint64_t dw1000_get_system_time(dw1000_t dw) {
  * @return RMARKER reception time (40-bit clock)
  */
 static inline
-uint64_t dw1000_rx_get_rmarker_time(dw1000_t dw) {
+uint64_t dw1000_rx_get_rmarker_time(dw1000_t *dw) {
     uint64_t rx_time = 0;
     _dw1000_reg_read(dw, DW1000_REG_RX_TIME, DW1000_OFF_RX_TIME_RX_STAMP,
 		    ((uint8_t *)(&rx_time)), 5);
@@ -841,7 +841,7 @@ uint64_t dw1000_rx_get_rmarker_time(dw1000_t dw) {
  * @return RMARKER transmission time (40-bit clock)
  */
 static inline
-uint64_t dw1000_tx_get_rmarker_time(dw1000_t dw) {
+uint64_t dw1000_tx_get_rmarker_time(dw1000_t *dw) {
     uint64_t tx_time = 0;
     _dw1000_reg_read(dw, DW1000_REG_TX_TIME, DW1000_OFF_TX_TIME_TX_STAMP,
 		    ((uint8_t *)(&tx_time)), 5);
@@ -858,7 +858,7 @@ uint64_t dw1000_tx_get_rmarker_time(dw1000_t dw) {
  * @param[in]  dw       driver context
  */
 static inline
-double dw1000_rx_get_clock_drift(dw1000_t dw) {
+double dw1000_rx_get_clock_drift(dw1000_t *dw) {
     int32_t  offset;
     uint32_t interval;
     dw1000_rx_get_time_tracking(dw, &offset, &interval);

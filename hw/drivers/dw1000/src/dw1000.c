@@ -335,7 +335,7 @@ void _dw1000_spi_header(uint8_t reg,  size_t offset, bool write,
  * @param[in]  mode     mode for which to set the clocks
  */
 static
-void _dw1000_clocks(dw1000_t dw, int mode) {
+void _dw1000_clocks(dw1000_t *dw, int mode) {
     /* PMSC CTRL0 is a 4-byte length field
      * Here we are only interested in the first byte (holding SYSCLKS)
      */
@@ -384,7 +384,7 @@ void _dw1000_clocks(dw1000_t dw, int mode) {
  * @param[in]  dw       driver context
  */
 static
-void _dw1000_softreset(dw1000_t dw) {
+void _dw1000_softreset(dw1000_t *dw) {
     // Switch to XTAL
     _dw1000_clocks(dw, DW1000_CLOCK_SYS_XTI);
 
@@ -423,7 +423,7 @@ void _dw1000_softreset(dw1000_t dw) {
  * @param[in]  dw        driver context
  */
 static inline
-void _dw1000_radio_tuning(dw1000_t dw) {
+void _dw1000_radio_tuning(dw1000_t *dw) {
     const dw1000_radio_t radio = dw->radio;
 
     /* Sanity check
@@ -724,7 +724,7 @@ void _dw1000_radio_tuning(dw1000_t dw) {
  *
  * @notapi
  */
-void _dw1000_reg_write(dw1000_t dw,
+void _dw1000_reg_write(dw1000_t *dw,
     uint8_t reg, size_t offset, void* data, size_t length) {
     // Sanity check
     DW1000_ASSERT(reg    <= 0x3F,               "invalid register number");
@@ -753,7 +753,7 @@ void _dw1000_reg_write(dw1000_t dw,
  * @param[out] data     will hold read data
  * @param[in]  length   length of data to read
  */
-void _dw1000_reg_read(dw1000_t dw,
+void _dw1000_reg_read(dw1000_t *dw,
     uint8_t reg, size_t offset, void* data, size_t length) {
     // Sanity check
     DW1000_ASSERT(reg    <= 0x3F,               "invalid register number");
@@ -784,7 +784,7 @@ void _dw1000_reg_read(dw1000_t dw,
  * @param[out] data     array of 32bit word   
  * @param[in]  length   length of data to read
  */
-void dw1000_otp_read(dw1000_t dw,
+void dw1000_otp_read(dw1000_t *dw,
 		     uint16_t address, uint32_t *data, size_t length) {
     // Sanity check
     DW1000_ASSERT(address <= 0x07FFu, "address is 11-bit encoded");
@@ -826,7 +826,7 @@ void dw1000_otp_read(dw1000_t dw,
  *
  * @param[in]  dw       driver context
  */
-void dw1000_hardreset(dw1000_t dw) {
+void dw1000_hardreset(dw1000_t *dw) {
     // Sanity check
     if (dw->config->reset == DW1000_IOLINE_NONE)
 	return;
@@ -858,7 +858,7 @@ void dw1000_hardreset(dw1000_t dw) {
  * @retval  0           DW1000 successfully initialized
  * @retval -1           Chip not identified as DW1000
  */
-int dw1000_initialise(dw1000_t dw) {
+int dw1000_initialise(dw1000_t *dw) {
     // We won't bother to read default register value. We assume
     // values are at their defaults due to reset performed inside
 
@@ -1048,7 +1048,7 @@ int dw1000_initialise(dw1000_t dw) {
  * @param[in]  dw       driver context
  * @param[in]  leds     leds to blink using a led mask
  */
-void dw1000_leds_blink(dw1000_t dw, uint8_t leds) {
+void dw1000_leds_blink(dw1000_t *dw, uint8_t leds) {
     const uint32_t pmsc_ledc =
 	_dw1000_reg_read32(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_LEDC);
     const uint32_t mask = DW1000_MSK_PMSC_LEDC_BLNKNOW &
@@ -1067,7 +1067,7 @@ void dw1000_leds_blink(dw1000_t dw, uint8_t leds) {
  *
  * @param[in]  dw       driver context
  */
-void _dw1000_reg_set32(dw1000_t dw,
+void _dw1000_reg_set32(dw1000_t *dw,
 		      uint8_t reg, size_t offset, uint32_t value) {
     uint32_t val = _dw1000_reg_read32(dw, reg, offset);
     _dw1000_reg_write32(dw, reg, offset, val | value);
@@ -1079,7 +1079,7 @@ void _dw1000_reg_set32(dw1000_t dw,
  *
  * @param[in]  dw       driver context
  */
-void _dw1000_reg_clear32(dw1000_t dw,
+void _dw1000_reg_clear32(dw1000_t *dw,
 			uint8_t reg, size_t offset, uint32_t value) {
     uint32_t val = _dw1000_reg_read32(dw, reg, offset);
     _dw1000_reg_write32(dw, reg, offset, val & ~value);
@@ -1093,7 +1093,7 @@ void _dw1000_reg_clear32(dw1000_t dw,
  * @param dw        driver context
  * @param cfg       driver configuration
  */
-void dw1000_init(dw1000_t dw, const dw1000_config_t *cfg) {
+void dw1000_init(dw1000_t *dw, const dw1000_config_t *cfg) {
     dw->config = cfg;
 }
 
@@ -1105,7 +1105,7 @@ void dw1000_init(dw1000_t dw, const dw1000_config_t *cfg) {
  *
  * @param dw        driver context
  */
-void dw1000_configure(dw1000_t dw, dw1000_radio_t radio) {
+void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
     /* Guard against out of range value
      */
 #if DW1000_WITH_PROPRIETARY_SFD
@@ -1250,7 +1250,7 @@ void dw1000_configure(dw1000_t dw, dw1000_radio_t radio) {
  * @param[out] temp  temperature (in 1/100 °C)
  * @param[out] vbat  battery voltage in mV
  */
-void dw1000_read_temp_vbat(dw1000_t dw, uint16_t *temp, uint16_t *vbat) {
+void dw1000_read_temp_vbat(dw1000_t *dw, uint16_t *temp, uint16_t *vbat) {
     // From official deca_device.c (undocummented, part of RF_RES2)
     //   These writes should be single writes and in sequence
     // Enable TLD Bias
@@ -1295,7 +1295,7 @@ void dw1000_read_temp_vbat(dw1000_t dw, uint16_t *temp, uint16_t *vbat) {
  * @param time      time for delayed send or received time
  */
 inline
-void dw1000_txrx_set_time(dw1000_t dw, uint64_t time) {
+void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time) {
     time = cpu_to_le64(time);
     _dw1000_reg_write(dw, DW1000_REG_DX_TIME, DW1000_OFF_NONE, &time, 5);
 }
@@ -1316,7 +1316,7 @@ void dw1000_txrx_set_time(dw1000_t dw, uint64_t time) {
  * @param tx_mode   use DW1000_TX_RANGING flag, to indicate a ranging frame
  */
 inline
-void dw1000_tx_fctrl(dw1000_t dw, size_t length, size_t offset,
+void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
 		     uint8_t tx_mode) {
     DW1000_ASSERT(
 #if DW1000_WITH_PROPRIETARY_LONG_FRAME
@@ -1350,7 +1350,7 @@ void dw1000_tx_fctrl(dw1000_t dw, size_t length, size_t offset,
  * @param offset    offset to write data to
  */
 inline
-void dw1000_tx_write_frame_data(dw1000_t dw,
+void dw1000_tx_write_frame_data(dw1000_t *dw,
 			  uint8_t *data, size_t length, size_t offset) {
     // Protect device from buffer overflow
     if (offset > 1024)
@@ -1380,7 +1380,7 @@ void dw1000_tx_write_frame_data(dw1000_t dw,
  * @retval -1        It was not possible to start transmission.
  *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
  */
-int dw1000_tx_start(dw1000_t dw, uint8_t tx_mode) {
+int dw1000_tx_start(dw1000_t *dw, uint8_t tx_mode) {
     uint8_t sys_ctrl  = DW1000_FLG_SYS_CTRL_TXSTRT;
   
     // Set wait for response flag
@@ -1455,7 +1455,7 @@ int dw1000_tx_start(dw1000_t dw, uint8_t tx_mode) {
  * @retval -1        It was not possible to start transmission.
  *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
  */
-int dw1000_tx_send(dw1000_t dw,
+int dw1000_tx_send(dw1000_t *dw,
 		   uint8_t *data, size_t length, uint8_t tx_mode) {
 
     // Write data to DW TX buffer
@@ -1479,7 +1479,7 @@ int dw1000_tx_send(dw1000_t dw,
  *
  * @param[in]  dw       driver context
  */
-void dw1000_rx_reset(dw1000_t dw) {
+void dw1000_rx_reset(dw1000_t *dw) {
     // Trigger reset for RX by creating a 0 pulse
     _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
 		      0xE0);
@@ -1500,7 +1500,7 @@ void dw1000_rx_reset(dw1000_t dw) {
  * @param offset    offset to read data from
  */
 inline
-void dw1000_rx_read_frame_data(dw1000_t dw,
+void dw1000_rx_read_frame_data(dw1000_t *dw,
 			       uint8_t *data, size_t length, size_t offset) {
     // Protect device from overreading the buffer
     if (offset > 1024)
@@ -1518,7 +1518,7 @@ void dw1000_rx_read_frame_data(dw1000_t dw,
  *
  * @param dw        driver context
  */
-void dw1000_rx_sync_dblbuf(dw1000_t dw) {
+void dw1000_rx_sync_dblbuf(dw1000_t *dw) {
     // UM §7.2.17: System Event Status Register
     //  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
     //     we will read the 1 byte at offset 3
@@ -1536,8 +1536,7 @@ void dw1000_rx_sync_dblbuf(dw1000_t dw) {
 }
 
 
-    
-void dw1000_interrupt(dw1000_t dw, uint32_t bitmask, bool enable) {
+void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
     uint32_t sys_mask = _dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, 0);
     
     if (enable) { sys_mask |=  bitmask; } // Set
@@ -1553,7 +1552,7 @@ void dw1000_interrupt(dw1000_t dw, uint32_t bitmask, bool enable) {
  *
  * @param dw        driver context
  */
-void dw1000_rx_off(dw1000_t dw) {   
+void dw1000_rx_off(dw1000_t *dw) {   
     // Save interrupt mask
     uint32_t sys_mask =
 	_dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE);
@@ -1600,7 +1599,7 @@ void dw1000_rx_off(dw1000_t dw) {
  *                   (Can happen when @p DW1000_RX_DELAYED_START
  *                   and @p DW1000_RX_IDLE_ON_DELAY_ERROR are set)
  */
-int dw1000_rx_start(dw1000_t dw, int8_t rx_mode) {
+int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
     // Sync double buffer unless explicitely disabled
     if (! (rx_mode & DW1000_RX_NO_DBLBUF_SYNC)) {
         dw1000_rx_sync_dblbuf(dw);
@@ -1644,7 +1643,7 @@ int dw1000_rx_start(dw1000_t dw, int8_t rx_mode) {
  *
  * @note  This *can't* be used in interrupt handler, due to SPI request
  */
-bool dw1000_process_events(dw1000_t dw) {
+bool dw1000_process_events(dw1000_t *dw) {
     const dw1000_config_t *cfg = dw->config;
     
     // UM §7.2.17: System Event Status Register
@@ -1816,7 +1815,7 @@ bool dw1000_process_events(dw1000_t dw) {
  * @param [in]  timeout timeout in "UWB microsencond" units (between 0..65535),
  *                       a value of 0 disable the timeout
  */
-void dw1000_rx_set_timeout(dw1000_t dw, uint16_t timeout) {
+void dw1000_rx_set_timeout(dw1000_t *dw, uint16_t timeout) {
     // UM §7.2.14: Receive Frame Wait Timeout Period
     if (timeout > 0) {
         _dw1000_reg_write16(dw, DW1000_REG_RX_FWTO, DW1000_OFF_NONE, timeout);
@@ -1844,7 +1843,7 @@ void dw1000_rx_set_timeout(dw1000_t dw, uint16_t timeout) {
  *      DW1000_FF_TYPE_4         type-4 frames
  *      DW1000_FF_TYPE_5         type-5 frames
  */
-void dw1000_rx_set_frame_filtering(dw1000_t dw, uint16_t bitmask) {
+void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask) {
     // Read System Configuration register (and hide reserved bits)
     uint32_t sys_cfg =
 	_dw1000_reg_read32(dw, DW1000_REG_SYS_CFG, 0) & DW1000_MSK_SYS_CFG;
@@ -1879,7 +1878,7 @@ void dw1000_rx_set_frame_filtering(dw1000_t dw, uint16_t bitmask) {
  * @param [in]  dw      driver context
  * @param [out] rxinfo  information about frame reception
  */
-void dw1000_rx_get_info(dw1000_t dw, dw1000_rxinfo_t *rxinfo) {
+void dw1000_rx_get_info(dw1000_t *dw, dw1000_rxinfo_t *rxinfo) {
     // First path index (UM §7.2.23)
     rxinfo->first_path =
 	_dw1000_reg_read16(dw, DW1000_REG_RX_TIME, DW1000_OFF_RX_TIME_FP_INDEX);
@@ -1903,7 +1902,7 @@ void dw1000_rx_get_info(dw1000_t dw, dw1000_rxinfo_t *rxinfo) {
  * @param [in]  delay   delay in "UWB microsecond" units
  *                       (between 0 .. @p DW1000_MAX_TX_RX_ACTIVATION_DELAY)
  */
-void dw1000_tx_set_rx_activation_delay(dw1000_t dw, uint32_t delay) {
+void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay) {
     DW1000_ASSERT(delay <= DW1000_MAX_TX_RX_ACTIVATION_DELAY,
 		  "out of range delay");
 
@@ -1932,7 +1931,7 @@ void dw1000_tx_set_rx_activation_delay(dw1000_t dw, uint32_t delay) {
  * @param[out] offset   clock offset calculated during the interval
  * @param[out] interval time interval used to calculate the offset
  */
-void dw1000_rx_get_time_tracking(dw1000_t dw,
+void dw1000_rx_get_time_tracking(dw1000_t *dw,
 				 int32_t *offset, uint32_t *interval) {
     // UM §7.2.21: Receiver Time Tracking Interval
     if (interval) {
@@ -1970,7 +1969,7 @@ void dw1000_rx_get_time_tracking(dw1000_t dw,
  *
  * @return the preamble acculumation count
  */
-uint16_t dw1000_rx_get_pacc_count(dw1000_t dw) {
+uint16_t dw1000_rx_get_pacc_count(dw1000_t *dw) {
     // Get Preamble accumulation count... and adjust it
     // UM §7.2.18: RX Frame Information Register (RXPACC field)
     uint16_t rxpacc       =
@@ -1998,7 +1997,7 @@ uint16_t dw1000_rx_get_pacc_count(dw1000_t dw) {
  * @return "actual" power
  */
 static
-double _dw1000_rx_power_correction(dw1000_t dw, double p) {
+double _dw1000_rx_power_correction(dw1000_t *dw, double p) {
     // UM §4.7: [Figure 22]: Estimated RX level versus actual RX level
     switch (dw->radio->prf) {
     case DW1000_PRF_16MHZ:
@@ -2041,7 +2040,7 @@ double _dw1000_rx_power_correction(dw1000_t dw, double p) {
  * @param[out] signal     received signal power in dBm
  * @param[out] firstpath  received firstpath power in dBm
  */
-void dw1000_rx_get_power_estimate(dw1000_t dw,
+void dw1000_rx_get_power_estimate(dw1000_t *dw,
 				  double *signal, double *firstpath) {
     // PRF of 4MHZ is unsupported by DW1000
     DW1000_ASSERT((dw->radio->prf == DW1000_PRF_16MHZ) ||
@@ -2241,6 +2240,3 @@ double dwt_getrangebias(uint8 chan, float range, uint8 prf) {
 #endif
 
 /** @} */
-
-
-
