@@ -330,8 +330,8 @@ typedef struct {
 	 *
 	 * Default interruption mask: DW1000_FLG_SYS_MASK_MRXFCG
 	 */
-	void (*rx_ok     )(dw1000_t *dw, size_t length, bool ranging,
-			                                     uint32_t status);
+	void (*rx_ok     )(dw1000_t *dw, uint32_t status,
+			   size_t length, bool ranging);
     } cb;
 } dw1000_config_t;
 

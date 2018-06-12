@@ -1707,7 +1707,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 
 	// Call the corresponding callback if present
         if (cfg->cb.rx_ok) {
-            cfg->cb.rx_ok(dw, length, ranging, status);
+            cfg->cb.rx_ok(dw, status, length, ranging);
         }
 
 	// Toggle the Host side Receive Buffer Pointer
