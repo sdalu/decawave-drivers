@@ -546,7 +546,8 @@ int dw1000_tx_sendv(dw1000_t *dw,
 
 
 
-void dw1000_rx_reset(dw1000_t *dw);
+void dw1000_rx_off(dw1000_t *dw);
+
 void dw1000_rx_set_timeout(dw1000_t *dw, uint16_t timeout);
 
 void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask);

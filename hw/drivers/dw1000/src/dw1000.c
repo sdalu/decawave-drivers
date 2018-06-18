@@ -1526,7 +1526,8 @@ int dw1000_tx_sendv(dw1000_t *dw,
  *
  * @param[in]  dw       driver context
  */
-void dw1000_rx_reset(dw1000_t *dw) {
+static inline void
+dw1000_rx_reset(dw1000_t *dw) {
     // Trigger reset for RX by creating a 0 pulse
     _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
 		      0xE0);
