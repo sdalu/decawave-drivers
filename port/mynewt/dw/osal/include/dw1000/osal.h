@@ -6,6 +6,7 @@
 #include <os/os.h>
 #include <hal/hal_gpio.h>
 #include <hal/hal_spi.h>
+#include "sys/_iovec.h"
 
 
 /*----------------------------------------------------------------------*/
