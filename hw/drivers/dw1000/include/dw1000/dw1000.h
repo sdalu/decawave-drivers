@@ -540,6 +540,8 @@ void dw1000_tx_write_frame_data(dw1000_t *dw, uint8_t *data, size_t length, size
 
 int dw1000_tx_send(dw1000_t *dw,
 		     uint8_t *data, size_t length, uint8_t tx_mode);
+int dw1000_tx_sendv(dw1000_t *dw,
+		    struct iovec *iovec, int iovcnt, uint8_t tx_mode);
 
 
 

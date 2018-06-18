@@ -1476,6 +1476,47 @@ int dw1000_tx_send(dw1000_t *dw,
 }
 
 
+/**
+ * @brief Start sending a frame
+ *
+ * @note   According to the @p DW1000_TX_NO_AUTO_CRC flag, if unset
+ *         transmitted frame will have the CRC automatically computed
+ *         and appended to the frame so transmitted frame will be length+2; if
+ *         set, transmitted frame length will be of the specified length
+ *         but a CRC-16-CCITT must be explicitely embedded in the frame data
+ *
+ * @note   If using @p DW1000_TX_DELAYED_START, the transmission time
+ *         should have been previously set using @p dw1000_txrx_set_time
+ *
+ * @param dw        driver context
+ * @param iovec     io vector
+ * @param iovcnt    number of elements in vector
+ * @param tx_mode   a set of the following flags are supported:
+ *                  DW1000_TX_DELAYED_START, DW1000_TX_RESPONSE_EXPECTED,  
+ *                  DW1000_TX_RANGING, DW1000_TX_NO_AUTO_CRC
+ *
+ * @retval  0        Transmission started
+ * @retval -1        It was not possible to start transmission.
+ *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
+ */
+int dw1000_tx_sendv(dw1000_t *dw,
+		    struct iovec *iovec, int iovcnt, uint8_t tx_mode) {
+    size_t length = 0;
+
+    // Write data to DW TX buffer and compute offset/length
+    for ( ; iovcnt > 0 ; iovec++, iovcnt--) {
+	dw1000_tx_write_frame_data(dw, iovec->iov_base, iovec->iov_len, length);
+	length += iovec->iov_len;
+    }
+    // Adjust data length if CRC is automatically appended
+    if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
+	length += DW1000_CRC_LENGTH;
+    // Set transmission control parameters
+    dw1000_tx_fctrl(dw, length, 0, tx_mode);
+    // Start sending
+    return dw1000_tx_start(dw, tx_mode);
+}
+
 
 
 /**
