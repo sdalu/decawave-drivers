@@ -27,6 +27,11 @@
 #define DW1000_TIME_CLOCK_HZ (499200000ull * 128)
 
 /**
+ * @brief Number of bits for the clock used for timestamping
+ */
+#define DW1000_TIME_CLOCK_BITS 40
+
+/**
  * @brief Frequency of the clock used for timestamping (MHz)
  */
 #define DW1000_TIME_CLOCK_MHZ 63897.6
