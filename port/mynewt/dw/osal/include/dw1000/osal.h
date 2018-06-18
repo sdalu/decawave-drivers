@@ -72,8 +72,10 @@ _dw1000_ioline_clear(dw1000_ioline_t line) {
 /*----------------------------------------------------------------------*/
 
 typedef struct dw1000_spi_driver {
-    int             id;
-    dw1000_ioline_t cs_pin;
+    int              id;     // SPI device id
+    dw1000_ioline_t  cs_pin; // Chip Select Pin
+    void (*lock  )(struct dw1000_spi_driver *spi);
+    void (*unlock)(struct dw1000_spi_driver *spi);
     struct hal_spi_settings settings;
 } dw1000_spi_driver_t;
 
