@@ -106,6 +106,7 @@ static const int8_t channel_table_mapping[] = {
     -1, 0, 1, 2, 3, 4, -1, 5
 };
 
+#if 0
 // Parameters according to channel
 // UM §10.5: DW1000 has a maximum receive bandwith of 900 MHz
 //           Channel 4 has a bandwith of 1331 MHz
@@ -125,11 +126,13 @@ static const struct channel_table channel_table[] = {
     { 64896,  4992, {3,4}, { 9,10,11,12} }, // 5
     { 64896, 10816, {7,8}, {17,18,19,20} }, // 7
 };
+
 // Allowed preamble code for "dynamic preamble select" for 64 MHz PRF
 // UM §10.5: UWB channels and preamble codes
 static const uint8_t pcode_64mhz_dps[] = {
     13, 14, 15, 16, 21, 22, 23, 24
 };
+#endif
 
 
 // Internal calibration tables
