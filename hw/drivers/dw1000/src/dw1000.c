@@ -1315,7 +1315,6 @@ void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time) {
  * @param offset    frame offset in DW TX buffer
  * @param tx_mode   use DW1000_TX_RANGING flag, to indicate a ranging frame
  */
-inline
 void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
 		     uint8_t tx_mode) {
     DW1000_ASSERT(
@@ -1349,7 +1348,6 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
  * @param length    length of the data being written to buffer
  * @param offset    offset to write data to
  */
-inline
 void dw1000_tx_write_frame_data(dw1000_t *dw,
 			  uint8_t *data, size_t length, size_t offset) {
     // Protect device from buffer overflow
