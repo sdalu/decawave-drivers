@@ -489,7 +489,7 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
 	&manual_tx_power[channel_table_mapping[radio->channel]];
     uint32_t tx_power = ((radio->prf == DW1000_PRF_64MHZ)
 			 ? tp->prf_64mhz   // NOTE: PRF 4MHz is unsupported
-			 : tp->prf_16mhz  //       by the DW1000
+			 : tp->prf_16mhz   //       by the DW1000
 			) << 8;
 
 #if DW1000_WITH_DWM1000_EVK_COMPATIBILITY
@@ -869,7 +869,7 @@ int dw1000_initialise(dw1000_t *dw) {
 
     // Start SPI at low speed
     _dw1000_spi_low_speed(cfg->spi);
-
+    
     // Ensure reset state
     _dw1000_softreset(dw);
     
@@ -1428,7 +1428,7 @@ int dw1000_tx_start(dw1000_t *dw, uint8_t tx_mode) {
 	// As we are turning off the transceiver (TRXOFF), we can blow
 	// as well other flags
 	_dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL,
-			  DW1000_FLG_SYS_CTRL_TRXOFF);
+			   DW1000_FLG_SYS_CTRL_TRXOFF);
 	dw->wait4resp = 0;
 
 	return -1;
@@ -1611,7 +1611,7 @@ void dw1000_rx_off(dw1000_t *dw) {
 
     // Disable the radio
     _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
-		      DW1000_FLG_SYS_CTRL_TRXOFF); 
+		       DW1000_FLG_SYS_CTRL_TRXOFF); 
 
     
     // UM §7.2.17: System Event Status Register

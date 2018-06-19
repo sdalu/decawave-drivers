@@ -421,7 +421,7 @@ struct dw1000 {
 #define DW1000_BITRATE_850KBPS  1
 #define DW1000_BITRATE_6800KBPS 2
 
-#define DW1000_PRF_4MHZ      0  //!< Unsupported by DW100 receiver!
+#define DW1000_PRF_4MHZ      0  //!< Unsupported by DW1000 receiver!
 #define DW1000_PRF_16MHZ     1
 #define DW1000_PRF_64MHZ     2
 
@@ -602,8 +602,7 @@ uint32_t dw1000_otp_get(dw1000_t *dw, uint16_t address) {
  * @param[in]  data     byte to write
  */
 static inline
-void _dw1000_reg_write8(dw1000_t *dw,
-    uint8_t reg, size_t offset, uint8_t data) {
+void _dw1000_reg_write8(dw1000_t *dw, uint8_t reg, size_t offset, uint8_t data){
     _dw1000_reg_write(dw, reg, offset, &data, sizeof(data));
 }
 
@@ -686,8 +685,7 @@ uint16_t _dw1000_reg_read16(dw1000_t *dw,
  * @return 32-bit word
  */
 static inline
-uint32_t _dw1000_reg_read32(dw1000_t *dw,
-    uint8_t reg, size_t offset) {
+uint32_t _dw1000_reg_read32(dw1000_t *dw, uint8_t reg, size_t offset) {
     uint32_t data;
     _dw1000_reg_read(dw, reg, offset, &data, sizeof(data));
     return dw1000_le32_to_cpu(data);
@@ -886,4 +884,3 @@ double dw1000_rx_get_clock_drift(dw1000_t *dw) {
 /** @} */
 
 #endif
-
