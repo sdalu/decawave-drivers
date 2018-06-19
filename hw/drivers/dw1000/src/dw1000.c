@@ -2125,6 +2125,47 @@ void dw1000_rx_get_power_estimate(dw1000_t *dw,
 }
 
 
+/**
+ * @brief Get calibration information
+ *
+ * @param[in]  channel    Channel (1, 2, 3, 4, 5, 7)
+ * @param[in]  prf        PRF (DW1000_PRF_16MHZ or DW1000_PRF_64MHZ)
+ * @param[out] power      Power at receiver input (dBm/MHz) 
+ * @param[out] separation Antenna separation in centimeters
+ */
+bool
+dw1000_get_calibration(uint8_t channel, uint8_t prf,
+		       uint8_t *power, uint16_t *separation) {
+    // Sanity check on channel
+    if ((channel < 1) || (channel > 7) || (channel == 6)) {
+	return false;
+    }
+
+    // Sanity check on PRF
+    switch(prf) {
+    case DW1000_PRF_16MHZ:
+    case DW1000_PRF_64MHZ:
+	break;
+    case DW1000_PRF_4MHZ:
+    default:
+	return false;
+    }
+    
+    // Retrieve calibration information
+    const struct channel_prf_calibration *calib =
+	&channel_prf_calibration[ channel_table_mapping[channel] ][ prf ];
+
+    // Save calibration information
+    if (power) {
+	*power      = calib->power;
+    }
+    if (separation) {
+	*separation = calib->separation;
+    }
+
+    // Job's done
+    return true;
+}
 
 
 

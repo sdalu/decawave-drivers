@@ -487,6 +487,8 @@ struct dw1000 {
 
 
 
+bool dw1000_get_calibration(uint8_t channel, uint8_t prf,
+			    uint8_t *power, uint16_t *separation);
 
 void dw1000_init(dw1000_t *dw, const dw1000_config_t *cfg);
 
