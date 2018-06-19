@@ -1,0 +1,8 @@
+# Settings this app defines.
+syscfg.defs:
+    DW1000_TASK_STACK_SIZE:
+        description: 'Size of the dw1000 task stack (in word)'
+        value: 512
+    DW1000_TASK_PRIO:
+        description: 'Priority of the dw1000 task stack'
+        value: 5
