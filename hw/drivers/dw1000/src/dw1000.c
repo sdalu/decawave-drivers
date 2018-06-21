@@ -870,18 +870,18 @@ int dw1000_initialise(dw1000_t *dw) {
     // Start SPI at low speed
     _dw1000_spi_low_speed(cfg->spi);
     
+    // Read and validate device ID
+    dw->id.device = _dw1000_reg_read32(dw, DW1000_REG_DEV_ID, 0);
+    if (dw->id.device != DW1000_ID_DEVICE) {
+        return -1;
+    }
+
     // Ensure reset state
     _dw1000_softreset(dw);
     
     // Clock need to be running at XTAL value for safe reading of OTP
     // or loading microcode (see MN: _dw1000_phy_load_microcode)
     _dw1000_clocks(dw, DW1000_CLOCK_SYS_XTI);
-
-    // Read and validate device ID
-    dw->id.device = _dw1000_reg_read32(dw, DW1000_REG_DEV_ID, 0);    
-    if (dw->id.device != DW1000_ID_DEVICE) {
-        return -1;
-    }
 
     // Retrieve Chip and Lot identification
     // UM 6.3.1: OTP memory map
