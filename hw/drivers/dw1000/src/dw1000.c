@@ -59,18 +59,23 @@
 /* Driver local definitions.                                                 */
 /*===========================================================================*/
 
-/**
- * @private
- * @brief Maximum header size for SPI transaction
+/*
+ * Maximum header size for SPI transaction
  */
 #define DW1000_SPI_HEADER_MAX_LENGTH 3
 
-/**
- * @private
- * @brief Identification for DW1000 device
+/*
+ * Identification for DW1000 device
  */
 #define DW1000_ID_DEVICE   0xDECA0130
 
+/*
+ * Clock configuration
+ */
+#define DW1000_CLOCK_SEQUENCING            0
+#define DW1000_CLOCK_SYS_XTI               1
+#define DW1000_CLOCK_SYS_PLL               2
+#define DW1000_CLOCK_TX_CONTINOUSFRAME     3
 
 
 /*===========================================================================*/
@@ -140,11 +145,11 @@ static const uint8_t pcode_64mhz_dps[] = {
 
 // UM §8.3.1: Calibration method
 //  -> Power at -41.3dBm and 0dBi antenna
-struct channel_prf_calibration { // [channel][DW1000_PRF_{4,16,64}MHZ]
+struct _channel_prf_calibration { // [channel][DW1000_PRF_{4,16,64}MHZ]
     uint8_t  power;       // Power at receiver input (dBm/MHz) 
     uint16_t separation;  // Antenna separation in centimeters
 };
-static const struct channel_prf_calibration channel_prf_calibration[6][3] = {
+static const struct _channel_prf_calibration channel_prf_calibration[6][3] = {
     // Note: 4MHz PRF is unsupported by DW1000
     //  4MHz  ,   16MHz      ,   64MHz
     { { 0, 0 }, { 108, 1475 }, { 104,  930 } }, // 1
@@ -160,11 +165,11 @@ static const struct channel_prf_calibration channel_prf_calibration[6][3] = {
 //----------------------------------------------------------------------
 
 // UM §7.2.31.4: Transmit Power Control Reference Values
-struct tx_power {
+struct _tx_power {
     uint16_t prf_16mhz;
     uint16_t prf_64mhz;
 };
-static const struct tx_power manual_tx_power[] = {
+static const struct _tx_power manual_tx_power[] = {
     { 0x7575, 0x6767 }, // Channel 1
     { 0x7575, 0x6767 }, // Channel 2
     { 0x6F6F, 0x8B8B }, // Channel 3
@@ -179,14 +184,14 @@ static const struct tx_power manual_tx_power[] = {
 // UM §7.2.41.3: Value for RF_RXCTRLH
 // UM §7.2.41.4: Value for RF_TXCTRL
 // UM §7.2.43.4: Pulse Generator Delay
-struct channel_tunning {
+struct _channel_tunning {
     uint32_t fs_pll_cfg;      // Frequency synthesiser - PLL configuration
     uint8_t  fs_pll_tune;     // Frequency synthesiser – PLL Tuning
     uint32_t rf_txctrl;       // RF configuration for TX
     uint8_t  rf_rxctrlh;      // RF configuration for RX
     uint8_t  tc_pgdelay;      // Pulse Generator Delay
 };
-static const struct channel_tunning channel_tunning[] = {
+static const struct _channel_tunning channel_tunning[] = {
     { 0x09000407, 0x1E, 0x00005C40, 0xD8, 0xC9 }, // Channel 1
     { 0x08400508, 0x26, 0x00045CA0, 0xD8, 0xC2 }, // Channel 2
     { 0x08401009, 0x56, 0x00086CC0, 0xD8, 0xC5 }, // Channel 3
@@ -200,13 +205,13 @@ static const struct channel_tunning channel_tunning[] = {
 // UM §7.2.36.3: AGC_TUNE1
 // UM §7.2.40.3: DRX_TUNE1a
 // UM §7.2.40.5: DRX_TUNE2
-struct prf_tunning {
+struct _prf_tunning {
     uint16_t lde_cfg2;     // LDE config
     uint16_t agc_tune1;    // AGC tunning
     uint16_t drx_tune1a;   // DRX tunning
     uint32_t drx_tune2[4]; // DRX tunning depending of PAC
 };
-static const struct prf_tunning prf_tunning[] = {
+static const struct _prf_tunning prf_tunning[] = {
     //  4MHz (unsupported by DW1000) [DW1000_PRF_4MHZ ]
     {      0,      0,      0, {          0,         0,         0,         0 } },
     // 16MHz                         [DW1000_PRF_16MHZ]
@@ -218,14 +223,14 @@ static const struct prf_tunning prf_tunning[] = {
 // Tunning according to bitrate
 // UM §7.2.40.2: DRX_TUNE0b
 // UM §7.2.34  : User defined SFD sequence
-struct bitrate_tunning {
+struct _bitrate_tunning {
     uint16_t drx_tune0b;
     struct {
 	uint16_t drx_tune0b;
 	uint8_t  usr_sfd_len;
     } proprietary_sfd;
 };
-static const struct bitrate_tunning bitrate_tunning[] = {
+static const struct _bitrate_tunning bitrate_tunning[] = {
     { 0x000A, { 0x0016, 64 } }, //  110Kb/s
     { 0x0001, { 0x0006, 16 } }, //  850Kb/s
     { 0x0001, { 0x0002,  8 } }  // 6800Kb/s
@@ -331,11 +336,15 @@ void _dw1000_spi_header(uint8_t reg,  size_t offset, bool write,
 
 
 /**
- * @private
+ * @internal
  * @brief  Set clocks for appropriate mode
  *
  * @param[in]  dw       driver context
  * @param[in]  mode     mode for which to set the clocks
+ *                       - DW1000_CLOCK_SEQUENCING
+ *                       - DW1000_CLOCK_SYS_XTI
+ *                       - DW1000_CLOCK_SYS_PLL
+ *                       - DW1000_CLOCK_TX_CONTINOUSFRAME
  */
 static
 void _dw1000_clocks(dw1000_t *dw, int mode) {
@@ -436,10 +445,10 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
 
     /* Retrieve channel/PRF/Bitrate table helpers
      */
-    const struct channel_tunning *ci = &channel_tunning
+    const struct _channel_tunning *ci = &channel_tunning
 	                                [channel_table_mapping[radio->channel]];
-    const struct prf_tunning     *pi = &prf_tunning[radio->prf];   
-    const struct bitrate_tunning *bi = &bitrate_tunning[radio->bitrate];
+    const struct _prf_tunning     *pi = &prf_tunning[radio->prf];   
+    const struct _bitrate_tunning *bi = &bitrate_tunning[radio->bitrate];
   
     
     /* Configure LDE
@@ -485,7 +494,7 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
      *      this is the case as this library is in Smart Power Disable
      *      by default, and doesn't support changing it for now
      */
-    const struct tx_power *tp =
+    const struct _tx_power *tp =
 	&manual_tx_power[channel_table_mapping[radio->channel]];
     uint32_t tx_power = ((radio->prf == DW1000_PRF_64MHZ)
 			 ? tp->prf_64mhz   // NOTE: PRF 4MHz is unsupported
@@ -716,7 +725,7 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
 /*===========================================================================*/
 
 /**
- * @private
+ * @internal
  * @brief Write date to the DW1000 register
  *
  * @param[in]  dw       driver context
@@ -747,7 +756,7 @@ void _dw1000_reg_write(dw1000_t *dw,
 
 
 /**
- * @private
+ * @internal
  * @brief Read data from the DW1000 register
  *
  * @param[in]  dw       driver context
@@ -1065,7 +1074,7 @@ void dw1000_leds_blink(dw1000_t *dw, uint8_t leds) {
 
 
 /**
- * @private
+ * @internal
  * @brief Set bits for settings register
  *
  * @param[in]  dw       driver context
@@ -1077,7 +1086,7 @@ void _dw1000_reg_set32(dw1000_t *dw,
 }
 
 /**
- * @private
+ * @internal
  * @brief Clear bits for clearing register
  *
  * @param[in]  dw       driver context
@@ -2129,10 +2138,10 @@ void dw1000_rx_get_power_estimate(dw1000_t *dw,
 
 
 /**
- * @brief Get calibration information
+ * @brief Get information to help calibration process.
  *
- * @param[in]  channel    Channel (1, 2, 3, 4, 5, 7)
- * @param[in]  prf        PRF (DW1000_PRF_16MHZ or DW1000_PRF_64MHZ)
+ * @param[in]  channel    Channel (1, 2, 3, 4, 5, or 7)
+ * @param[in]  prf        PRF (@p DW1000_PRF_16MHZ or @p DW1000_PRF_64MHZ)
  * @param[out] power      Power at receiver input (dBm/MHz) 
  * @param[out] separation Antenna separation in centimeters
  */
@@ -2155,7 +2164,7 @@ dw1000_get_calibration(uint8_t channel, uint8_t prf,
     }
     
     // Retrieve calibration information
-    const struct channel_prf_calibration *calib =
+    const struct _channel_prf_calibration *calib =
 	&channel_prf_calibration[ channel_table_mapping[channel] ][ prf ];
 
     // Save calibration information

@@ -84,6 +84,11 @@
 /*===========================================================================*/
 
 /**
+ * \defgroup Config Compile time configuration
+ */
+/** @{ */
+
+/**
  * @brief Increase transmit power by about 3db, for compatibility with
  *        DecaRanging software when using DWM1000 module
  */
@@ -150,6 +155,7 @@
 #define DW1000_SFD_TIMEOUT_DEFAULT DW1000_SFD_TIMEOUT_MAX
 #endif
 
+/** @} */
 
 
 /*===========================================================================*/
@@ -186,7 +192,7 @@ typedef struct dw1000_radio {
     uint8_t    channel; 
     /**
      * @brief Pulse Repetition Frequency 
-     * @note  {DW1000_PRF_16MHZ} or {DW1000_PRF_64MHZ}
+     * @note  @p DW1000_PRF_16MHZ or @p DW1000_PRF_64MHZ
      */
     uint8_t    prf; 
     /**
@@ -206,8 +212,8 @@ typedef struct dw1000_radio {
      */
     uint8_t    rx_pcode;
     /**
-     * @brief Bit rate {DW1000_BITRATE_110KBPS, DW1000_BITRATE_850KBPS 
-     *        or DW1000_BITRATE_6800KBPS}
+     * @brief Bit rate @p DW1000_BITRATE_110KBPS, @pDW1000_BITRATE_850KBPS 
+     *        or @p DW1000_BITRATE_6800KBPS
      */
     uint8_t    bitrate;
     
@@ -249,7 +255,7 @@ typedef struct dw1000 dw1000_t;
 /**
  * @brief DW1000 Configuration
  */
-typedef struct {
+typedef struct dw1000_config {
     /**
      * @brief Use of double buffer
      */
@@ -393,9 +399,6 @@ struct dw1000 {
 
 
 
-
-
-
 /**
  * @brief Maximum allowed delay for automatic activation of reception
  *        after transmission.
@@ -404,24 +407,11 @@ struct dw1000 {
 
 
 
-
-/*
- * Clock configuration
- */
-
-#define DW1000_CLOCK_SEQUENCING            0
-#define DW1000_CLOCK_SYS_XTI               1
-#define DW1000_CLOCK_SYS_PLL               2
-#define DW1000_CLOCK_TX_CONTINOUSFRAME     3
-
-
-
-
 #define DW1000_BITRATE_110KBPS  0
 #define DW1000_BITRATE_850KBPS  1
 #define DW1000_BITRATE_6800KBPS 2
 
-#define DW1000_PRF_4MHZ      0  //!< Unsupported by DW1000 receiver!
+#define DW1000_PRF_4MHZ      0  // Unsupported by DW1000 receiver
 #define DW1000_PRF_16MHZ     1
 #define DW1000_PRF_64MHZ     2
 
@@ -444,10 +434,10 @@ struct dw1000 {
 
 /* Preamble Acquisition Chunk (PAC) size in symbols
  */
-#define DW1000_PAC8        0   //!< PAC  8
-#define DW1000_PAC16       1   //!< PAC 16
-#define DW1000_PAC32       2   //!< PAC 32
-#define DW1000_PAC64       3   //!< PAC 64
+#define DW1000_PAC8        0   // PAC  8
+#define DW1000_PAC16       1   // PAC 16
+#define DW1000_PAC32       2   // PAC 32
+#define DW1000_PAC64       3   // PAC 64
 
 
 
