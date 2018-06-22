@@ -40,18 +40,40 @@ void _dw1000_delay_msec(uint16_t ms) {
 /* IO line (using CF deck_digital.c wrapper)                            */
 /*----------------------------------------------------------------------*/
 
+#define DECK_MAX_PIN 13
+
 typedef uint32_t dw1000_ioline_t;
 
 #define DW1000_IOLINE_NONE 0
 
 static inline void
 _dw1000_ioline_set(dw1000_ioline_t line) {
-    digitalWrite(line, HIGH);
+    if (line > 0xFFFF) {
+	GPIO_TypeDef *port;
+	uint16_t      pin  = line & 0xFFFF;
+	switch(line >> 16) {
+	case 3: port = GPIOC; break;
+	default: DW1000_ASSERT(0, "unhandled GPIO port");
+	}	
+	GPIO_WriteBit(port, pin, 1);
+    } else {
+	digitalWrite(line, HIGH);
+    }
 }
 
 static inline void
 _dw1000_ioline_clear(dw1000_ioline_t line) {
-    digitalWrite(line, LOW);
+    if (line > 0xFFFF) {
+	GPIO_TypeDef *port;
+	uint16_t      pin  = line & 0xFFFF;
+	switch(line >> 16) {
+	case 3: port = GPIOC; break;
+	default: DW1000_ASSERT(0, "unhandled GPIO port");
+	}	
+	GPIO_WriteBit(port, pin, 0);
+    } else {
+	digitalWrite(line, LOW);
+    }
 }
 
 
