@@ -8,7 +8,7 @@
 #include "deck_constants.h"
 #include "deck_digital.h"
 #include "deck_spi.h"
-
+#include "sys/_iovec.h"
 
 /*----------------------------------------------------------------------*/
 /* Debug / Assert                                                       */
