@@ -87,7 +87,7 @@
 /*===========================================================================*/
 /* Driver local variables and types.                                         */
 /*===========================================================================*/
-
+#if 0
 static const uint8_t BIAS_500_16_ZERO = 10;
 static const uint8_t BIAS_500_64_ZERO = 8;
 static const uint8_t BIAS_900_16_ZERO = 7;
@@ -101,7 +101,7 @@ static const uint8_t BIAS_500_64[] = {110, 105, 100,  93,  82,  69,  51, 27,  0,
 
 static const uint8_t BIAS_900_16[] = {137, 122, 105, 88, 69,  47,  25,  0, 21, 48, 79, 105, 127, 147, 160, 169, 178, 197};
 static const uint8_t BIAS_900_64[] = {147, 133, 117, 99, 75, 50, 29,  0, 24, 45, 63, 76, 87, 98, 116, 122, 132, 142};
-
+#endif
 
 // Information tables
 //----------------------------------------------------------------------
@@ -159,7 +159,6 @@ static const struct _channel_prf_calibration channel_prf_calibration[6][3] = {
     { { 0, 0 }, { 108,  794 }, { 104,  501 } }, // 5
     { { 0, 0 }, { 102,  534 }, { 102,  534 } }, // 7
 };
-
 
 // Internal tunning tables
 //----------------------------------------------------------------------
@@ -291,7 +290,7 @@ static const uint16_t plen_symbol_size[] = {
 /*===========================================================================*/
 
 /**
- * @private
+ * @internal
  * @brief Compute SPI header for DW1000 register access
  *
  * @note hdr *must* have a storage size of DW1000_SPI_HEADER_MAX_LENGTH
@@ -538,7 +537,7 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
     // UM §7.2.40.4: DRX_TUNE1b
     // NOTE: All cases don't seem to be covered but match official deca_device.c
     uint16_t drx_tune1b = 0x0020;
-    if         (radio->bitrate == DW1000_BITRATE_110KBPS)
+    if       (radio->bitrate == DW1000_BITRATE_110KBPS)
 	drx_tune1b = 0x0064;
     else if ((radio->bitrate == DW1000_BITRATE_6800KBPS) && 
 	     (radio->tx_plen == DW1000_PLEN_64))
@@ -927,7 +926,7 @@ int dw1000_initialise(dw1000_t *dw) {
     if (!dw->xtrim) {
         dw->xtrim = DW1000_XTRIM_MIDRANGE; 
     }
-    
+
     // Configure XTAL trim (5 bits)
     // UM §7.2.44.5: bits 7/6/5 must be kept at 0/1/1
     _dw1000_reg_write8(dw, DW1000_REG_FS_CTRL, DW1000_OFF_FS_XTALT,
@@ -1085,6 +1084,7 @@ void _dw1000_reg_set32(dw1000_t *dw,
     _dw1000_reg_write32(dw, reg, offset, val | value);
 }
 
+
 /**
  * @internal
  * @brief Clear bits for clearing register
@@ -1098,7 +1098,6 @@ void _dw1000_reg_clear32(dw1000_t *dw,
 }
 
 
-
 /**
  * @brief Initialize the DW1000 driver
  *
@@ -1108,8 +1107,6 @@ void _dw1000_reg_clear32(dw1000_t *dw,
 void dw1000_init(dw1000_t *dw, const dw1000_config_t *cfg) {
     dw->config = cfg;
 }
-
-
 
 
 /**
@@ -1254,7 +1251,6 @@ void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
 }
 
 
-
 /**
  * @brief Read temperature and battery voltage
  *
@@ -1347,8 +1343,6 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
 }
 
 
-
-
 /**
  * @brief Write data to the DW TX buffer
  *
@@ -1393,7 +1387,7 @@ void dw1000_tx_write_frame_data(dw1000_t *dw,
  */
 int dw1000_tx_start(dw1000_t *dw, uint8_t tx_mode) {
     uint8_t sys_ctrl  = DW1000_FLG_SYS_CTRL_TXSTRT;
-  
+
     // Set wait for response flag
     if (tx_mode & DW1000_TX_RESPONSE_EXPECTED) {
 	sys_ctrl |= DW1000_FLG_SYS_CTRL_WAIT4RESP;
@@ -1445,7 +1439,6 @@ int dw1000_tx_start(dw1000_t *dw, uint8_t tx_mode) {
 
     return 0;
 }
-
 
 
 /**
@@ -1528,7 +1521,6 @@ int dw1000_tx_sendv(dw1000_t *dw,
 }
 
 
-
 /**
  * @brief Reset the DW1000 receiver
  * 
@@ -1593,7 +1585,13 @@ void dw1000_rx_sync_dblbuf(dw1000_t *dw) {
     }
 }
 
-
+/**
+ * @brief Set interrupt mask.
+ *
+ * @param dw        driver context
+ * @param bitmask   interrupt bitmask
+ * @param enable    type of operation to perform
+ */
 void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
     uint32_t sys_mask = _dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, 0);
     
@@ -1640,7 +1638,6 @@ void dw1000_rx_off(dw1000_t *dw) {
     // Restore interrupt mask
     _dw1000_reg_write32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE, sys_mask); 
 }
-
 
 
 /**
@@ -1862,6 +1859,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 		     DW1000_MSK_SYS_STATUS_ALL_RX_ERR);
 }
 
+
 /**
  * @brief Set the reception timeout for the full frame
  *
@@ -1885,6 +1883,7 @@ void dw1000_rx_set_timeout(dw1000_t *dw, uint16_t timeout) {
     _dw1000_reg_write32(dw, DW1000_REG_SYS_CFG, DW1000_OFF_NONE,
 			dw->reg.sys_cfg);
 }
+
 
 /**
  * @brief Enable/Disable frame filtering
@@ -1951,8 +1950,6 @@ void dw1000_rx_get_info(dw1000_t *dw, dw1000_rxinfo_t *rxinfo) {
 }
 
 
-
-
 /**
  * @brief Set the delay to automatically active reception after a transmission.
  *
@@ -2017,7 +2014,6 @@ void dw1000_rx_get_time_tracking(dw1000_t *dw,
 	*offset = (x ^ m) - m;
     }
 }
-
 
 
 /**
