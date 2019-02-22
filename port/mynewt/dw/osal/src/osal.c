@@ -1,3 +1,7 @@
+/*
+ * Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
+ */
+
 #include "dw1000/osal.h"
 
 #include "hal/hal_spi.h"

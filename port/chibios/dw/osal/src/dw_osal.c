@@ -1,3 +1,7 @@
+/*
+ * Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
+ */
+
 #include "dw1000/osal.h"
 
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,

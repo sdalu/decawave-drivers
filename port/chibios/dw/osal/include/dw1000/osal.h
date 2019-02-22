@@ -1,3 +1,7 @@
+/*
+ * Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
+ */
+
 #ifndef __DW1000_OSAL_H__
 #define __DW1000_OSAL_H__
 

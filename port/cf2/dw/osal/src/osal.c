@@ -1,3 +1,7 @@
+/*
+ * Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
+ */
+
 #include <string.h>
 
 #include "dw1000/osal.h"
