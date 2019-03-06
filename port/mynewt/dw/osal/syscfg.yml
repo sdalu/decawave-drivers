@@ -1,0 +1,5 @@
+# Settings this app defines.
+syscfg.defs:
+    DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH:
+        description: 'Add support for DecaWave proprietary preample. Use TRUE to enable, or FALSE to disable'
+        value: 'TRUE'
