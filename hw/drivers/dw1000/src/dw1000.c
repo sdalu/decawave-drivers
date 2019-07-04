@@ -1109,6 +1109,7 @@ void _dw1000_reg_clear32(dw1000_t *dw,
  * @param cfg       driver configuration
  */
 void dw1000_init(dw1000_t *dw, const dw1000_config_t *cfg) {
+    memset(dw, 0, sizeof(*dw));
     dw->config = cfg;
 }
 
