@@ -21,12 +21,12 @@
 extern "C" {
 #endif
 
-#if !(defined(DW1000_ARCH_BIG_ENDIAN) || defined(DW1000_ARCH_LITTLE_ENDIAN))
-#error "Need to define one: DW1000_ARCH_BIG_ENDIAN or DW1000_ARCH_LITTLE_ENDIAN"
+#if !defined(__BYTE_ORDER__)
+#error __BYTE_ORDER is not defined
 #endif
-
-#if defined(DW1000_ARCH_BIG_ENDIAN) && defined(DW1000_ARCH_LITTLE_ENDIAN)
-#error "DW1000_ARCH_BIG_ENDIAN and DW1000_ARCH_LITTLE_ENDIAN are both set"
+#if ! ((__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) ||	\
+       (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__   ))
+#error __BYTE_ORDER__ of unknown value
 #endif
 
     
@@ -49,7 +49,7 @@ extern "C" {
 	       (((x) & 0x00000000000000FFUL) << 56UL))
 
     
-#if defined(DW1000_ARCH_BIG_ENDIAN)
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 #define dw1000_le16_to_cpu(x)           dw1000_bswap_16(x)
 #define dw1000_le32_to_cpu(x)           dw1000_bswap_32(x)
 #define dw1000_le64_to_cpu(x)           dw1000_bswap_64(x)
@@ -77,7 +77,7 @@ extern "C" {
 #endif
 
    
-#if defined(DW1000_ARCH_LITTLE_ENDIAN)
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define dw1000_le16_to_cpu(x)           (x)
 #define dw1000_le32_to_cpu(x)           (x)
 #define dw1000_le64_to_cpu(x)           (x)

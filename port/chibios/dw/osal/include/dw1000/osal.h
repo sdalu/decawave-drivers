@@ -10,19 +10,6 @@
 
 #include "sys/_iovec.h"
 
-/*----------------------------------------------------------------------*/
-/* Endianess                                                            */
-/*----------------------------------------------------------------------*/
-
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-#define DW1000_ARCH_LITTLE_ENDIAN
-#endif
-
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-#define DW1000_ARCH_BIG_ENDIAN
-#endif
-
-
 
 /*----------------------------------------------------------------------*/
 /* Config                                                               */
