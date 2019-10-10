@@ -1,0 +1,31 @@
+# Kconfig - Config options for DecaWave modules
+#
+# Copyright (c) 2019 
+# Stephane D'Alu, Inria Chroma / Inria Agora, INSA Lyon, CITI Lab.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+menu "DecaWave"
+
+menuconfig DW1000
+        bool "Support for DW1000"
+	default n
+
+if DW1000
+
+config DW1000_TASK_STACK_SIZE
+        int "Stack size for spank thread (in word)"
+	default 512
+
+config DW1000_TASK_PRIORITY
+        int "Task priority for spank processing"
+	default 5
+
+config DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH
+        bool "Enable use of proprietary preamble length"
+	default y
+
+endif
+
+endmenu
