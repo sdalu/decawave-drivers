@@ -14,14 +14,6 @@ menuconfig DW1000
 
 if DW1000
 
-config DW1000_TASK_STACK_SIZE
-        int "Stack size for spank thread (in word)"
-	default 512
-
-config DW1000_TASK_PRIORITY
-        int "Task priority for spank processing"
-	default 5
-
 config DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH
         bool "Enable use of proprietary preamble length"
 	default y
