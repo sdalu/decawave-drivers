@@ -41,7 +41,9 @@ _dw1000_delay_usec(uint16_t us) {
 
 static inline void
 _dw1000_delay_msec(uint16_t ms) {
-    k_sleep(ms);
+    while (ms != 0) {
+        ms = k_sleep(ms);
+    }
 }
 
 
