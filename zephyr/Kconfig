@@ -14,8 +14,38 @@ menuconfig DW1000
 
 if DW1000
 
-config DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH
-        bool "Enable use of proprietary preamble length"
+config DW1000_PROPRIETARY_PREAMBLE_LENGTH
+        bool "Add support for proprieray preamble length"
+	default y
+
+config DW1000_PROPRIETARY_SFD
+        bool "Add support for proprietary SFD"
+	default y
+
+config DW1000_PROPRIETARY_LONG_FRAME
+        bool "Add support for proprietary long frame"
+	default n
+
+config DW1000_SFD_TIMEOUT
+        bool "Add support for user defined SFD timeout"
+	default n
+
+config DW1000_SFD_TIMEOUT_DEFAULT
+        int "Use specified SFD timeout, or computed one if set to 0"
+	help
+	  Value can be between 1 and 65535, but useful values
+          are usually between 120 and 4161. Use computed value if set to 0.
+	default 0
+
+config DW1000_HOTFIX_AAT_IEEE802_15_4_2011
+        bool "Hotfix for AAT and IEEE802.15.4-2011 compliant frames"
+	help
+          Because of a previous frame not being received properly,
+          AAT bit can be set upon the proper reception of a frame not
+          requesting for acknowledgement (ACK frame is not actually
+          sent though). If the AAT bit is set, check ACK request bit
+          in frame control to confirm (this implementation works only
+          for IEEE802.15.4-2011 compliant frames).
 	default y
 
 endif
