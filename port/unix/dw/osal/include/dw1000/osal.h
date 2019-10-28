@@ -23,12 +23,14 @@
 /* Config                                                               */
 /*----------------------------------------------------------------------*/
 
-#if defined(CONFIG_DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH)
-#define DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH		1
+#if  defined(DW1000_SFD_TIMEOUT_DEFAULT) &&	\
+    !defined(DW1000_WITH_SFD_TIMEOUT_DEFAULT)
+#if DW1000_SFD_TIMEOUT_DEFAULT > 0
+#define DW1000_WITH_SFD_TIMEOUT_DEFAULT 1
 #else
-#define DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH		0
+#define DW1000_WITH_SFD_TIMEOUT_DEFAULT 0
 #endif
-
+#endif
 
 
 /*----------------------------------------------------------------------*/
