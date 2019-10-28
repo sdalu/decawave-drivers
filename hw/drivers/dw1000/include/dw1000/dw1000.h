@@ -93,42 +93,42 @@
  *        DecaRanging software when using DWM1000 module
  */
 #if !defined(DW1000_WITH_DWM1000_EVK_COMPATIBILITY) || defined(__DOXYGEN__)
-#define DW1000_WITH_DWM1000_EVK_COMPATIBILITY   FALSE
+#define DW1000_WITH_DWM1000_EVK_COMPATIBILITY   0
 #endif
 
 /**
  * @brief Add support for proprieray preamble length
  */
 #if !defined(DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH) || defined(__DOXYGEN__)
-#define DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH TRUE
+#define DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH 1
 #endif
 
 /**
  * @brief Add support for proprietary SFD
  */
 #if !defined(DW1000_WITH_PROPRIETARY_SFD) || defined(__DOXYGEN__)
-#define DW1000_WITH_PROPRIETARY_SFD TRUE
+#define DW1000_WITH_PROPRIETARY_SFD 1
 #endif
 
 /**
  * @brief Add support for proprietary long frame
  */
 #if !defined(DW1000_WITH_PROPRIETARY_LONG_FRAME) || defined(__DOXYGEN__)
-#define DW1000_WITH_PROPRIETARY_LONG_FRAME FALSE
+#define DW1000_WITH_PROPRIETARY_LONG_FRAME 0
 #endif
 
 /**
  * @brief Add support for user defined SFD timeout
  */
 #if !defined(DW1000_WITH_SFD_TIMEOUT) || defined(__DOXYGEN__)
-#define DW1000_WITH_SFD_TIMEOUT FALSE
+#define DW1000_WITH_SFD_TIMEOUT 0
 #endif
 
 /**
  * @brief Use default SFD timeout value instead of computed one
  */
 #if !defined(DW1000_WITH_SFD_TIMEOUT_DEFAULT) || defined(__DOXYGEN__)
-#define DW1000_WITH_SFD_TIMEOUT_DEFAULT FALSE
+#define DW1000_WITH_SFD_TIMEOUT_DEFAULT 0
 #endif
 
 /**
@@ -142,7 +142,7 @@
  *          for IEEE802.15.4-2011 compliant frames).
  */
 #if !defined(DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011) || defined(__DOXYGEN__)
-#define DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011 TRUE
+#define DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011 1
 #endif
 
 /**
