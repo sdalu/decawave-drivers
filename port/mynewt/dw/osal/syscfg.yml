@@ -3,3 +3,21 @@ syscfg.defs:
     DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH:
         description: 'Add support for DecaWave proprietary preample. Use TRUE to enable, or FALSE to disable'
         value: 'TRUE'
+    DW1000_WITH_PROPRIETARY_SFD:
+        description: 'Add support for DecaWave proprietary start of frame delivery. Use TRUE to enable, or FALSE to disable'
+        value: 'TRUE'
+    DW1000_WITH_PROPRIETARY_LONG_FRAME:
+        description: 'Add support for DecaWave proprietary long frame support. Use TRUE to enable, or FALSE to disable'
+        value: 'FALSE'
+    DW1000_WITH_SFD_TIMEOUT:
+        description: 'Add support for user defined SFD timeout. Use TRUE to enable, or FALSE to disable'
+        value: 'FALSE'
+    DW1000_WITH_SFD_TIMEOUT_DEFAULT:
+        description: 'Use default SFD timeout value instead of computed one. Use TRUE to enable, or FALSE to disable'
+        value: 'FALSE'
+    DW1000_SFD_TIMEOUT_DEFAULT:
+        description: 'Value for default SFD timeout. Can be between 1 and 65535, but useful values are usually between 120 and 4161'
+        value: 'DW1000_SFD_TIMEOUT_MAX'
+    DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011:
+        description: 'Hotfix for AAT and IEEE802.15.4-2011 compliant frames. Use TRUE to enable, or FALSE to disable'
+        value: 'TRUE'
