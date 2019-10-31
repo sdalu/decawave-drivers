@@ -1669,7 +1669,7 @@ int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
     // Trigger receiving by writting to SYS_CTRL
     // UM §7.2.15: System Control Register
     // We will just access the 2 lower bytes to 
-    //  enable radio, and delayed rceived if requested
+    //  enable radio, and delayed received if requested
     uint16_t sys_ctrl = DW1000_FLG_SYS_CTRL_RXENAB;
     if (rx_mode & DW1000_RX_DELAYED_START) {
         sys_ctrl |= DW1000_FLG_SYS_CTRL_RXDLYE ;
