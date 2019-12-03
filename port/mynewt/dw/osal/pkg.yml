@@ -1,3 +1,10 @@
+#
+# Copyright (c) 2018-2019
+# Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
 pkg.name: port/mynewt/dw/osal
 pkg.description: OS Abstration Layer for Decawave drivers.
 pkg.author: "Stephane D'Alu <stephane.dalu@insa-lyon.fr>"

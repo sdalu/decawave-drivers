@@ -1,5 +1,8 @@
 /*
+ * Copyright (c) 2018-2019
  * Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
+ *
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef __DW1000_OTP_H__

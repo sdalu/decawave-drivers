@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2018-2019
+ * Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #include "dw1000/osal.h"
 
 

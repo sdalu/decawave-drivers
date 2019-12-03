@@ -1,4 +1,12 @@
+#
+# Copyright (c) 2018-2019
+# Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
 # Settings this app defines.
+
 syscfg.defs:
     DW1000_TASK_STACK_SIZE:
         description: 'Size of the dw1000 task stack (in word)'
