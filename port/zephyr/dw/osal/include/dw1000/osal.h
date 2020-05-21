@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2019
+ * Copyright (c) 2018-2020
  * Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -9,6 +9,7 @@
 #define __DW1000_OSAL_H__
 
 #include <kernel.h>
+#include <version.h>
 #include <drivers/gpio.h>
 #include <drivers/spi.h>
 #include "sys/_iovec.h"
@@ -95,12 +96,20 @@ typedef struct dw1000_ioline *dw1000_ioline_t;
 
 static inline void
 _dw1000_ioline_set(dw1000_ioline_t line) {
+#if KERNEL_VERSION_NUMBER <= 0x020100
     gpio_pin_write(line->gpio_dev, line->gpio_pin, 1);
+#else
+    gpio_pin_set_raw(line->gpio_dev, line->gpio_pin, 1);
+#endif
 }
 
 static inline void
 _dw1000_ioline_clear(dw1000_ioline_t line) {
+#if KERNEL_VERSION_NUMBER <= 0x020100
     gpio_pin_write(line->gpio_dev, line->gpio_pin, 0);
+#else
+    gpio_pin_set_raw(line->gpio_dev, line->gpio_pin, 0);
+#endif
 }
 
 
