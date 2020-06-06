@@ -77,7 +77,11 @@ _dw1000_delay_usec(uint16_t us) {
 static inline void
 _dw1000_delay_msec(uint16_t ms) {
     while (ms != 0) {
+#if KERNEL_VERSION_NUMBER <= 0x020200
         ms = k_sleep(ms);
+#else
+	ms = k_msleep(ms);
+#endif
     }
 }
 
