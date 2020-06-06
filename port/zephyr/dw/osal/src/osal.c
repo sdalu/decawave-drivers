@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2019
+ * Copyright (c) 2018-2020
  * Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -17,8 +17,9 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
 	.count   = 2,
     };
 
-    int rc = spi_write(spi->dev, spi->config, &tx);
-    assert(rc >= 0);
+    int rc __attribute__((unused)) =
+	spi_write(spi->dev, spi->config, &tx);
+    __ASSERT(rc >= 0, "spi write failed (%d)", rc);
 }
 
 void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
@@ -35,8 +36,9 @@ void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
 	.count   = 2,
     };
 
-    int rc = spi_transceive(spi->dev, spi->config, &tx, &rx);
-    assert(rc >= 0);
+    int rc __attribute__((unused)) =
+	spi_transceive(spi->dev, spi->config, &tx, &rx);
+    __ASSERT(rc >= 0, "spi transceive failed (%d)", rc);
 }
 
 void _dw1000_spi_low_speed(dw1000_spi_driver_t *spi) {
