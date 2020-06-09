@@ -100,7 +100,7 @@ typedef struct dw1000_ioline *dw1000_ioline_t;
 
 static inline void
 _dw1000_ioline_set(dw1000_ioline_t line) {
-#if KERNEL_VERSION_NUMBER <= 0x020100
+#if KERNEL_VERSION_NUMBER < 0x020200
     gpio_pin_write(line->gpio_dev, line->gpio_pin, 1);
 #else
     gpio_pin_set_raw(line->gpio_dev, line->gpio_pin, 1);
@@ -109,7 +109,7 @@ _dw1000_ioline_set(dw1000_ioline_t line) {
 
 static inline void
 _dw1000_ioline_clear(dw1000_ioline_t line) {
-#if KERNEL_VERSION_NUMBER <= 0x020100
+#if KERNEL_VERSION_NUMBER < 0x020200
     gpio_pin_write(line->gpio_dev, line->gpio_pin, 0);
 #else
     gpio_pin_set_raw(line->gpio_dev, line->gpio_pin, 0);
