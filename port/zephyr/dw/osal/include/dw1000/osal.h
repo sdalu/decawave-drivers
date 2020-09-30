@@ -91,7 +91,11 @@ _dw1000_delay_msec(uint16_t ms) {
 /*----------------------------------------------------------------------*/
 
 struct dw1000_ioline {
+#if KERNEL_VERSION_NUMBER < 0x020400
     struct device *gpio_dev;
+#else
+    const struct device *gpio_dev;
+#endif
     uint32_t gpio_pin;
 };
 typedef struct dw1000_ioline *dw1000_ioline_t;
@@ -123,7 +127,11 @@ _dw1000_ioline_clear(dw1000_ioline_t line) {
 /*----------------------------------------------------------------------*/
 
 typedef struct dw1000_spi_driver {
+#if KERNEL_VERSION_NUMBER < 0x020400
     struct device     *dev;
+#else
+    const struct device *dev;
+#endif
     struct spi_config *config_low_speed;
     struct spi_config *config_high_speed;
     struct spi_config *config;
