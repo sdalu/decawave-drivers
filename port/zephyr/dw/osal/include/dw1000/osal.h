@@ -92,7 +92,7 @@ _dw1000_delay_msec(uint16_t ms) {
 
 struct dw1000_ioline {
     struct device *gpio_dev;
-    u32_t gpio_pin;
+    uint32_t gpio_pin;
 };
 typedef struct dw1000_ioline *dw1000_ioline_t;
 
