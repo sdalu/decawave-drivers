@@ -16,6 +16,25 @@
 
 
 
+/*
+ * TODO: Range bias
+ *
+ * For example see:
+ *   https://github.com/bitcraze/libdw1000/blob/master/src/libdw1000.c
+ */
+
+// APS011: Sources of error in DW1000 based TWR schemes
+
+// UM §8.3.1:
+// For enhanced ranging accuracy the ranging software can adjust the
+// antenna delay to compensate for changes in temperature. Typically
+// the reported range will vary by 2.15 mm / 0°C and by 5.35 cm / Vbatt.
+
+// UM §4.7.1 : Estimating the signal power in the first path
+// UM §4.7.2 : Estimating the receive signal power
+// UM §7.2.18: RX Frame Information Register
+
+
 /**
  * @file    dw1000.c
  * @brief   DW1000 low level driver source.
@@ -87,21 +106,6 @@
 /*===========================================================================*/
 /* Driver local variables and types.                                         */
 /*===========================================================================*/
-#if 0
-static const uint8_t BIAS_500_16_ZERO = 10;
-static const uint8_t BIAS_500_64_ZERO = 8;
-static const uint8_t BIAS_900_16_ZERO = 7;
-static const uint8_t BIAS_900_64_ZERO = 7;
-
-// APS011: Sources of error in DW1000 based TWR schemes
-// range bias tables (500 MHz in [mm] and 900 MHz in [2mm] - to fit into bytes)
-static const uint8_t BIAS_500_16[] = {198, 187, 179, 163, 143, 127, 109, 84, 59, 31,   0,  36,  65,  84,  97, 106, 110, 112};
-static const uint8_t BIAS_500_64[] = {110, 105, 100,  93,  82,  69,  51, 27,  0, 21,  35,  42,  49,  62,  71,  76,  81,  86};
-
-
-static const uint8_t BIAS_900_16[] = {137, 122, 105, 88, 69,  47,  25,  0, 21, 48, 79, 105, 127, 147, 160, 169, 178, 197};
-static const uint8_t BIAS_900_64[] = {147, 133, 117, 99, 75, 50, 29,  0, 24, 45, 63, 76, 87, 98, 116, 122, 132, 142};
-#endif
 
 // Information tables
 //----------------------------------------------------------------------
@@ -2176,162 +2180,5 @@ dw1000_get_calibration(uint8_t channel, uint8_t prf,
 }
 
 
-
-
-
-
-
-// UM §8.3.1:
-// For enhanced ranging accuracy the ranging software can adjust the
-// antenna delay to compensate for changes in temperature. Typically
-// the reported range will vary by 2.15 mm / 0°C and by 5.35 cm / Vbatt.
-
-
-
-
-#if 0
-void dwCorrectTimestamp(dwDevice_t* dev, dwTime_t* timestamp) {
-    // base line dBm, which is -61, 2 dBm steps, total 18 data points
-    // (down to -95 dBm)
-    float rxPowerBase = -(dwGetReceivePower(dev) + 61.0f) * 0.5f;
-    if (!isfinite(rxPowerBase)) {
-	return;
-    }
-    int rxPowerBaseLow = (int)rxPowerBase;
-    int rxPowerBaseHigh = rxPowerBaseLow + 1;
-    if(rxPowerBaseLow < 0) {
-	rxPowerBaseLow = 0;
-	rxPowerBaseHigh = 0;
-    } else if(rxPowerBaseHigh > 17) {
-	rxPowerBaseLow = 17;
-	rxPowerBaseHigh = 17;
-    }
-    // select range low/high values from corresponding table
-    int rangeBiasHigh = 0;
-    int rangeBiasLow = 0;
-    if(dev->channel == CHANNEL_4 || dev->channel == CHANNEL_7) {
-	// 900 MHz receiver bandwidth
-	if(dev->pulseFrequency == TX_PULSE_FREQ_16MHZ) {
-	    rangeBiasHigh = (rxPowerBaseHigh < BIAS_900_16_ZERO
-			     ? -BIAS_900_16[rxPowerBaseHigh]
-			     :  BIAS_900_16[rxPowerBaseHigh]);
-	    rangeBiasHigh <<= 1;
-	    rangeBiasLow = (rxPowerBaseLow < BIAS_900_16_ZERO
-			    ? -BIAS_900_16[rxPowerBaseLow]
-			    :  BIAS_900_16[rxPowerBaseLow]);
-	    rangeBiasLow <<= 1;
-	} else if(dev->pulseFrequency == TX_PULSE_FREQ_64MHZ) {
-	    rangeBiasHigh = (rxPowerBaseHigh < BIAS_900_64_ZERO
-			     ? -BIAS_900_64[rxPowerBaseHigh]
-			     :  BIAS_900_64[rxPowerBaseHigh]);
-	    rangeBiasHigh <<= 1;
-	    rangeBiasLow = (rxPowerBaseLow < BIAS_900_64_ZERO
-			    ? -BIAS_900_64[rxPowerBaseLow]
-			    :  BIAS_900_64[rxPowerBaseLow]);
-	    rangeBiasLow <<= 1;
-	} else {
-	    // TODO proper error handling
-	}
-    } else {
-	// 500 MHz receiver bandwidth
-	if(dev->pulseFrequency == TX_PULSE_FREQ_16MHZ) {
-	    rangeBiasHigh = (rxPowerBaseHigh < BIAS_500_16_ZERO
-			     ? -BIAS_500_16[rxPowerBaseHigh]
-			     :  BIAS_500_16[rxPowerBaseHigh]);
-	    rangeBiasLow = (rxPowerBaseLow < BIAS_500_16_ZERO
-			    ? -BIAS_500_16[rxPowerBaseLow]
-			    :  BIAS_500_16[rxPowerBaseLow]);
-	} else if(dev->pulseFrequency == TX_PULSE_FREQ_64MHZ) {
-	    rangeBiasHigh = (rxPowerBaseHigh < BIAS_500_64_ZERO
-			     ? -BIAS_500_64[rxPowerBaseHigh]
-			     :  BIAS_500_64[rxPowerBaseHigh]);
-	    rangeBiasLow = (rxPowerBaseLow < BIAS_500_64_ZERO
-			    ? -BIAS_500_64[rxPowerBaseLow]
-			    :  BIAS_500_64[rxPowerBaseLow]);
-	} else {
-	    // TODO proper error handling
-	}
-    }
-    // linear interpolation of bias values
-    float rangeBias = rangeBiasLow + (rxPowerBase - rxPowerBaseLow) * (rangeBiasHigh - rangeBiasLow);
-    // range bias [mm] to timestamp modification value conversion
-    dwTime_t adjustmentTime;
-    adjustmentTime.full = (int)(rangeBias * DISTANCE_OF_RADIO_INV * 0.001f);
-    // apply correction
-    timestamp->full += adjustmentTime.full;
-}
-
-
-double dwt_getrangebias(uint8 chan, float range, uint8 prf) {
-    //first get the lookup index that corresponds to given range for a
-    //particular channel at 16M PRF
-    int i = 0 ;
-    int chanIdx ;
-    int cmoffseti ; // integer number of CM offset
-
-    double mOffset ; // final offset result in metres
-
-    // NB: note we may get some small negitive values e.g. up to -50 cm.
-
-
-     // convert range to integer number of 25cm values.
-    int rangeint25cm = (int) (range * 4.00) ;  
-
-  // make sure it matches largest value in table (all tables end in 255 !!!!)
-    if (rangeint25cm > 255)
-	rangeint25cm = 255 ;  
-
-    if (prf == DWT_PRF_16M) {
-        switch(chan) {
-	case 4:
-	case 7:
-	    {
-                chanIdx = chan_idxwb[chan];
-                while (rangeint25cm > range25cm16PRFwb[chanIdx][i]) i++ ;       // find index in table corresponding to range
-                cmoffseti = i + CM_OFFSET_16M_WB ;                              // nearest centimeter correction
-            }
-            break;
-	default:
-            {
-                chanIdx = chan_idxnb[chan];
-                while (rangeint25cm > range25cm16PRFnb[chanIdx][i]) i++ ;       // find index in table corresponding to range
-                cmoffseti = i + CM_OFFSET_16M_NB ;                              // nearest centimeter correction
-            }
-        }//end of switch
-    } else { // 64M PRF
-        switch(chan) {
-	case 4:
-	case 7:
-            {
-                chanIdx = chan_idxwb[chan];
-                while (rangeint25cm > range25cm64PRFwb[chanIdx][i]) i++ ;       // find index in table corresponding to range
-                cmoffseti = i + CM_OFFSET_64M_WB ;                              // nearest centimeter correction
-            }
-            break;
-	default:
-            {
-                chanIdx = chan_idxnb[chan];
-                while (rangeint25cm > range25cm64PRFnb[chanIdx][i]) i++ ;       // find index in table corresponding to range
-                cmoffseti = i + CM_OFFSET_64M_NB ;                              // nearest centimeter correction
-            }
-        }//end of switch
-    } // end else
-
-
-    mOffset = (float) cmoffseti ; // offset result in centimmetres
-    mOffset *= 0.01 ;             // convert to metres
-
-    return (mOffset) ;
-}
-
-
-// UM §4.7.1 : Estimating the signal power in the first path
-// UM §4.7.2 : Estimating the receive signal power
-// UM §7.2.18: RX Frame Information Register
-
-
-
-
-#endif
 
 /** @} */
