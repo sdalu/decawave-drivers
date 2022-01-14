@@ -164,6 +164,14 @@
  */
 #define DW1000_CRC_LENGTH 2
 
+/**
+ * @brief Frame maximum size
+ */
+#if DW1000_WITH_PROPRIETARY_LONG_FRAME
+#define DW1000_FRAME_MAXSIZE 1023
+#else
+#define DW1000_FRAME_MAXSIZE 127
+#endif
 
 
 
