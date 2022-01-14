@@ -24,64 +24,6 @@
 
 
 
-/**
- * @brief Frequency of the clock used for timestamping (Hz)
- */
-#define DW1000_TIME_CLOCK_HZ (499200000ull * 128)
-
-/**
- * @brief Number of bits for the clock used for timestamping
- */
-#define DW1000_TIME_CLOCK_BITS 40
-
-/**
- * @brief Frequency of the clock used for timestamping (MHz)
- */
-#define DW1000_TIME_CLOCK_MHZ 63897.6
-
-/**
- * @brief Minimum clock time to be used in delayed transmit/receive
- * @see DW1000_CLOCK_ROUNDUP
- */
-#define DW1000_CLOCK_MIN 512
-
-/**
- * @brief Round up the clock value to be used in delayed transmit/receive
- * @see DW1000_CLOCK_MIN
- */
-#define DW1000_CLOCK_ROUNDUP(x) (((x) + 511) & (~0x1FF))
-
-/**
- * @brief Convert µsec to DW1000 clock unit (rounded)
- */
-#define DW1000_USEC_TO_CLOCK(x)					\
-    ((((x) * DW1000_TIME_CLOCK_HZ) + (1000000-1)) / 1000000)
-
-/**
- * @brief Convert DW1000 clock unit to µsec
- */
-#define DW1000_CLOCK_TO_USEC(x)					\
-    (x / DW1000_TIME_CLOCK_MHZ)
-
-/**
- * @brief Convert msec to DW1000 clock unit (rounded)
- */
-#define DW1000_MSEC_TO_CLOCK(x)					\
-    ((((x) * DW1000_TIME_CLOCK_HZ) + (1000-1)) / 1000)
-
-/**
- * @brief Convert DW1000 clock unit to msec
- */
-#define DW1000_CLOCK_TO_MSEC(x)					\
-    (DW1000_CLOCK_TO_USEC(x)/1000)
-
-/**
- * @brief Length of CRC field
- */
-#define DW1000_CRC_LENGTH 2
-
-
-
 /*===========================================================================*/
 /* Compile time options                                                      */
 /*===========================================================================*/
@@ -159,6 +101,70 @@
 #endif
 
 /** @} */
+
+
+
+/*===========================================================================*/
+/* Constants                                                                 */
+/*===========================================================================*/
+
+/**
+ * @brief Frequency of the clock used for timestamping (Hz)
+ */
+#define DW1000_TIME_CLOCK_HZ (499200000ull * 128)
+
+/**
+ * @brief Number of bits for the clock used for timestamping
+ */
+#define DW1000_TIME_CLOCK_BITS 40
+
+/**
+ * @brief Frequency of the clock used for timestamping (MHz)
+ */
+#define DW1000_TIME_CLOCK_MHZ 63897.6
+
+/**
+ * @brief Minimum clock time to be used in delayed transmit/receive
+ * @see DW1000_CLOCK_ROUNDUP
+ */
+#define DW1000_CLOCK_MIN 512
+
+/**
+ * @brief Round up the clock value to be used in delayed transmit/receive
+ * @see DW1000_CLOCK_MIN
+ */
+#define DW1000_CLOCK_ROUNDUP(x) (((x) + 511) & (~0x1FF))
+
+/**
+ * @brief Convert µsec to DW1000 clock unit (rounded)
+ */
+#define DW1000_USEC_TO_CLOCK(x)					\
+    ((((x) * DW1000_TIME_CLOCK_HZ) + (1000000-1)) / 1000000)
+
+/**
+ * @brief Convert DW1000 clock unit to µsec
+ */
+#define DW1000_CLOCK_TO_USEC(x)					\
+    (x / DW1000_TIME_CLOCK_MHZ)
+
+/**
+ * @brief Convert msec to DW1000 clock unit (rounded)
+ */
+#define DW1000_MSEC_TO_CLOCK(x)					\
+    ((((x) * DW1000_TIME_CLOCK_HZ) + (1000-1)) / 1000)
+
+/**
+ * @brief Convert DW1000 clock unit to msec
+ */
+#define DW1000_CLOCK_TO_MSEC(x)					\
+    (DW1000_CLOCK_TO_USEC(x)/1000)
+
+/**
+ * @brief Length of CRC field
+ */
+#define DW1000_CRC_LENGTH 2
+
+
 
 
 /*===========================================================================*/
