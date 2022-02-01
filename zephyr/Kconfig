@@ -15,7 +15,7 @@ menuconfig DW1000
 if DW1000
 
 config DW1000_PROPRIETARY_PREAMBLE_LENGTH
-        bool "Add support for proprieray preamble length"
+        bool "Add support for proprietary preamble length"
 	default y
 
 config DW1000_PROPRIETARY_SFD
