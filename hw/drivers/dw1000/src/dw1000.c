@@ -1307,13 +1307,15 @@ void dw1000_read_temp_vbat(dw1000_t *dw, uint16_t *temp, uint16_t *vbat) {
  * @brief Set time for delayed send or received time
  *
  * @note  The device time unit is 1 / (499.2 * 128) second
- * @note  The device assignable time unit is 512
+ * @note  The device assignable time unit is 512 (about 8ns),
+ *        which means that the 9 lower bytes of the given time are ignored.
  *
  * @param dw        driver context
  * @param time      time for delayed send or received time
  */
 inline
 void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time) {
+    // UM §3.3: the low 9 bits of the given delay are ignored
     time = dw1000_cpu_to_le64(time);
     _dw1000_reg_write(dw, DW1000_REG_DX_TIME, DW1000_OFF_NONE, &time, 5);
 }
