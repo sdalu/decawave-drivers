@@ -2062,8 +2062,7 @@ uint16_t dw1000_rx_get_pacc_count(dw1000_t *dw) {
  *
  * @return "actual" power
  */
-static
-double _dw1000_rx_power_correction(dw1000_t *dw, double p) {
+double dw1000_rx_power_correction(dw1000_t *dw, double p) {
     // UM §4.7: [Figure 22]: Estimated RX level versus actual RX level
     switch (dw->radio->prf) {
     case DW1000_PRF_16MHZ:
@@ -2100,7 +2099,7 @@ double _dw1000_rx_power_correction(dw1000_t *dw, double p) {
 
 
 /**
- * @brief Compute the received signal and/or firstpath power in dBm
+ * @brief Compute the estimated received signal and/or firstpath power in dBm
  *
  * @param[in]  dw         driver context
  * @param[out] signal     received signal power in dBm
@@ -2129,18 +2128,14 @@ void dw1000_rx_get_power_estimate(dw1000_t *dw,
 			DW1000_REG_RX_FQUAL, DW1000_OFF_RX_FQUAL_FP_AMPL2);
 	double F3 = (double) _dw1000_reg_read16(dw,
 			DW1000_REG_RX_FQUAL, DW1000_OFF_RX_FQUAL_FP_AMPL3);
-	double p  = 10.0 * log10((F1*F1 + F2*F2 + F3*F3) / (N*N)) - A;
-
-	*firstpath = _dw1000_rx_power_correction(dw, p);
+	*firstpath= 10.0 * log10((F1*F1 + F2*F2 + F3*F3) / (N*N)) - A;
     }
 
     // Signal power
     if (signal) {
 	double C  = (double) _dw1000_reg_read16(dw,DW1000_REG_RX_FQUAL,
 						   DW1000_OFF_RX_FQUAL_CIR_PWR);
-	double p  = 10.0 * log10((C * 131072.0) / (N * N)) - A;
-
-	*signal = _dw1000_rx_power_correction(dw, p);
+	*signal   = 10.0 * log10((C * 131072.0) / (N * N)) - A;
     }
 }
 

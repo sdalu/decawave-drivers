@@ -575,8 +575,10 @@ void dw1000_rx_get_time_tracking(dw1000_t *dw,
 				 int32_t *offset, uint32_t *interval);
 
 
+double dw1000_rx_power_correction(dw1000_t *dw, double p);
+
 void dw1000_rx_get_power_estimate(dw1000_t *dw,
-				  double *signal, double *firstpath);
+				   double *signal, double *firstpath);
 
 
 
