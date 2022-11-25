@@ -175,6 +175,28 @@
 
 
 
+#define DW1000_TX_POWER_FLG_MANUAL  0x80 /**< @private */
+#define DW1000_TX_POWER_MSK_MANUAL  0x3f /**< @private */
+
+/**
+ * @brief Transmit power
+ */
+#define DW1000_TX_POWER_AUTO	0
+
+/**
+ * @brief Define the transmit power up to 30.5dB in 0.5db unit.
+ */
+#define DW1000_TX_POWER_05DB(v)					\
+    ((v) & DW1000_TX_POWER_FLG_MANUAL)
+/**
+ * @brief Define the transmit power up to 30.5dB in 0.5db step.
+ */
+#define DW1000_TX_POWER(v)					\
+    DW1000_TX_POWER_05DB((uint8_t)(2 * (v)))
+
+
+
+
 /*===========================================================================*/
 /* Driver variables and types                                                */
 /*===========================================================================*/
@@ -233,6 +255,12 @@ typedef struct dw1000_radio {
      *        or @p DW1000_BITRATE_6800KBPS
      */
     uint8_t    bitrate;
+    /**
+     * @brief Transmit power (max 30.5dB in 0.5db step).
+     *        If not set, will default to maximal allowed regulation value
+     *        according to channel and prf setting.
+     */
+    uint8_t    tx_power;
     
 #if DW1000_WITH_SFD_TIMEOUT
     /**

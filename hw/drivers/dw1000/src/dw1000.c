@@ -502,13 +502,23 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
      *      this is the case as this library is in Smart Power Disable
      *      by default, and doesn't support changing it for now
      */
-    const struct _tx_power *tp =
-	&manual_tx_power[channel_table_mapping[radio->channel]];
-    uint32_t tx_power = ((radio->prf == DW1000_PRF_64MHZ)
+    uint32_t tx_power;
+    if (radio->tx_power & DW1000_TX_POWER_FLG_MANUAL) {
+	uint8_t power_05db = radio->tx_power & DW1000_TX_POWER_MSK_MANUAL;
+	if (power_05db > 61) power_05db = 61;
+	uint8_t coarse = power_05db / 10;
+	uint8_t fine   = power_05db - coarse * 5;
+	uint8_t power  = ((6 - coarse) << 5) | (fine);
+	tx_power = (power << 16) | (power << 8);
+    } else {
+	const struct _tx_power *tp =
+	    &manual_tx_power[channel_table_mapping[radio->channel]];
+	tx_power = ((radio->prf == DW1000_PRF_64MHZ)
 			 ? tp->prf_64mhz   // NOTE: PRF 4MHz is unsupported
 			 : tp->prf_16mhz   //       by the DW1000
 			) << 8;
-
+    }
+    
 #if DW1000_WITH_DWM1000_EVK_COMPATIBILITY
     // Increasing TX power by 3dbm
     // Excerpt from ?????:
