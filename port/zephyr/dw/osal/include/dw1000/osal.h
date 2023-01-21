@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020
+ * Copyright (c) 2018-2020,2023
  * Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -8,10 +8,18 @@
 #ifndef __DW1000_OSAL_H__
 #define __DW1000_OSAL_H__
 
-#include <kernel.h>
 #include <version.h>
+
+#if (KERNEL_VERSION_NUMBER < 0x030100) || defined(CONFIG_LEGACY_INCLUDE_PATH)
+#include <kernel.h>
 #include <drivers/gpio.h>
 #include <drivers/spi.h>
+#else
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/spi.h>
+#endif
+
 #include "sys/_iovec.h"
 
 
