@@ -440,6 +440,8 @@ struct dw1000 {
 	uint32_t sys_cfg;
 	uint32_t tx_fctrl;
     } reg;
+
+    uint32_t tx_power;
 };
 
 

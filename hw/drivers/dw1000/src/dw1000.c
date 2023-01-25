@@ -502,20 +502,19 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
      *      this is the case as this library is in Smart Power Disable
      *      by default, and doesn't support changing it for now
      */
-    uint32_t tx_power;
     if (radio->tx_power & DW1000_TX_POWER_FLG_MANUAL) {
 	uint8_t power_05db = radio->tx_power & DW1000_TX_POWER_MSK_MANUAL;
 	if (power_05db > 61) power_05db = 61;
 	uint8_t coarse = power_05db / 10;
 	uint8_t fine   = power_05db - coarse * 5;
 	uint8_t power  = ((6 - coarse) << 5) | (fine);
-	tx_power = (power << 16) | (power << 8);
+	dw->tx_power = (power << 16) | (power << 8);
     } else {
 	const struct _tx_power *tp =
 	    &manual_tx_power[channel_table_mapping[radio->channel]];
-	tx_power = ((radio->prf == DW1000_PRF_64MHZ)
-			 ? tp->prf_64mhz   // NOTE: PRF 4MHz is unsupported
-			 : tp->prf_16mhz   //       by the DW1000
+	dw->tx_power = ((radio->prf == DW1000_PRF_64MHZ)
+			  ? tp->prf_64mhz   // NOTE: PRF 4MHz is unsupported
+			  : tp->prf_16mhz   //       by the DW1000
 			) << 8;
     }
     
@@ -528,15 +527,15 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
     //   because DecaRanging software is targeted at Decawave ’s EVB1000
     //   evaluation board which has a different RF path compared to the
     //   DWM1000. You should increase the transmit power by approximately 3 dB.
-    uint8_t txpowsd  = (tx_power >> 16) & 0xFF;
-    uint8_t txpowphr = (tx_power >>  8) & 0xFF;
+    uint8_t txpowsd  = (dw->tx_power >> 16) & 0xFF;
+    uint8_t txpowphr = (dw->tx_power >>  8) & 0xFF;
     if      ((txpowsd  >> 5  ) >  0) { txpowsd -= 1 << 5;  }  // Coarse
     else if ((txpowsd  & 0x1F) < 25) { txpowsd += 6;       }  // Fine
     else                             { txpowsd  = 0x1F;    }  // (max power)
     if      ((txpowphr >> 5  ) >  0) { txpowphr -= 1 << 5; }  // Coarse
     else if ((txpowphr & 0x1F) < 25) { txpowphr += 6;      }  // Fine
     else                             { txpowphr  = 0x1F;   }  // (max power)
-    tx_power = (txpowsd << 16) | (txpowphr << 8);
+    dw->tx_power = (txpowsd << 16) | (txpowphr << 8);
 #endif
     
     /* Configure DRX Tune
@@ -685,7 +684,7 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
 
     // Apply TX_POWER
     _dw1000_reg_write32(dw, DW1000_REG_TX_POWER, DW1000_OFF_NONE,
-		       tx_power);
+		       dw->tx_power);
 
     // Apply AGC_CTRL
     _dw1000_reg_write16(dw, DW1000_REG_AGC_CTRL, DW1000_OFF_AGC_TUNE1,
