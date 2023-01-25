@@ -1396,7 +1396,7 @@ void dw1000_tx_write_frame_data(dw1000_t *dw,
  *         @p dw1000_tx_data and @p dw1000_tx_fctrl
  *
  * @note   If using @p DW1000_TX_DELAYED_START, the transmission time
- *         should have been previously set using @p dw1000_trx_time
+ *         should have been previously set using @p dw1000_txrx_set_time
  *
  * @param dw         driver context
  * @param tx_mode    a set of the following flags are supported:
