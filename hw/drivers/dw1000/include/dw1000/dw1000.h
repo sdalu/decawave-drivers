@@ -187,7 +187,7 @@
  * @brief Define the transmit power up to 30.5dB in 0.5db unit.
  */
 #define DW1000_TX_POWER_05DB(v)					\
-    ((v) & DW1000_TX_POWER_FLG_MANUAL)
+    ((v) | DW1000_TX_POWER_FLG_MANUAL)
 /**
  * @brief Define the transmit power up to 30.5dB in 0.5db step.
  */
