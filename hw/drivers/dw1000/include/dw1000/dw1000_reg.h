@@ -15,16 +15,19 @@
  * registers
  */
 #define DW1000_REG_DEV_ID         0x00
-#define DW1000_REG_DEV_ID_LEN        4
+#define DW1000_LEN_DEV_ID            4
 
 
 #define DW1000_REG_EUI            0x01
+#define DW1000_LEN_EUI               8
 
 
 #define DW1000_REG_PANADR         0x03
+#define DW1000_LEN_PANADR	     4
 
 
 #define DW1000_REG_SYS_CFG        0x04
+#define DW1000_LEN_SYS_CFG           4
 #define DW1000_FLG_SYS_CFG_FFEN       (1 <<  0)
 #define DW1000_FLG_SYS_CFG_FFBC       (1 <<  1)
 #define DW1000_FLG_SYS_CFG_FFAB       (1 <<  2)
@@ -91,6 +94,7 @@
 #define DW1000_LEN_SYS_TIME       5
 
 #define DW1000_REG_TX_FCTRL       0x08
+#define DW1000_LEN_TX_FCTRL       5
 #define DW1000_SFT_TX_FCTRL_TFLEN  0
 #define DW1000_SFT_TX_FCTRL_TXBR  13
 #define DW1000_SFT_TX_FCTRL_TR    15
@@ -102,12 +106,16 @@
 #define DW1000_FLG_TX_FCTRL_TR    (1 << 15)
 
 #define DW1000_REG_TX_BUFFER      0x09
+#define DW1000_LEN_TX_BUFFER      1024
 
 #define DW1000_REG_DX_TIME        0x0A
+#define DW1000_LEN_DX_TIME        5
 
 #define DW1000_REG_RX_FWTO        0x0C
+#define DW1000_LEN_RX_FWTO        2
 
 #define DW1000_REG_SYS_CTRL       0x0D
+#define DW1000_LEN_SYS_CTRL       4
 #define DW1000_OFF_SYS_CTRL       0x00
 #define DW1000_SFT_SYS_CTRL_HRBPT     24
 #define DW1000_FLG_SYS_CTRL_SFCST     (1 <<  0)
@@ -121,6 +129,7 @@
 #define DW1000_FLG_SYS_CTRL_HRBPT     (1 << 24)
 
 #define DW1000_REG_SYS_MASK       0x0E
+#define DW1000_LEN_SYS_MASK       4
 #define DW1000_FLG_SYS_MASK_MCPLOCK   (1 <<  1)
 #define DW1000_FLG_SYS_MASK_MESYNCR   (1 <<  2)
 #define DW1000_FLG_SYS_MASK_MAAT      (1 <<  3)
@@ -192,6 +201,7 @@
 
 
 #define DW1000_REG_SYS_STATUS     0x0F
+#define DW1000_LEN_SYS_STATUS     5
 #define DW1000_SFT_SYS_STATUS_HPDWARN 27
 #define DW1000_SFT_SYS_STATUS_HSRBP   30
 #define DW1000_SFT_SYS_STATUS_ICRBP   31
@@ -266,6 +276,7 @@
      DW1000_FLG_SYS_STATUS_TXFRS)
 
 #define DW1000_REG_RX_FINFO       0x10
+#define DW1000_LEN_RX_FINFO       4
 #define DW1000_SFT_RX_FINFO_RXFLEN  		 0
 #define DW1000_SFT_RX_FINFO_RXNSPL 		11
 #define DW1000_SFT_RX_FINFO_RXBR   		13
@@ -281,8 +292,10 @@
 
 
 #define DW1000_REG_RX_BUFFER      0x11
+#define DW1000_LEN_RX_BUFFER      1024
 
 #define DW1000_REG_RX_FQUAL       0x12
+#define DW1000_LEN_RX_FQUAL       8
 #define DW1000_OFF_RX_FQUAL_STD_NOISE 0x00
 #define DW1000_OFF_RX_FQUAL_FP_AMPL2  0x02
 #define DW1000_OFF_RX_FQUAL_FP_AMPL3  0x04
@@ -299,20 +312,25 @@
 
 
 #define DW1000_REG_RX_TIME        0x15
+#define DW1000_LEN_RX_TIME        14
 #define DW1000_OFF_RX_TIME_RX_STAMP 0
 #define DW1000_OFF_RX_TIME_FP_INDEX 5
 #define DW1000_OFF_RX_TIME_FP_AMPL1 7
 #define DW1000_OFF_RX_TIME_RX_RAWST 9
 
 #define DW1000_REG_TX_TIME        0x17
+#define DW1000_LEN_TX_TIME        10
 #define DW1000_OFF_TX_TIME_TX_STAMP     0
 #define DW1000_OFF_TX_TIME_TX_RAWST     5
 
 #define DW1000_REG_TX_ANTD        0x18
+#define DW1000_LEN_TX_ANTD        2
 
 #define DW1000_REG_SYS_STATE      0x19
+#define DW1000_LEN_SYS_STATE      5
 
 #define DW1000_REG_ACK_RESP_T     0x1A
+#define DW1000_LEN_ACK_RESP_T     4
 
 #define DW1000_SFT_ACK_RESP_T_W4R_TIM 0
 #define DW1000_MSK_ACK_RESP_T_W4R_TIM (0xFF << 0)
@@ -321,10 +339,13 @@
 
 
 #define DW1000_REG_RX_SNIFF       0x1D
+#define DW1000_LEN_RX_SNIFF       4
 
 #define DW1000_REG_TX_POWER       0x1E
+#define DW1000_LEN_TX_POWER       4
 
 #define DW1000_REG_CHAN_CTRL      0x1F
+#define DW1000_LEN_CHAN_CTRL      4
 #define DW1000_SFT_CHAN_CTRL_TX_CHAN   0
 #define DW1000_SFT_CHAN_CTRL_RX_CHAN   4
 #define DW1000_SFT_CHAN_CTRL_DWSFD    17
@@ -343,9 +364,11 @@
 #define DW1000_MSK_CHAN_CTRL_RX_PCODE (0x1F << 27)
 
 #define DW1000_REG_USR_SFD        0x21
+#define DW1000_LEN_USR_SFD        41
 #define DW1000_OFF_USR_SFD_LENGTH 0
 
 #define DW1000_REG_AGC_CTRL       0x23
+#define DW1000_LEN_AGC_CTRL       33
 #define DW1000_OFF_AGC_CTRL1      0x02
 #define DW1000_OFF_AGC_TUNE1      0x04
 #define DW1000_OFF_AGC_TUNE2      0x0C
@@ -353,14 +376,17 @@
 #define DW1000_OFF_AGC_STAT1      0x1E
 
 #define DW1000_REG_EXT_SYNC       0x24
+#define DW1000_LEN_EXT_SYNC       12
 #define DW1000_OFF_EC_CTRL        0x00
 #define DW1000_FLG_EC_CTRL_PLLLDT 0x00000004
 #define DW1000_OFF_EC_RXTC        0x04
 #define DW1000_OFF_EC_GOLP        0x08
 
 #define DW1000_REG_ACC_MEM        0x25
+#define DW1000_LEN_ACC_MEM        4064
 
 #define DW1000_REG_GPIO_CTRL      0x26
+#define DW1000_LEN_GPIO_CTRL      44
 #define DW1000_OFF_GPIO_MODE      0x00
 #define DW1000_OFF_GPIO_DIR       0x08
 #define DW1000_OFF_GPIO_DOUT      0x0C
@@ -446,6 +472,7 @@
 #define DW1000_FLG_GPIO_GOM8 (1 << 20)
 
 #define DW1000_REG_DRX_CONF       0x27
+#define DW1000_LEN_DRX_CONF       44
 #define DW1000_OFF_DRX_TUNE0B     0x02
 #define DW1000_OFF_DRX_TUNE1A     0x04
 #define DW1000_OFF_DRX_TUNE1B     0x06
@@ -456,6 +483,7 @@
 #define DW1000_OFF_DRX_RXPACC_NOSAT 0x2C
 
 #define DW1000_REG_RF_CONF        0x28
+#define DW1000_LEN_RF_CONF        58
 #define DW1000_OFF_RF_CONF        0x00
 #define DW1000_OFF_RF_RXCTRLH     0x0B
 #define DW1000_OFF_RF_TXCTRL      0x0C
@@ -463,6 +491,7 @@
 #define DW1000_OFF_RF_LDOTUNE     0x30
 
 #define DW1000_REG_TX_CAL         0x2A
+#define DW1000_LEN_TX_CAL         52
 #define DW1000_OFF_TC_SARC	  0x00
 #define DW1000_FLG_TC_SARC_SAR_CTRL (1 << 0)
 #define DW1000_OFF_TC_SARL        0x03
@@ -471,11 +500,13 @@
 #define DW1000_OFF_TC_PGTEST      0x0C
 
 #define DW1000_REG_FS_CTRL        0x2B
+#define DW1000_LEN_FS_CTRL        21
 #define DW1000_OFF_FS_PLLCFG      0x07
 #define DW1000_OFF_FS_PLLTUNE     0x0B
 #define DW1000_OFF_FS_XTALT       0x0E
 
 #define DW1000_REG_AON            0x2C
+#define DW1000_LEN_AON            12
 #define DW1000_OFF_AON_WCFG       0x00
 #define DW1000_FLG_AON_WCFG_ONW_LLDE  0x0800
 #define DW1000_FLG_AON_WCFG_ONW_LLDO  0x1000
@@ -491,6 +522,7 @@
 #define DW1000_OFF_AON_CFG1       0x0A
 
 #define DW1000_REG_OTP_IF         0x2D
+#define DW1000_LEN_OTP_IF         18
 #define DW1000_OFF_OTP_WDAT       0x00
 #define DW1000_OFF_OTP_ADDR       0x04
 #define DW1000_OFF_OTP_CTRL       0x06
@@ -510,9 +542,12 @@
 #define DW1000_OFF_LDE_RXANTD     0x1804
 #define DW1000_OFF_LDE_CFG2       0x1806
 #define DW1000_OFF_LDE_REPC       0x2804
+
 #define DW1000_REG_DIG_DIAG       0x2F
+#define DW1000_LEN_DIG_DIAG       41
 
 #define DW1000_REG_PMSC           0x36
+#define DW1000_LEN_PMSC           48
 #define DW1000_OFF_PMSC_CTRL0     0x00 
 #define DW1000_OFF_PMSC_CTRL0_SOFTRESET     	0x03
 
