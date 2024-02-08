@@ -576,14 +576,14 @@ void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time);
 void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay);
 
 void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
-		     uint8_t tx_mode);
+		     int tx_mode);
 
 void dw1000_tx_write_frame_data(dw1000_t *dw, uint8_t *data, size_t length, size_t offset);
 
 int dw1000_tx_send(dw1000_t *dw,
-		     uint8_t *data, size_t length, uint8_t tx_mode);
+		   uint8_t *data, size_t length, int tx_mode);
 int dw1000_tx_sendv(dw1000_t *dw,
-		    struct iovec *iovec, int iovcnt, uint8_t tx_mode);
+		    struct iovec *iovec, int iovcnt, int tx_mode);
 
 
 

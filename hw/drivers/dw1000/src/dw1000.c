@@ -1345,7 +1345,7 @@ void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time) {
  * @param tx_mode   use DW1000_TX_RANGING flag, to indicate a ranging frame
  */
 void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
-		     uint8_t tx_mode) {
+		     int tx_mode) {
     DW1000_ASSERT(
 #if DW1000_WITH_PROPRIETARY_LONG_FRAME
 		  (dw->radio->proprietary.long_frames && (length <= 1023)) ||
@@ -1406,7 +1406,7 @@ void dw1000_tx_write_frame_data(dw1000_t *dw,
  * @retval -1        It was not possible to start transmission.
  *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
  */
-int dw1000_tx_start(dw1000_t *dw, uint8_t tx_mode) {
+int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
     uint8_t sys_ctrl  = DW1000_FLG_SYS_CTRL_TXSTRT;
 
     // Set wait for response flag
@@ -1486,7 +1486,7 @@ int dw1000_tx_start(dw1000_t *dw, uint8_t tx_mode) {
  *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
  */
 int dw1000_tx_send(dw1000_t *dw,
-		   uint8_t *data, size_t length, uint8_t tx_mode) {
+		   uint8_t *data, size_t length, int tx_mode) {
 
     // Write data to DW TX buffer
     dw1000_tx_write_frame_data(dw, data, length, 0);
@@ -1524,7 +1524,7 @@ int dw1000_tx_send(dw1000_t *dw,
  *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
  */
 int dw1000_tx_sendv(dw1000_t *dw,
-		    struct iovec *iovec, int iovcnt, uint8_t tx_mode) {
+		    struct iovec *iovec, int iovcnt, int tx_mode) {
     size_t length = 0;
 
     // Write data to DW TX buffer and compute offset/length
