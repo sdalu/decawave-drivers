@@ -1629,7 +1629,7 @@ void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
  *
  * @param dw        driver context
  */
-void dw1000_rx_off(dw1000_t *dw) {   
+void dw1000_txrx_off(dw1000_t *dw) {   
     // Save interrupt mask
     uint32_t sys_mask =
 	_dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE);
@@ -1699,7 +1699,7 @@ int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
 	// unless DW1000_RX_IDLE_ON_DELAY_ERROR is set in rx_mode
         if ((sys_status & (DW1000_FLG_SYS_STATUS_HPDWARN >> 24)) != 0)  {
 	    // Return to an off (idle) state
-            dw1000_rx_off(dw); 
+            dw1000_txrx_off(dw); 
 	    // Keep it off on error if requested
             if (rx_mode & DW1000_RX_IDLE_ON_DELAY_ERROR)
 		return -1;
@@ -1819,7 +1819,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//        "Wait for Response" (wait4resp)
         if((status & DW1000_FLG_SYS_STATUS_AAT) && dw->wait4resp) {
 	    // Turn off receiver, returning to IDLE state
-	    dw1000_rx_off(dw);
+	    dw1000_txrx_off(dw);
         }
 
         // Call the corresponding callback if present
@@ -1837,7 +1837,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 			   DW1000_MSK_SYS_STATUS_ALL_RX_TO); 
 
 	// Turn off receiver (return to IDLE state)
-	dw1000_rx_off(dw);
+	dw1000_txrx_off(dw);
 
 	// HOTFIX: UM §4.1.6: RX Message timestamp
 	//   "Due to an issue in the re-initialisation of the receiver,
@@ -1860,7 +1860,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 			   DW1000_MSK_SYS_STATUS_ALL_RX_ERR);
 
 	// Turn off receiver (return to IDLE state)
-	dw1000_rx_off(dw);
+	dw1000_txrx_off(dw);
 
 	// HOTFIX: UM §4.1.6: RX Message timestamp
 	//   "Due to an issue in the re-initialisation of the receiver,

@@ -573,6 +573,8 @@ void dw1000_read_temp_vbat(dw1000_t *dw, uint16_t *temp, uint16_t *vbat);
 
 void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time);
 
+void dw1000_txrx_off(dw1000_t *dw);
+
 void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay);
 
 void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
@@ -588,7 +590,6 @@ int dw1000_tx_sendv(dw1000_t *dw,
 
 
 
-void dw1000_rx_off(dw1000_t *dw);
 
 void dw1000_rx_set_timeout(dw1000_t *dw, uint16_t timeout);
 
