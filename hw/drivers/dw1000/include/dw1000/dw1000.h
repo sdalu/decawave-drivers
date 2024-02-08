@@ -680,6 +680,22 @@ void _dw1000_reg_write32(dw1000_t *dw,
 
 /**
  * @private
+ * @brief Write a 64-bit word to DW1000 register
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  reg      register to write
+ * @param[in]  offset   offset in the register
+ * @param[in]  data     64-bit word to write
+ */
+static inline
+void _dw1000_reg_write64(dw1000_t *dw,
+    uint8_t reg, size_t offset, uint64_t data) {
+    data = dw1000_cpu_to_le64(data);
+    _dw1000_reg_write(dw, reg, offset, &data, sizeof(data));
+}
+
+/**
+ * @private
  * @brief Read a byte from DW1000 register
  *
  * @param[in]  dw       driver context
@@ -729,6 +745,23 @@ uint32_t _dw1000_reg_read32(dw1000_t *dw, uint8_t reg, size_t offset) {
     uint32_t data;
     _dw1000_reg_read(dw, reg, offset, &data, sizeof(data));
     return dw1000_le32_to_cpu(data);
+}
+
+/**
+ * @private
+ * @brief Read a 64-bit word from DW1000 register
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  reg      register to read
+ * @param[in]  offset   offset in the register
+ *
+ * @return 64-bit word
+ */
+static inline
+uint64_t _dw1000_reg_read64(dw1000_t *dw, uint8_t reg, size_t offset) {
+    uint64_t data;
+    _dw1000_reg_read(dw, reg, offset, &data, sizeof(data));
+    return dw1000_le64_to_cpu(data);
 }
 
 
