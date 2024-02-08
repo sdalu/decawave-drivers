@@ -251,7 +251,7 @@ typedef struct dw1000_radio {
      */
     uint8_t    rx_pcode;
     /**
-     * @brief Bit rate @p DW1000_BITRATE_110KBPS, @pDW1000_BITRATE_850KBPS 
+     * @brief Bit rate @p DW1000_BITRATE_110KBPS, @p DW1000_BITRATE_850KBPS 
      *        or @p DW1000_BITRATE_6800KBPS
      */
     uint8_t    bitrate;
@@ -280,7 +280,7 @@ typedef struct dw1000_radio {
 #endif
 #if DW1000_WITH_PROPRIETARY_SFD
 	/**
-	 * @brief USe non standard SFD (improved performance)
+	 * @brief Use non standard SFD (improved performance)
 	 */
 	uint8_t sfd:1;
 #endif
