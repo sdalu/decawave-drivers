@@ -1842,7 +1842,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// HOTFIX: UM §4.1.6: RX Message timestamp
 	//   "Due to an issue in the re-initialisation of the receiver,
 	//    it is necessary to apply a receiver reset after an
-	//    error or timeout event"
+	//    error or timeout event.
+	//    (It is not necessary to do this for RXPTO and RXSFDTO)"
         dw1000_rx_reset(dw);
 
         // Call the corresponding callback if present
@@ -1865,7 +1866,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// HOTFIX: UM §4.1.6: RX Message timestamp
 	//   "Due to an issue in the re-initialisation of the receiver,
 	//    it is necessary to apply a receiver reset after an
-	//    error or timeout event"
+	//    error or timeout event.
+	//    (It is not necessary to do this for RXPTO and RXSFDTO)"
         dw1000_rx_reset(dw);
 
         // Call the corresponding callback if present
