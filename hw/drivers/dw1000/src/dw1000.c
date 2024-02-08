@@ -1820,6 +1820,8 @@ bool dw1000_process_events(dw1000_t *dw) {
         if((status & DW1000_FLG_SYS_STATUS_AAT) && dw->wait4resp) {
 	    // Turn off receiver, returning to IDLE state
 	    dw1000_txrx_off(dw);
+	    // Reset in case a frame was already being received
+            dw1000_rx_reset(dw);
         }
 
         // Call the corresponding callback if present
