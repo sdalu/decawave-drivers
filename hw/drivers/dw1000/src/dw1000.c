@@ -80,7 +80,7 @@
 
 
 /*===========================================================================*/
-/* Driver local definitions.                                                 */
+/* Local definitions                                                         */
 /*===========================================================================*/
 
 /*
@@ -102,14 +102,9 @@
 #define DW1000_CLOCK_TX_CONTINOUSFRAME     3
 
 
-/*===========================================================================*/
-/* Driver exported variables.                                                */
-/*===========================================================================*/
-
-
 
 /*===========================================================================*/
-/* Driver local variables and types.                                         */
+/* Local variables and types                                                 */
 /*===========================================================================*/
 
 // Information tables
@@ -295,7 +290,7 @@ static const uint16_t plen_symbol_size[] = {
 
 
 /*===========================================================================*/
-/* Driver local functions.                                                   */
+/* Local functions                                                           */
 /*===========================================================================*/
 
 /**
@@ -340,6 +335,34 @@ void _dw1000_spi_header(uint8_t reg,  size_t offset, bool write,
     if (write) {
 	hdr[0] |= 0x80;
     }
+}
+
+
+/**
+ * @internal
+ * @brief Set bits for settings register
+ *
+ * @param[in]  dw       driver context
+ */
+static inline
+void _dw1000_reg_set32(dw1000_t *dw,
+		      uint8_t reg, size_t offset, uint32_t value) {
+    uint32_t val = _dw1000_reg_read32(dw, reg, offset);
+    _dw1000_reg_write32(dw, reg, offset, val | value);
+}
+
+
+/**
+ * @internal
+ * @brief Clear bits for clearing register
+ *
+ * @param[in]  dw       driver context
+ */
+static inline
+void _dw1000_reg_clear32(dw1000_t *dw,
+			uint8_t reg, size_t offset, uint32_t value) {
+    uint32_t val = _dw1000_reg_read32(dw, reg, offset);
+    _dw1000_reg_write32(dw, reg, offset, val & ~value);
 }
 
 
@@ -395,7 +418,7 @@ void _dw1000_clocks(dw1000_t *dw, int mode) {
 
 
 /**
- * @private
+ * @internal
  * @brief Perform software reset of the DW1000
  *
  * @pre The SPI interface must have been initialized to call this
@@ -435,7 +458,7 @@ void _dw1000_softreset(dw1000_t *dw) {
 
 
 /**
- * @private
+ * @internal
  * @brief Tune the DW1000 radio
  *
  * @note  Magic is in the air!
@@ -731,57 +754,79 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
 }
 
 
-/*===========================================================================*/
-/* Driver interrupt handlers.                                                */
-/*===========================================================================*/
-
-
-
-/*===========================================================================*/
-/* Driver exported functions.                                                */
-/*===========================================================================*/
-
 /**
  * @internal
- * @brief Write date to the DW1000 register
+ * @brief Reset the DW1000 receiver
+ * 
+ * @note  Used to deal with a bug in DW1000, see UM §4.1.6.
  *
  * @param[in]  dw       driver context
- * @param[in]  reg      register to read [0x00..0x3F]
- * @param[in]  offset   write data at the offset [0x000..0x7FFF]
- * @param[in]  data     data to be written
- * @param[in]  length   length of data to write
- *
- * @notapi
  */
-void _dw1000_reg_write(dw1000_t *dw,
-    uint8_t reg, size_t offset, void* data, size_t length) {
-    // Sanity check
-    DW1000_ASSERT(reg    <= 0x3F,               "invalid register number");
-    DW1000_ASSERT(offset <= 0x7FFFu,            "out of range offset");
-    DW1000_ASSERT(length <= (0x8000u - offset), "out of range length");
-
-    // Build SPI header
-    uint8_t hdr[DW1000_SPI_HEADER_MAX_LENGTH];
-    size_t hdrlen;
-    _dw1000_spi_header(reg, offset, true, hdr, &hdrlen);
-
-    // Perform write
-    _dw1000_spi_send(dw->config->spi,  // SPI handler
-		     hdr,  hdrlen,     // Send register request 
-		     data, length);    // Write data
+static inline
+void dw1000_rx_reset(dw1000_t *dw) {
+    // Trigger reset for RX by creating a 0 pulse
+    _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
+		      0xE0);
+    _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
+		      0xF0);
 }
 
 
 /**
  * @internal
- * @brief Read data from the DW1000 register
+ * @brief Get the preamble accumulation count
  *
  * @param[in]  dw       driver context
- * @param[in]  reg      register to read [0x00..0x3F]
- * @param[in]  offset   read data from the offset [0x000..0x7FFF]
- * @param[out] data     will hold read data
- * @param[in]  length   length of data to read
+ *
+ * @return the preamble acculumation count
  */
+static inline
+uint16_t dw1000_rx_get_pacc_count(dw1000_t *dw) {
+    // Get Preamble accumulation count... and adjust it
+    // UM §7.2.18: RX Frame Information Register (RXPACC field)
+    uint16_t rxpacc       =
+	(_dw1000_reg_read32(dw, DW1000_REG_RX_FINFO, DW1000_OFF_NONE) &
+	 DW1000_MSK_RX_FINFO_RXPACC) >> DW1000_SFT_RX_FINFO_RXPACC;
+    uint16_t rxpacc_nosat =
+	_dw1000_reg_read16(dw, DW1000_REG_DRX_CONF,DW1000_OFF_DRX_RXPACC_NOSAT);
+    if (rxpacc == rxpacc_nosat)
+	rxpacc += dw->rxpacc_adj;
+
+    return rxpacc;
+}
+
+
+/**
+ * @brief Ensure RX buffers pointers are the same.
+ *
+ * @param dw        driver context
+ */
+void dw1000_rx_sync_dblbuf(dw1000_t *dw) {
+    // UM §7.2.17: System Event Status Register
+    //  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
+    //     we will read the 1 byte at offset 3
+    //     which contains the ICRBP (31) and HSRBP (30) flags    
+    uint8_t sys_stat = _dw1000_reg_read8(dw, DW1000_REG_SYS_STATUS, 3); 
+    const bool ic   = sys_stat & (1 << (DW1000_SFT_SYS_STATUS_ICRBP - 24));
+    const bool host = sys_stat & (1 << (DW1000_SFT_SYS_STATUS_HSRBP - 24));
+    if (ic != host) {
+	// UM §7.2.15: System Control Register
+	//  => Only accessing last byte of SYS_CTRL (where is HRBPT flag)
+	//     Trigger buffer toggle by writting 1 to HRBPT
+        _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3 ,
+			  (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
+    }
+}
+
+
+
+/*===========================================================================*/
+/* Exported functions                                                        */
+/*===========================================================================*/
+
+// Registers (read/write)
+//----------------------------------------------------------------------
+
 void _dw1000_reg_read(dw1000_t *dw,
     uint8_t reg, size_t offset, void* data, size_t length) {
     // Sanity check
@@ -801,18 +846,28 @@ void _dw1000_reg_read(dw1000_t *dw,
 }
 
 
-/**
- * @brief Read 32bit words from OTP memory
- *
- * @pre   The system clock need to be set to XTI
- *
- * @note  Assuming we have exclusive use of the OTP_CTRL.
- *
- * @param[in]  dw       driver context
- * @param[in]  address  address to read (11-bit) [0x0000..0x07FF]
- * @param[out] data     array of 32bit word   
- * @param[in]  length   length of data to read
- */
+void _dw1000_reg_write(dw1000_t *dw,
+    uint8_t reg, size_t offset, void* data, size_t length) {
+    // Sanity check
+    DW1000_ASSERT(reg    <= 0x3F,               "invalid register number");
+    DW1000_ASSERT(offset <= 0x7FFFu,            "out of range offset");
+    DW1000_ASSERT(length <= (0x8000u - offset), "out of range length");
+
+    // Build SPI header
+    uint8_t hdr[DW1000_SPI_HEADER_MAX_LENGTH];
+    size_t hdrlen;
+    _dw1000_spi_header(reg, offset, true, hdr, &hdrlen);
+
+    // Perform write
+    _dw1000_spi_send(dw->config->spi,  // SPI handler
+		     hdr,  hdrlen,     // Send register request 
+		     data, length);    // Write data
+}
+
+
+// OTP (read)
+//----------------------------------------------------------------------
+
 void dw1000_otp_read(dw1000_t *dw,
 		     uint16_t address, uint32_t *data, size_t length) {
     // Sanity check
@@ -841,20 +896,52 @@ void dw1000_otp_read(dw1000_t *dw,
 }
 
 
-/**
- * @brief Perform hard reset (if supported) of the DW1000
- *
- * @note Hard reset need to be supported by the hardware and 
- *       configured in the software
- *
- * @note After the hardreset a new initialisation of the DW1000 
- *       need to be performed by calling @p dw1000_initialise
- *
- * @details Perform a hard reset of the DW1000, 
- *          if not supported this is a no-op
- *
- * @param[in]  dw       driver context
- */
+// Setup helpers
+//----------------------------------------------------------------------
+
+bool
+dw1000_get_calibration(uint8_t channel, uint8_t prf,
+		       uint8_t *power, uint16_t *separation) {
+    // Sanity check on channel
+    if ((channel < 1) || (channel > 7) || (channel == 6)) {
+	return false;
+    }
+
+    // Sanity check on PRF
+    switch(prf) {
+    case DW1000_PRF_16MHZ:
+    case DW1000_PRF_64MHZ:
+	break;
+    case DW1000_PRF_4MHZ:
+    default:
+	return false;
+    }
+    
+    // Retrieve calibration information
+    const struct _channel_prf_calibration *calib =
+	&channel_prf_calibration[ channel_table_mapping[channel] ][ prf ];
+
+    // Save calibration information
+    if (power) {
+	*power      = calib->power;
+    }
+    if (separation) {
+	*separation = calib->separation;
+    }
+
+    // Job's done
+    return true;
+}
+
+
+// Initialisation
+//----------------------------------------------------------------------
+
+void dw1000_init(dw1000_t *dw, const dw1000_config_t *cfg) {
+    memset(dw, 0, sizeof(*dw));
+    dw->config = cfg;
+}
+
 void dw1000_hardreset(dw1000_t *dw) {
     // Sanity check
     if (dw->config->reset == DW1000_IOLINE_NONE)
@@ -876,17 +963,6 @@ void dw1000_hardreset(dw1000_t *dw) {
 }
 
 
-/**
- * @brief Perform initialisation/reset of the DW1000
- *
- * @note  The SPI bus frequency will be momentary set to
- *        the low speed.
- *
- * @param[in]  dw       driver context
- * 
- * @retval  0           DW1000 successfully initialized
- * @retval -1           Chip not identified as DW1000
- */
 int dw1000_initialise(dw1000_t *dw) {
     // We won't bother to read default register value. We assume
     // values are at their defaults due to reset performed inside
@@ -1069,70 +1145,6 @@ int dw1000_initialise(dw1000_t *dw) {
 }
 
 
-/**
- * @brief Blink a set of LEDs.
- *
- * @note  LEDs need to have been configured @p dw1000_config_t object.
- *
- * @param[in]  dw       driver context
- * @param[in]  leds     leds to blink using a led mask
- */
-void dw1000_leds_blink(dw1000_t *dw, uint8_t leds) {
-    const uint32_t pmsc_ledc =
-	_dw1000_reg_read32(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_LEDC);
-    const uint32_t mask = DW1000_MSK_PMSC_LEDC_BLNKNOW &
-	(leds << DW1000_SFT_PMSC_LEDC_BLNKNOW);
-
-    _dw1000_reg_write32(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_LEDC,
-		       pmsc_ledc |  mask);
-    _dw1000_reg_write32(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_LEDC,
-		       pmsc_ledc & ~mask);
-}
-
-
-/**
- * @internal
- * @brief Set bits for settings register
- *
- * @param[in]  dw       driver context
- */
-void _dw1000_reg_set32(dw1000_t *dw,
-		      uint8_t reg, size_t offset, uint32_t value) {
-    uint32_t val = _dw1000_reg_read32(dw, reg, offset);
-    _dw1000_reg_write32(dw, reg, offset, val | value);
-}
-
-
-/**
- * @internal
- * @brief Clear bits for clearing register
- *
- * @param[in]  dw       driver context
- */
-void _dw1000_reg_clear32(dw1000_t *dw,
-			uint8_t reg, size_t offset, uint32_t value) {
-    uint32_t val = _dw1000_reg_read32(dw, reg, offset);
-    _dw1000_reg_write32(dw, reg, offset, val & ~value);
-}
-
-
-/**
- * @brief Initialize the DW1000 driver
- *
- * @param dw        driver context
- * @param cfg       driver configuration
- */
-void dw1000_init(dw1000_t *dw, const dw1000_config_t *cfg) {
-    memset(dw, 0, sizeof(*dw));
-    dw->config = cfg;
-}
-
-
-/**
- * @brief Configure the DW1000 driver
- *
- * @param dw        driver context
- */
 void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
     /* Guard against out of range value
      */
@@ -1270,13 +1282,9 @@ void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
 }
 
 
-/**
- * @brief Read temperature and battery voltage
- *
- * @param dw         driver context
- * @param[out] temp  temperature (in 1/100 °C)
- * @param[out] vbat  battery voltage in mV
- */
+// System
+//----------------------------------------------------------------------
+
 void dw1000_read_temp_vbat(dw1000_t *dw, uint16_t *temp, uint16_t *vbat) {
     // From official deca_device.c (undocummented, part of RF_RES2)
     //   These writes should be single writes and in sequence
@@ -1312,307 +1320,22 @@ void dw1000_read_temp_vbat(dw1000_t *dw, uint16_t *temp, uint16_t *vbat) {
 }
 
 
-/**
- * @brief Set time for delayed send or received time
- *
- * @note  The device time unit is 1 / (499.2 * 128) second
- * @note  The device assignable time unit is 512 (about 8ns),
- *        which means that the 9 lower bytes of the given time are ignored.
- *
- * @param dw        driver context
- * @param time      time for delayed send or received time
- */
-inline
-void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time) {
-    // UM §3.3: the low 9 bits of the given delay are ignored
-    time = dw1000_cpu_to_le64(time);
-    _dw1000_reg_write(dw, DW1000_REG_DX_TIME, DW1000_OFF_NONE, &time, 5);
+void dw1000_leds_blink(dw1000_t *dw, uint8_t leds) {
+    const uint32_t pmsc_ledc =
+	_dw1000_reg_read32(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_LEDC);
+    const uint32_t mask = DW1000_MSK_PMSC_LEDC_BLNKNOW &
+	(leds << DW1000_SFT_PMSC_LEDC_BLNKNOW);
+
+    _dw1000_reg_write32(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_LEDC,
+		       pmsc_ledc |  mask);
+    _dw1000_reg_write32(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_LEDC,
+		       pmsc_ledc & ~mask);
 }
 
 
-/**
- * @brief Set context for sending frame
- *
- * @details The length, is the total length of the frame (including
- *          the 2-byte CRC)
- *
- * @note In standard mode length can be up to 127 bytes, 
- *       in proprietary long-frame-mode length can be up to 1023 bytes
- *
- * @param dw        driver context
- * @param length    frame length
- * @param offset    frame offset in DW TX buffer
- * @param tx_mode   use DW1000_TX_RANGING flag, to indicate a ranging frame
- */
-void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
-		     int tx_mode) {
-    DW1000_ASSERT(
-#if DW1000_WITH_PROPRIETARY_LONG_FRAME
-		  (dw->radio->proprietary.long_frames && (length <= 1023)) ||
-#endif
-		  (length <= 127), "bad frame length");
-    
-    uint32_t tx_fctrl = dw->reg.tx_fctrl;
-    if (tx_mode & DW1000_TX_RANGING)
-	tx_fctrl |= DW1000_FLG_TX_FCTRL_TR;
+// Interruption handling
+//----------------------------------------------------------------------
 
-    tx_fctrl |=
-	(length << DW1000_SFT_TX_FCTRL_TFLEN)   |
-	(offset << DW1000_SFT_TX_FCTRL_TXBOFFS) ;
-
-    _dw1000_reg_write32(dw, DW1000_REG_TX_FCTRL, 0, tx_fctrl);
-}
-
-
-/**
- * @brief Write data to the DW TX buffer
- *
- * @note  DW TX buffer is 1024 bytes (UM §7.2.11). 
- * @note  Data outside buffer will be silently discarded
- *
- * @param dw        driver context
- * @param data      data to write
- * @param length    length of the data being written to buffer
- * @param offset    offset to write data to
- */
-void dw1000_tx_write_frame_data(dw1000_t *dw,
-			  uint8_t *data, size_t length, size_t offset) {
-    // Protect device from buffer overflow
-    if (offset > 1024)
-	return;
-    if ((offset + length) > 1024)
-	length = 1024 - offset;
-
-    // Write data
-    _dw1000_reg_write(dw, DW1000_REG_TX_BUFFER, offset, data, length);
-}
-
-
-/**
- * @brief Start transmitting a frame
- *
- * @note   Data and frame context should have already been set by 
- *         @p dw1000_tx_data and @p dw1000_tx_fctrl
- *
- * @note   If using @p DW1000_TX_DELAYED_START, the transmission time
- *         should have been previously set using @p dw1000_txrx_set_time
- *
- * @param dw         driver context
- * @param tx_mode    a set of the following flags are supported:
- *                   DW1000_TX_DELAYED_START, DW1000_TX_RESPONSE_EXPECTED,
- *                   DW1000_TX_NO_AUTO_CRC
- *
- * @retval  0        Transmission started
- * @retval -1        It was not possible to start transmission.
- *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
- */
-int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
-    uint8_t sys_ctrl  = DW1000_FLG_SYS_CTRL_TXSTRT;
-
-    // Set wait for response flag
-    if (tx_mode & DW1000_TX_RESPONSE_EXPECTED) {
-	sys_ctrl |= DW1000_FLG_SYS_CTRL_WAIT4RESP;
-        dw->wait4resp = 1;
-    }
-
-    // Set delayed start flag
-    if (tx_mode & DW1000_TX_DELAYED_START)
-        sys_ctrl |= DW1000_FLG_SYS_CTRL_TXDLYS;
-
-    // Set suppression of auto-FCS transmission
-    if (tx_mode & DW1000_TX_NO_AUTO_CRC) {
-	sys_ctrl |= DW1000_FLG_SYS_CTRL_SFCST;
-    }
-
-    // Write to SYS_CTRL register, which will trigger transmit
-    _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL, sys_ctrl);
-
-    // Perform extra check for delayed transmit
-    if (tx_mode & DW1000_TX_DELAYED_START) {
-	// UM §7.2.17: System Event Status Register
-	//  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
-	//     we will read the last 2 bytes (ie: offset 3)
-	//     which contains the TXPUTE (34) and HPDWARN (27) flags
-	const uint16_t msk =
-	    (1 << (DW1000_SFT_SYS_STATUS_HPDWARN - 24)) |
-	    (1 << (DW1000_SFT_SYS_STATUS_TXPUTE  - 24)) ;
-	const size_t   off = 3;
-	    
-	// Check status
-	uint16_t tx_ok = 0 ;
-        tx_ok = _dw1000_reg_read16(dw, DW1000_REG_SYS_STATUS, off);
-        if ((tx_ok & msk) == 0)
-            return 0;
-
-	// From official deca_device.c:
-	// Transmit Delayed Send set over Half a Period away or Power Up error
-	// (there is enough time to send but not to power up individual blocks)
-	// ==> Cancel delayed send
-
-	// As we are turning off the transceiver (TRXOFF), we can blow
-	// as well other flags
-	_dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL,
-			   DW1000_FLG_SYS_CTRL_TRXOFF);
-	dw->wait4resp = 0;
-
-	return -1;
-    }
-
-    return 0;
-}
-
-
-/**
- * @brief Start sending a frame
- *
- * @note   According to the @p DW1000_TX_NO_AUTO_CRC flag, if unset
- *         transmitted frame will have the CRC automatically computed
- *         and appended to the frame so transmitted frame will be length+2; if
- *         set, transmitted frame length will be of the specified length
- *         but a CRC-16-CCITT must be explicitely embedded in the frame data
- *
- * @note   If using @p DW1000_TX_DELAYED_START, the transmission time
- *         should have been previously set using @p dw1000_txrx_set_time
- *
- * @param dw        driver context
- * @param data      data to send
- * @param length    length of the data
- * @param tx_mode   a set of the following flags are supported:
- *                  DW1000_TX_DELAYED_START, DW1000_TX_RESPONSE_EXPECTED,  
- *                  DW1000_TX_RANGING, DW1000_TX_NO_AUTO_CRC
- *
- * @retval  0        Transmission started
- * @retval -1        It was not possible to start transmission.
- *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
- */
-int dw1000_tx_send(dw1000_t *dw,
-		   uint8_t *data, size_t length, int tx_mode) {
-
-    // Write data to DW TX buffer
-    dw1000_tx_write_frame_data(dw, data, length, 0);
-    // Adjust data length if CRC is automatically appended
-    if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
-	length += DW1000_CRC_LENGTH;
-    // Set transmission control parameters
-    dw1000_tx_fctrl(dw, length, 0, tx_mode);
-    // Start sending
-    return dw1000_tx_start(dw, tx_mode);
-}
-
-
-/**
- * @brief Start sending a frame
- *
- * @note   According to the @p DW1000_TX_NO_AUTO_CRC flag, if unset
- *         transmitted frame will have the CRC automatically computed
- *         and appended to the frame so transmitted frame will be length+2; if
- *         set, transmitted frame length will be of the specified length
- *         but a CRC-16-CCITT must be explicitely embedded in the frame data
- *
- * @note   If using @p DW1000_TX_DELAYED_START, the transmission time
- *         should have been previously set using @p dw1000_txrx_set_time
- *
- * @param dw        driver context
- * @param iovec     io vector
- * @param iovcnt    number of elements in vector
- * @param tx_mode   a set of the following flags are supported:
- *                  DW1000_TX_DELAYED_START, DW1000_TX_RESPONSE_EXPECTED,  
- *                  DW1000_TX_RANGING, DW1000_TX_NO_AUTO_CRC
- *
- * @retval  0        Transmission started
- * @retval -1        It was not possible to start transmission.
- *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
- */
-int dw1000_tx_sendv(dw1000_t *dw,
-		    struct iovec *iovec, int iovcnt, int tx_mode) {
-    size_t length = 0;
-
-    // Write data to DW TX buffer and compute offset/length
-    for ( ; iovcnt > 0 ; iovec++, iovcnt--) {
-	dw1000_tx_write_frame_data(dw, iovec->iov_base, iovec->iov_len, length);
-	length += iovec->iov_len;
-    }
-    // Adjust data length if CRC is automatically appended
-    if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
-	length += DW1000_CRC_LENGTH;
-    // Set transmission control parameters
-    dw1000_tx_fctrl(dw, length, 0, tx_mode);
-    // Start sending
-    return dw1000_tx_start(dw, tx_mode);
-}
-
-
-/**
- * @brief Reset the DW1000 receiver
- * 
- * @note  Used to deal with a bug in DW1000, see UM §4.1.6.
- *
- * @param[in]  dw       driver context
- */
-static inline void
-dw1000_rx_reset(dw1000_t *dw) {
-    // Trigger reset for RX by creating a 0 pulse
-    _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
-		      0xE0);
-    _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
-		      0xF0);
-}
-
-
-/**
- * @brief Read data from the DW RX buffer
- *
- * @note  DW RX buffer is 1024 bytes (UM §7.2.19).
- * @note  Trying to read data outside the buffer will be silently ignored
- *
- * @param dw        driver context
- * @param data      where to write data
- * @param length    length of the data being read from buffer
- * @param offset    offset to read data from
- */
-inline
-void dw1000_rx_read_frame_data(dw1000_t *dw,
-			       uint8_t *data, size_t length, size_t offset) {
-    // Protect device from overreading the buffer
-    if (offset > 1024)
-	return;
-    if ((offset + length) > 1024)
-	length = 1024 - offset;
-    
-    // Read data
-    _dw1000_reg_read(dw, DW1000_REG_RX_BUFFER, offset, data, length);
-}
-
-
-/**
- * @brief Ensure RX buffers pointers are the same.
- *
- * @param dw        driver context
- */
-void dw1000_rx_sync_dblbuf(dw1000_t *dw) {
-    // UM §7.2.17: System Event Status Register
-    //  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
-    //     we will read the 1 byte at offset 3
-    //     which contains the ICRBP (31) and HSRBP (30) flags    
-    uint8_t sys_stat = _dw1000_reg_read8(dw, DW1000_REG_SYS_STATUS, 3); 
-    const bool ic   = sys_stat & (1 << (DW1000_SFT_SYS_STATUS_ICRBP - 24));
-    const bool host = sys_stat & (1 << (DW1000_SFT_SYS_STATUS_HSRBP - 24));
-    if (ic != host) {
-	// UM §7.2.15: System Control Register
-	//  => Only accessing last byte of SYS_CTRL (where is HRBPT flag)
-	//     Trigger buffer toggle by writting 1 to HRBPT
-        _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3 ,
-			  (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
-    }
-}
-
-/**
- * @brief Set interrupt mask.
- *
- * @param dw        driver context
- * @param bitmask   interrupt bitmask
- * @param enable    type of operation to perform
- */
 void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
     uint32_t sys_mask = _dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, 0);
     
@@ -1624,101 +1347,6 @@ void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
 }
 
 
-/**
- * @brief Turn off transceiver
- *
- * @param dw        driver context
- */
-void dw1000_txrx_off(dw1000_t *dw) {   
-    // Save interrupt mask
-    uint32_t sys_mask =
-	_dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE);
-
-    // Clear interrupt mask
-    _dw1000_reg_write32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE, 0); 
-
-    // Disable the radio
-    _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
-		       DW1000_FLG_SYS_CTRL_TRXOFF); 
-
-    
-    // UM §7.2.17: System Event Status Register
-    // Clear events bits (done by writting 1 to seem)
-    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
-		       (DW1000_MSK_SYS_STATUS_ALL_TX     |
-			DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
-			DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
-			DW1000_MSK_SYS_STATUS_ALL_RX_GOOD));
-
-    // Reset double buffer
-    dw1000_rx_sync_dblbuf(dw);
-    
-    // Reset internal flags
-    dw->wait4resp = 0;
-
-    // Restore interrupt mask
-    _dw1000_reg_write32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE, sys_mask); 
-}
-
-
-/**
- * @brief Start receiving
- *
- * @param dw        driver context
- * @param rx_mode   Receiving mode 
- *                   - @p DW1000_RX_IDLE_ON_DELAY_ERROR
- *                   - @p DW1000_RX_DELAYED_START
- * @retval  0        Reception started
- * @retval  1        Reception started, but delayed start was not
- *                   respected.
- * @retval -1        It was not possible to start receiving.
- *                   (Can happen when @p DW1000_RX_DELAYED_START
- *                   and @p DW1000_RX_IDLE_ON_DELAY_ERROR are set)
- */
-int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
-    // Sync double buffer unless explicitely disabled
-    if (! (rx_mode & DW1000_RX_NO_DBLBUF_SYNC)) {
-        dw1000_rx_sync_dblbuf(dw);
-    }
-
-    // Trigger receiving by writting to SYS_CTRL
-    // UM §7.2.15: System Control Register
-    // We will just access the 2 lower bytes to 
-    //  enable radio, and delayed received if requested
-    uint16_t sys_ctrl = DW1000_FLG_SYS_CTRL_RXENAB;
-    if (rx_mode & DW1000_RX_DELAYED_START) {
-        sys_ctrl |= DW1000_FLG_SYS_CTRL_RXDLYE ;
-    }
-    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE, sys_ctrl);
-
-    // Perform extra check for delayed receive
-    if (rx_mode & DW1000_RX_DELAYED_START) {
-	// Read 1 byte at offset 3 to get the 4th byte out of 5
-	uint8_t sys_status = _dw1000_reg_read8(dw, DW1000_REG_SYS_STATUS, 3); 
-	// If delay has passed start RX immediately
-	// unless DW1000_RX_IDLE_ON_DELAY_ERROR is set in rx_mode
-        if ((sys_status & (DW1000_FLG_SYS_STATUS_HPDWARN >> 24)) != 0)  {
-	    // Return to an off (idle) state
-            dw1000_txrx_off(dw); 
-	    // Keep it off on error if requested
-            if (rx_mode & DW1000_RX_IDLE_ON_DELAY_ERROR)
-		return -1;
-	    // Fallback to immediate start
-	    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
-				DW1000_FLG_SYS_CTRL_RXENAB);
-	    return 1;
-        }
-    }
-
-    return 0;
-}
-
-
-/**
- * @brief To be used for interrupt processing
- *
- * @note  This *can't* be used in interrupt handler, due to SPI request
- */
 bool dw1000_process_events(dw1000_t *dw) {
     const dw1000_config_t *cfg = dw->config;
     
@@ -1885,17 +1513,192 @@ bool dw1000_process_events(dw1000_t *dw) {
 }
 
 
-/**
- * @brief Set the reception timeout for the full frame
- *
- * @details The timeout value need to take in consideration the
- *          delay before transmission and the transmission time of
- *          the whole frame.
- *
- * @param [in]  dw      driver context
- * @param [in]  timeout timeout in "UWB microsencond" units (between 0..65535),
- *                       a value of 0 disable the timeout
- */
+// Operations common to TX/RX
+//----------------------------------------------------------------------
+
+inline
+void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time) {
+    // UM §3.3: the low 9 bits of the given delay are ignored
+    time = dw1000_cpu_to_le64(time);
+    _dw1000_reg_write(dw, DW1000_REG_DX_TIME, DW1000_OFF_NONE, &time, 5);
+}
+
+
+void dw1000_txrx_off(dw1000_t *dw) {   
+    // Save interrupt mask
+    uint32_t sys_mask =
+	_dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE);
+
+    // Clear interrupt mask
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE, 0); 
+
+    // Disable the radio
+    _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
+		       DW1000_FLG_SYS_CTRL_TRXOFF); 
+
+    
+    // UM §7.2.17: System Event Status Register
+    // Clear events bits (done by writting 1 to seem)
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
+		       (DW1000_MSK_SYS_STATUS_ALL_TX     |
+			DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+			DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+			DW1000_MSK_SYS_STATUS_ALL_RX_GOOD));
+
+    // Reset double buffer
+    dw1000_rx_sync_dblbuf(dw);
+    
+    // Reset internal flags
+    dw->wait4resp = 0;
+
+    // Restore interrupt mask
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE, sys_mask); 
+}
+
+
+// Transmission (TX)
+//----------------------------------------------------------------------
+
+void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay) {
+    DW1000_ASSERT(delay <= DW1000_MAX_TX_RX_ACTIVATION_DELAY,
+		  "out of range delay");
+
+    uint32_t val =
+	_dw1000_reg_read32(dw, DW1000_REG_ACK_RESP_T, DW1000_OFF_NONE);
+
+    val &= ~DW1000_MSK_ACK_RESP_T_W4R_TIM;
+    val |= delay & DW1000_MSK_ACK_RESP_T_W4R_TIM;
+
+    _dw1000_reg_write32(dw, DW1000_REG_ACK_RESP_T, DW1000_OFF_NONE, val);
+}
+
+
+void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
+		     int tx_mode) {
+    DW1000_ASSERT(
+#if DW1000_WITH_PROPRIETARY_LONG_FRAME
+		  (dw->radio->proprietary.long_frames && (length <= 1023)) ||
+#endif
+		  (length <= 127), "bad frame length");
+    
+    uint32_t tx_fctrl = dw->reg.tx_fctrl;
+    if (tx_mode & DW1000_TX_RANGING)
+	tx_fctrl |= DW1000_FLG_TX_FCTRL_TR;
+
+    tx_fctrl |=
+	(length << DW1000_SFT_TX_FCTRL_TFLEN)   |
+	(offset << DW1000_SFT_TX_FCTRL_TXBOFFS) ;
+
+    _dw1000_reg_write32(dw, DW1000_REG_TX_FCTRL, 0, tx_fctrl);
+}
+
+
+void dw1000_tx_write_frame_data(dw1000_t *dw,
+			  uint8_t *data, size_t length, size_t offset) {
+    // Protect device from buffer overflow
+    if (offset > 1024)
+	return;
+    if ((offset + length) > 1024)
+	length = 1024 - offset;
+
+    // Write data
+    _dw1000_reg_write(dw, DW1000_REG_TX_BUFFER, offset, data, length);
+}
+
+
+int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
+    uint8_t sys_ctrl  = DW1000_FLG_SYS_CTRL_TXSTRT;
+
+    // Set wait for response flag
+    if (tx_mode & DW1000_TX_RESPONSE_EXPECTED) {
+	sys_ctrl |= DW1000_FLG_SYS_CTRL_WAIT4RESP;
+        dw->wait4resp = 1;
+    }
+
+    // Set delayed start flag
+    if (tx_mode & DW1000_TX_DELAYED_START)
+        sys_ctrl |= DW1000_FLG_SYS_CTRL_TXDLYS;
+
+    // Set suppression of auto-FCS transmission
+    if (tx_mode & DW1000_TX_NO_AUTO_CRC) {
+	sys_ctrl |= DW1000_FLG_SYS_CTRL_SFCST;
+    }
+
+    // Write to SYS_CTRL register, which will trigger transmit
+    _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL, sys_ctrl);
+
+    // Perform extra check for delayed transmit
+    if (tx_mode & DW1000_TX_DELAYED_START) {
+	// UM §7.2.17: System Event Status Register
+	//  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
+	//     we will read the last 2 bytes (ie: offset 3)
+	//     which contains the TXPUTE (34) and HPDWARN (27) flags
+	const uint16_t msk =
+	    (1 << (DW1000_SFT_SYS_STATUS_HPDWARN - 24)) |
+	    (1 << (DW1000_SFT_SYS_STATUS_TXPUTE  - 24)) ;
+	const size_t   off = 3;
+	    
+	// Check status
+	uint16_t tx_ok = 0 ;
+        tx_ok = _dw1000_reg_read16(dw, DW1000_REG_SYS_STATUS, off);
+        if ((tx_ok & msk) == 0)
+            return 0;
+
+	// From official deca_device.c:
+	// Transmit Delayed Send set over Half a Period away or Power Up error
+	// (there is enough time to send but not to power up individual blocks)
+	// ==> Cancel delayed send
+
+	// As we are turning off the transceiver (TRXOFF), we can blow
+	// as well other flags
+	_dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL,
+			   DW1000_FLG_SYS_CTRL_TRXOFF);
+	dw->wait4resp = 0;
+
+	return -1;
+    }
+
+    return 0;
+}
+
+
+int dw1000_tx_send(dw1000_t *dw,
+		   uint8_t *data, size_t length, int tx_mode) {
+
+    // Write data to DW TX buffer
+    dw1000_tx_write_frame_data(dw, data, length, 0);
+    // Adjust data length if CRC is automatically appended
+    if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
+	length += DW1000_CRC_LENGTH;
+    // Set transmission control parameters
+    dw1000_tx_fctrl(dw, length, 0, tx_mode);
+    // Start sending
+    return dw1000_tx_start(dw, tx_mode);
+}
+
+
+int dw1000_tx_sendv(dw1000_t *dw,
+		    struct iovec *iovec, int iovcnt, int tx_mode) {
+    size_t length = 0;
+
+    // Write data to DW TX buffer and compute offset/length
+    for ( ; iovcnt > 0 ; iovec++, iovcnt--) {
+	dw1000_tx_write_frame_data(dw, iovec->iov_base, iovec->iov_len, length);
+	length += iovec->iov_len;
+    }
+    // Adjust data length if CRC is automatically appended
+    if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
+	length += DW1000_CRC_LENGTH;
+    // Set transmission control parameters
+    dw1000_tx_fctrl(dw, length, 0, tx_mode);
+    // Start sending
+    return dw1000_tx_start(dw, tx_mode);
+}
+
+
+// Reception (RX)
+//----------------------------------------------------------------------
+
 void dw1000_rx_set_timeout(dw1000_t *dw, uint16_t timeout) {
     // UM §7.2.14: Receive Frame Wait Timeout Period
     if (timeout > 0) {
@@ -1910,21 +1713,6 @@ void dw1000_rx_set_timeout(dw1000_t *dw, uint16_t timeout) {
 }
 
 
-/**
- * @brief Enable/Disable frame filtering
- *
- * @param dw        driver context
- * @param[in] bitmask   enabling filtering: DW1000_FF_DISABLED
- *                      or a combination of
- *      DW1000_FF_COORDINATOR    frames with no destination address
- *      DW1000_FF_BEACON         beacon frames
- *      DW1000_FF_DATA           data frames
- *      DW1000_FF_ACK            ack frames
- *      DW1000_FF_MAC            mac control frames
- *      DW1000_FF_RESERVED       reserved frame types
- *      DW1000_FF_TYPE_4         type-4 frames
- *      DW1000_FF_TYPE_5         type-5 frames
- */
 void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask) {
     // Read System Configuration register (and hide reserved bits)
     uint32_t sys_cfg =
@@ -1951,15 +1739,59 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask) {
 }
 
 
-/**
- * @brief Read reception information
- *
- * @details Retrieve information about signal quality 
- *          (first path, standard noise, ...)
- *
- * @param [in]  dw      driver context
- * @param [out] rxinfo  information about frame reception
- */
+int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
+    // Sync double buffer unless explicitely disabled
+    if (! (rx_mode & DW1000_RX_NO_DBLBUF_SYNC)) {
+        dw1000_rx_sync_dblbuf(dw);
+    }
+
+    // Trigger receiving by writting to SYS_CTRL
+    // UM §7.2.15: System Control Register
+    // We will just access the 2 lower bytes to 
+    //  enable radio, and delayed received if requested
+    uint16_t sys_ctrl = DW1000_FLG_SYS_CTRL_RXENAB;
+    if (rx_mode & DW1000_RX_DELAYED_START) {
+        sys_ctrl |= DW1000_FLG_SYS_CTRL_RXDLYE ;
+    }
+    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE, sys_ctrl);
+
+    // Perform extra check for delayed receive
+    if (rx_mode & DW1000_RX_DELAYED_START) {
+	// Read 1 byte at offset 3 to get the 4th byte out of 5
+	uint8_t sys_status = _dw1000_reg_read8(dw, DW1000_REG_SYS_STATUS, 3); 
+	// If delay has passed start RX immediately
+	// unless DW1000_RX_IDLE_ON_DELAY_ERROR is set in rx_mode
+        if ((sys_status & (DW1000_FLG_SYS_STATUS_HPDWARN >> 24)) != 0)  {
+	    // Return to an off (idle) state
+            dw1000_txrx_off(dw); 
+	    // Keep it off on error if requested
+            if (rx_mode & DW1000_RX_IDLE_ON_DELAY_ERROR)
+		return -1;
+	    // Fallback to immediate start
+	    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
+				DW1000_FLG_SYS_CTRL_RXENAB);
+	    return 1;
+        }
+    }
+
+    return 0;
+}
+
+
+inline
+void dw1000_rx_read_frame_data(dw1000_t *dw,
+			       uint8_t *data, size_t length, size_t offset) {
+    // Protect device from overreading the buffer
+    if (offset > 1024)
+	return;
+    if ((offset + length) > 1024)
+	length = 1024 - offset;
+    
+    // Read data
+    _dw1000_reg_read(dw, DW1000_REG_RX_BUFFER, offset, data, length);
+}
+
+
 void dw1000_rx_get_info(dw1000_t *dw, dw1000_rxinfo_t *rxinfo) {
     // First path index (UM §7.2.23)
     rxinfo->first_path =
@@ -1975,42 +1807,6 @@ void dw1000_rx_get_info(dw1000_t *dw, dw1000_rxinfo_t *rxinfo) {
 }
 
 
-/**
- * @brief Set the delay to automatically active reception after a transmission.
- *
- * @param [in]  dw      driver context
- * @param [in]  delay   delay in "UWB microsecond" units
- *                       (between 0 .. @p DW1000_MAX_TX_RX_ACTIVATION_DELAY)
- */
-void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay) {
-    DW1000_ASSERT(delay <= DW1000_MAX_TX_RX_ACTIVATION_DELAY,
-		  "out of range delay");
-
-    uint32_t val =
-	_dw1000_reg_read32(dw, DW1000_REG_ACK_RESP_T, DW1000_OFF_NONE);
-
-    val &= ~DW1000_MSK_ACK_RESP_T_W4R_TIM;
-    val |= delay & DW1000_MSK_ACK_RESP_T_W4R_TIM;
-
-    _dw1000_reg_write32(dw, DW1000_REG_ACK_RESP_T, DW1000_OFF_NONE, val);
-}
-
-
-/**
- * @brief Get (an estimation of) transmitter clock drift
- *
- * @details The transmitter clock drift is calculated with
- *          <code>drift = offset/interval</code>.
- *          If positive the transmitter clock is running faster, 
- *          if negative the transmitter clock is running slower.
- *
- * @note    Interval value is dependant of the radio configuration (PRF value),
- *          so it is not necessary to retrieve it everytime.
- *
- * @param[in]  dw       driver context
- * @param[out] offset   clock offset calculated during the interval
- * @param[out] interval time interval used to calculate the offset
- */
 void dw1000_rx_get_time_tracking(dw1000_t *dw,
 				 int32_t *offset, uint32_t *interval) {
     // UM §7.2.21: Receiver Time Tracking Interval
@@ -2041,83 +1837,6 @@ void dw1000_rx_get_time_tracking(dw1000_t *dw,
 }
 
 
-/**
- * @brief Get the preamble accumulation count
- *
- * @param[in]  dw       driver context
- *
- * @return the preamble acculumation count
- */
-uint16_t dw1000_rx_get_pacc_count(dw1000_t *dw) {
-    // Get Preamble accumulation count... and adjust it
-    // UM §7.2.18: RX Frame Information Register (RXPACC field)
-    uint16_t rxpacc       =
-	(_dw1000_reg_read32(dw, DW1000_REG_RX_FINFO, DW1000_OFF_NONE) &
-	 DW1000_MSK_RX_FINFO_RXPACC) >> DW1000_SFT_RX_FINFO_RXPACC;
-    uint16_t rxpacc_nosat =
-	_dw1000_reg_read16(dw, DW1000_REG_DRX_CONF,DW1000_OFF_DRX_RXPACC_NOSAT);
-    if (rxpacc == rxpacc_nosat)
-	rxpacc += dw->rxpacc_adj;
-
-    return rxpacc;
-}
-
-
-
-
-/**
- * @brief Correct received power reading (estimated vs actual)
- *
- * @note  See UM §4.7, fig 22: Estimated RX level versus actual RX level
- *
- * @param[in]  dw       driver context
- * @param[in]  p        estimated power
- *
- * @return "actual" power
- */
-double dw1000_rx_power_correction(dw1000_t *dw, double p) {
-    // UM §4.7: [Figure 22]: Estimated RX level versus actual RX level
-    switch (dw->radio->prf) {
-    case DW1000_PRF_16MHZ:
-	// Approximated by segment:
-	// Estimated: -105 / -88 / -81
-	// Real     : -105 / -88 / -65
-	if (p > -88) p += (p + 88) * 2.2857;
-	break;
-	
-    case DW1000_PRF_64MHZ:
-	// Approximated by segment:
-	// Estimated: -105 / -88 / -81 / -79
-	// Real     : -105 / -88 / -78 / -66.5
-	if (p > -88) p += (p + 88) * 0.42857;
-	if (p > -78) p += (p + 78) * 3.0;
-	break;
-
-    case DW1000_PRF_4MHZ:
-	// PRF of 4MHZ is unsupported by DW1000
-	// FALLTHROUGH
-    default:
-	DW1000_ASSERT(0, "unsupported PRF value");
-	break;
-    }
-
-    // Sanity check
-    // XXX: is it better or worst to trim it?
-    if (p > -60)
-	p = -60;
-
-    // Return corrected power
-    return p;
-}
-
-
-/**
- * @brief Compute the estimated received signal and/or firstpath power in dBm
- *
- * @param[in]  dw         driver context
- * @param[out] signal     received signal power in dBm
- * @param[out] firstpath  received firstpath power in dBm
- */
 void dw1000_rx_get_power_estimate(dw1000_t *dw,
 				  double *signal, double *firstpath) {
     // PRF of 4MHZ is unsupported by DW1000
@@ -2153,46 +1872,39 @@ void dw1000_rx_get_power_estimate(dw1000_t *dw,
 }
 
 
-/**
- * @brief Get information to help calibration process.
- *
- * @param[in]  channel    Channel (1, 2, 3, 4, 5, or 7)
- * @param[in]  prf        PRF (@p DW1000_PRF_16MHZ or @p DW1000_PRF_64MHZ)
- * @param[out] power      Power at receiver input (dBm/MHz) 
- * @param[out] separation Antenna separation in centimeters
- */
-bool
-dw1000_get_calibration(uint8_t channel, uint8_t prf,
-		       uint8_t *power, uint16_t *separation) {
-    // Sanity check on channel
-    if ((channel < 1) || (channel > 7) || (channel == 6)) {
-	return false;
-    }
-
-    // Sanity check on PRF
-    switch(prf) {
+double dw1000_rx_power_correction(dw1000_t *dw, double p) {
+    // UM §4.7: [Figure 22]: Estimated RX level versus actual RX level
+    switch (dw->radio->prf) {
     case DW1000_PRF_16MHZ:
-    case DW1000_PRF_64MHZ:
+	// Approximated by segment:
+	// Estimated: -105 / -88 / -81
+	// Real     : -105 / -88 / -65
+	if (p > -88) p += (p + 88) * 2.2857;
 	break;
+	
+    case DW1000_PRF_64MHZ:
+	// Approximated by segment:
+	// Estimated: -105 / -88 / -81 / -79
+	// Real     : -105 / -88 / -78 / -66.5
+	if (p > -88) p += (p + 88) * 0.42857;
+	if (p > -78) p += (p + 78) * 3.0;
+	break;
+
     case DW1000_PRF_4MHZ:
+	// PRF of 4MHZ is unsupported by DW1000
+	// FALLTHROUGH
     default:
-	return false;
-    }
-    
-    // Retrieve calibration information
-    const struct _channel_prf_calibration *calib =
-	&channel_prf_calibration[ channel_table_mapping[channel] ][ prf ];
-
-    // Save calibration information
-    if (power) {
-	*power      = calib->power;
-    }
-    if (separation) {
-	*separation = calib->separation;
+	DW1000_ASSERT(0, "unsupported PRF value");
+	break;
     }
 
-    // Job's done
-    return true;
+    // Sanity check
+    // XXX: is it better or worst to trim it?
+    if (p > -60)
+	p = -60;
+
+    // Return corrected power
+    return p;
 }
 
 
