@@ -877,7 +877,8 @@ void dw1000_otp_read(dw1000_t *dw,
     // Assuming we have exclusive use of the OTP_CTRL,
     // so we don't care about previously assigned value
 
-    uint16_t otp_ctrl = 0x0003; // OTPREAD | OTPRDEN
+    uint16_t otp_ctrl = DW1000_FLG_OTP_CTRL_OTPREAD |
+	                DW1000_FLG_OTP_CTRL_OTPRDEN;
     for ( ; length-- > 0 ; address++, data++) {
 	// Write the address to read
 	_dw1000_reg_write16(dw, DW1000_REG_OTP_IF, DW1000_OFF_OTP_ADDR,
