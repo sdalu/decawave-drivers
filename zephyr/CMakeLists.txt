@@ -12,6 +12,7 @@ zephyr_include_directories(../hw/drivers/dw1000/include)
 zephyr_include_directories(../port/zephyr/dw/osal/include)
 
 zephyr_library_sources(../hw/drivers/dw1000/src/dw1000.c)
+zephyr_library_sources(../hw/drivers/dw1000/src/dw1000_send.c)
 zephyr_library_sources(../port/zephyr/dw/osal/src/osal.c)
 
 endif()
