@@ -39,6 +39,10 @@
 // UM §7.2.18: RX Frame Information Register
 
 
+// UM §2.3.2 : For delayed TX/RX the receiver stays in IDLE mode
+//             until transmission/reception time has been reached
+
+
 /**
  * @file    dw1000.c
  * @brief   DW1000 low level driver source.
