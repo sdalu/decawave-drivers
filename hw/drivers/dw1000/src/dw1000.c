@@ -1640,7 +1640,7 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
 	const size_t   off = 3;
 	    
 	// Check status
-	uint16_t tx_ok = 0 ;
+	uint16_t tx_ok = 0;
         tx_ok = _dw1000_reg_read16(dw, DW1000_REG_SYS_STATUS, off);
         if ((tx_ok & msk) == 0)
             return 0;
