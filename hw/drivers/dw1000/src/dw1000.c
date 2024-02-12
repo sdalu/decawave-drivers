@@ -797,10 +797,12 @@ uint16_t dw1000_rx_get_pacc_count(dw1000_t *dw) {
 
 
 /**
+ * @internal
  * @brief Ensure RX buffers pointers are the same.
  *
  * @param dw        driver context
  */
+static
 void dw1000_rx_sync_dblbuf(dw1000_t *dw) {
     // UM §7.2.17: System Event Status Register
     //  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
