@@ -1,4 +1,3 @@
-#include <string.h>
 /*
  * Copyright (c) 2018-2024
  * Stephane D'Alu, Inria Chroma team, INSA Lyon, CITI Lab.
@@ -11,15 +10,27 @@
 #include "dw1000/dw1000.h"
 #include "dw1000/dw1000_send.h"
 
+
+
+/*===========================================================================*/
+/* Local variables and types                                                 */
+/*===========================================================================*/
+
 union dw1000_timestamp_encoding {
     uint64_t uint64;
     char raw[sizeof(uint64_t)];
 };
 
 
-static inline
-int _dw1000_tx_prepare_sendv(dw1000_t *dw,
-		    struct iovec *iovec, int iovcnt, int tx_mode) {
+
+/*===========================================================================*/
+/* Local functions                                                           */
+/*===========================================================================*/
+
+static inline size_t
+_dw1000_tx_prepare_data_sendv(
+	dw1000_t *dw, struct iovec *iovec, int iovcnt, int tx_mode)
+{
     size_t length = 0;
 
     // Write data to DW TX buffer and compute offset/length
@@ -27,18 +38,26 @@ int _dw1000_tx_prepare_sendv(dw1000_t *dw,
 	dw1000_tx_write_frame_data(dw, iovec->iov_base, iovec->iov_len, length);
 	length += iovec->iov_len;
     }
-    // Adjust data length if CRC is automatically appended
-    if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
-	length += DW1000_CRC_LENGTH;
-    // Set frame control parameters
-    dw1000_tx_fctrl(dw, length, 0, tx_mode);
+
+    // Return total length
+    return length;
 }
 
-static inline
-void _dw1000_tx_prepare_send(dw1000_t *dw,
-			   uint8_t *data, size_t length, int tx_mode) {
+
+static inline size_t
+_dw1000_tx_prepare_data_send(
+	dw1000_t *dw, uint8_t *data, size_t length, int tx_mode)
+{
     // Write data to DW TX buffer
     dw1000_tx_write_frame_data(dw, data, length, 0);
+
+    // Return total length
+    return length;
+}
+
+static inline void
+_dw1000_tx_prepare_fctl(dw1000_t *dw, size_t length, int tx_mode)
+{
     // Adjust data length if CRC is automatically appended
     if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
 	length += DW1000_CRC_LENGTH;
@@ -46,69 +65,17 @@ void _dw1000_tx_prepare_send(dw1000_t *dw,
     dw1000_tx_fctrl(dw, length, 0, tx_mode);
 }
 
-
-
-
-int dw1000_tx_sendv(dw1000_t *dw,
-		    struct iovec *iovec, int iovcnt, int tx_mode) {
-    // Prepare data and frame control
-    _dw1000_tx_prepare_sendv(dw, iovec, iovcnt, tx_mode);
-    // Start transmit
-    return dw1000_tx_start(dw, tx_mode);
-}
-
-int dw1000_tx_send(dw1000_t *dw,
-		   uint8_t *data, size_t length, int tx_mode) {
-    // Prepare data and frame control
-    _dw1000_tx_prepare_send(dw, data, length, tx_mode);
-    // Start transmit
-    return dw1000_tx_start(dw, tx_mode);
-}
-
-
-#if DW1000_WITH_EXTENDED_SEND
-
-
-int dw1000_tx_extended_vsendv(dw1000_t *dw,
-			      struct iovec *iovec, int iovcnt,
-			      int tx_mode, va_list ap) {
-    // Prepare data and frame control
-    _dw1000_tx_prepare_sendv(dw, iovec, iovcnt, tx_mode);
-
-
-    // If not embed timestamp, send it now
-    if (! (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP)) {
-	return dw1000_tx_start(dw, tx_mode);
-    }
-
-    int                             rc             = 0;
-    bool                            last_try       = false;
+static inline void
+_dw1000_tx_prepare_delayed_embed_timestamp(
+	dw1000_t *dw, size_t offset, uint32_t delay, int tx_mode)
+{
+    union dw1000_timestamp_encoding data = { 0 };
+    size_t                          size = 0;
     uint64_t                        time;
-    union dw1000_timestamp_encoding ts_data        = { 0 };
-    size_t                          ts_size        = 0;
-    size_t                          ts_offset      = 0;
-    uint32_t                        ts_delay       =
-	DW1000_TX_DELAYED_EMBED_TIMESTAMP_DEFAULT_DELAY;
-    uint32_t                        ts_retry_delay =
-	DW1000_TX_DELAYED_EMBED_TIMESTAMP_DEFAULT_RETRY_DELAY;
-    
-    // Retrieve variadic arguments
-    ts_size = va_arg(ap, size_t);
-    if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_DELAY) {
-	ts_delay       = va_arg(ap, uint32_t);
-    }
-    if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_RETRY_DELAY) {
-	ts_retry_delay = va_arg(ap, uint32_t);
-    }
-    
- retry:
-    // Check if non zero delay
-    if (ts_delay == 0)
-	return -1;
-	
+
     // Compute delayed send
     time = dw1000_get_system_time(dw);
-    time = DW1000_CLOCK_ROUNDUP(time + ts_delay);
+    time = DW1000_CLOCK_ROUNDUP(time + delay);
     
     // Set delayed time
     dw1000_txrx_set_time(dw, time);
@@ -119,30 +86,101 @@ int dw1000_tx_extended_vsendv(dw1000_t *dw,
     
     // Build timestamp data
     if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT) {
-	ts_size = sizeof(uint64_t);
+	size = sizeof(uint64_t);
 	if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN) {
-	    ts_data.uint64 = dw1000_cpu_to_le64(time); 	   // Little
+	    data.uint64 = dw1000_cpu_to_le64(time); 	   // Little
 	} else {
-	    ts_data.uint64 = dw1000_cpu_to_be64(time); 	   // Big
+	    data.uint64 = dw1000_cpu_to_be64(time); 	   // Big
 	}
     } else {
-	ts_size = 5;
+	size = 5;
 	if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN) {
 	    for (int i = 0 ; i < 5 ; i++)
-		ts_data.raw[i] = (time >> (i     * 8)) & 0xff; // Little
+		data.raw[i] = (time >> (i     * 8)) & 0xff; // Little
 	} else {
 	    for (int i = 0 ; i < 5 ; i++)
-		ts_data.raw[i] = (time >> ((4-i) * 8)) & 0xff; // Big
+		data.raw[i] = (time >> ((4-i) * 8)) & 0xff; // Big
 	}
     }
 
     // Embed timestamp
-    dw1000_tx_write_frame_data(dw, ts_data.raw, ts_size, ts_offset);
+    dw1000_tx_write_frame_data(dw, data.raw, size, offset);
+}
+
+
+
+/*===========================================================================*/
+/* Exported functions                                                        */
+/*===========================================================================*/
+
+int
+dw1000_tx_sendv(
+	dw1000_t *dw, struct iovec *iovec, int iovcnt, int tx_mode)
+{
+    // Prepare data and frame control
+    size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt, tx_mode);
+    _dw1000_tx_prepare_fctl(dw, length, tx_mode);
+    // Start trasmit
+    return dw1000_tx_start(dw, tx_mode);
+}
+
+int
+dw1000_tx_send(
+	dw1000_t *dw, uint8_t *data, size_t length, int tx_mode)
+{
+    // Prepare data and frame control
+    _dw1000_tx_prepare_data_send(dw, data, length, tx_mode);
+    _dw1000_tx_prepare_fctl(dw, length, tx_mode);
+    // Start trasmit
+    return dw1000_tx_start(dw, tx_mode);
+}
+
+
+
+#if DW1000_WITH_EXTENDED_SEND
+
+int
+dw1000_tx_extended_vsendv(
+	dw1000_t *dw, struct iovec *iovec, int iovcnt, int tx_mode,
+	va_list ap)
+{
+    // Prepare data and frame control
+    size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt, tx_mode);
+    _dw1000_tx_prepare_fctl(dw, length, tx_mode);
+
+    // If not embedding timestamp, send it now
+    if (! (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP)) {
+	return dw1000_tx_start(dw, tx_mode);
+    }
+
+    // Default parameters
+    int      rc          = 0;
+    bool     last_try    = false;
+    size_t   offset      = 0;
+    uint32_t delay       =
+	DW1000_TX_DELAYED_EMBED_TIMESTAMP_DEFAULT_DELAY;
+    uint32_t retry_delay =
+	DW1000_TX_DELAYED_EMBED_TIMESTAMP_DEFAULT_RETRY_DELAY;
     
-    // Start transmit
+    // Retrieve variadic arguments
+    offset = va_arg(ap, size_t);
+    if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_DELAY) {
+	delay       = va_arg(ap, uint32_t);
+    }
+    if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_RETRY_DELAY) {
+	retry_delay = va_arg(ap, uint32_t);
+    }
+
+ retry:
+    // Check if zero-delay
+    if (delay == 0)
+	return -1;
+	
+    // Prepare embedded timestamp and start transmit
+    _dw1000_tx_prepare_delayed_embed_timestamp(dw, offset, delay, tx_mode);
     rc = dw1000_tx_start(dw, tx_mode);
     if ((rc < 0) && !last_try) {
-	ts_delay = ts_retry_delay;
+	delay    = retry_delay;
 	last_try = true;
 	goto retry;
     }
