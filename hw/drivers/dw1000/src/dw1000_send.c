@@ -157,17 +157,15 @@ dw1000_tx_extended_vsendv(
     int      rc          = 0;
     bool     last_try    = false;
     size_t   offset      = 0;
-    uint32_t delay       =
-	DW1000_TX_DELAYED_EMBED_TIMESTAMP_DEFAULT_DELAY;
-    uint32_t retry_delay =
-	DW1000_TX_DELAYED_EMBED_TIMESTAMP_DEFAULT_RETRY_DELAY;
+    uint32_t delay       = DW1000_TX_DELAYED_DEFAULT_DELAY;
+    uint32_t retry_delay = DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY;
     
     // Retrieve variadic arguments
     offset = va_arg(ap, size_t);
-    if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_DELAY) {
+    if (tx_mode & DW1000_TX_DELAYED_DELAY) {
 	delay       = va_arg(ap, uint32_t);
     }
-    if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_RETRY_DELAY) {
+    if (tx_mode & DW1000_TX_DELAYED_RETRY_DELAY) {
 	retry_delay = va_arg(ap, uint32_t);
     }
 
