@@ -72,15 +72,46 @@
 
 #if DW1000_WITH_EXTENDED_SEND
 
+/**
+ * @brief Specify an additional parameter for transmit delay
+ */
 #define DW1000_TX_DELAYED_DELAY					0x2000
+/**
+ * @brief Specify an additional parameter for tramist delay when retrying
+ */
 #define DW1000_TX_DELAYED_RETRY_DELAY				0x4000
+
+/**
+ * @brief Embed timestamp in the trasmitted frame.
+ * @pre   @p DW1000_TX_DELAYED should also be enabled
+ */
 #define DW1000_TX_DELAYED_EMBED_TIMESTAMP			0x1000
+/**
+ * @brief Use big-endian encoding for timestamp
+ */
 #define DW1000_TX_DELAYED_EMBED_TIMESTAMP_BIG_ENDIAN		0x0100
+/**
+ * @brief Use little-endian encoding for timestamp
+ */
 #define DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN		0x0200
+/**
+ * @brief Use 40 bit encoding for timestamp
+ */
 #define DW1000_TX_DELAYED_EMBED_TIMESTAMP_40BIT			0x0400
+/**
+ * @brief Use 64 bit encoding for timestamp
+ */
 #define DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT 		0x0800
+
+/**
+ * Bitmask for endianess of embedded timestamp
+ */
 #define DW1000_TX_DELAYED_EMBED_TIMESTAMP_ENDIAN_MASK           0x0300
+/**
+ * Bitmask for size of embedded timestamp
+ */
 #define DW1000_TX_DELAYED_EMBED_TIMESTAMP_SIZE_MASK             0x0C00
+
 
 #endif
 
