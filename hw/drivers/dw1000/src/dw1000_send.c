@@ -11,18 +11,6 @@
 #include "dw1000/dw1000_send.h"
 
 
-
-/*===========================================================================*/
-/* Local variables and types                                                 */
-/*===========================================================================*/
-
-union dw1000_timestamp_encoding {
-    uint64_t uint64;
-    char raw[sizeof(uint64_t)];
-};
-
-
-
 /*===========================================================================*/
 /* Local functions                                                           */
 /*===========================================================================*/
@@ -69,9 +57,22 @@ static inline void
 _dw1000_tx_prepare_delayed_embed_timestamp(
 	dw1000_t *dw, size_t offset, uint32_t delay, int tx_mode)
 {
-    union dw1000_timestamp_encoding data = { 0 };
-    size_t                          size = 0;
-    uint64_t                        time;
+    // Sanity check
+    DW1000_ASSERT(((tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_ENDIAN_MASK)
+		   == DW1000_TX_DELAYED_EMBED_TIMESTAMP_BIG_ENDIAN   ) ||
+		  ((tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_ENDIAN_MASK)
+		   == DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN),
+		  "invalid tx_mode for timestamp endianess");
+    DW1000_ASSERT(((tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_SIZE_MASK)
+		   == DW1000_TX_DELAYED_EMBED_TIMESTAMP_40BIT        ) ||
+		  ((tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_SIZE_MASK)
+		   == DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT        ),
+		  "invalid tx_mode for timestamp size");
+
+    // Variables
+    size_t   size    = 0;
+    char     data[8] = { 0 };
+    uint64_t time;
 
     // Compute delayed send
     time = dw1000_get_system_time(dw);
@@ -85,26 +86,27 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
     time += dw->config->tx_antenna_delay;
     
     // Build timestamp data
-    if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT) {
-	size = sizeof(uint64_t);
-	if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN) {
-	    data.uint64 = dw1000_cpu_to_le64(time); 	   // Little
-	} else {
-	    data.uint64 = dw1000_cpu_to_be64(time); 	   // Big
-	}
-    } else {
+    switch(tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_SIZE_MASK) {
+    case DW1000_TX_DELAYED_EMBED_TIMESTAMP_40BIT:
 	size = 5;
-	if (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN) {
-	    for (int i = 0 ; i < 5 ; i++)
-		data.raw[i] = (time >> (i     * 8)) & 0xff; // Little
-	} else {
-	    for (int i = 0 ; i < 5 ; i++)
-		data.raw[i] = (time >> ((4-i) * 8)) & 0xff; // Big
-	}
+	break;
+    case DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT:
+	size = 8;
+	break;
     }
-
+    switch(tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_ENDIAN_MASK) {
+    case DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN:
+	for (int i = 0 ; i < size ; i++)
+	    data[i] = (time >> (i     * 8)) & 0xff;
+	break;
+    case DW1000_TX_DELAYED_EMBED_TIMESTAMP_BIG_ENDIAN:
+	for (int i = 0 ; i < size ; i++)
+	    data[i] = (time >> ((4-i) * 8)) & 0xff;
+	break;
+    }
+    
     // Embed timestamp
-    dw1000_tx_write_frame_data(dw, data.raw, size, offset);
+    dw1000_tx_write_frame_data(dw, data, size, offset);
 }
 
 
