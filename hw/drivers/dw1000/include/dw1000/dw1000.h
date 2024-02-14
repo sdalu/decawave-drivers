@@ -1005,6 +1005,25 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode);
 
 
 /**
+ * @brief Check if currently expecting response.
+ *
+ * Following a transmitted frame with the @p DW1000_TX_RESPONSE_EXPECTED
+ * flag set, the receiver will automatically turn on, so it won't be
+ * necessary to explicitely turn it on.
+ *
+ * @param[in]  dw       driver context
+ *
+ * @retval true		Frame was sent with @p DW1000_TX_RESPONSE_EXPECTED
+ *                      and no response received so far.
+ * @retval false	Otherwise
+ */
+static inline bool
+dw1000_tx_is_expecting_response(dw1000_t *dw) {
+    return dw->wait4resp;
+}
+
+
+/**
  * @brief Check the status of TX done (ie: TXFRS flag)
  *
  * @details Everything that specified that the transmission is ended.
