@@ -257,7 +257,7 @@ int dw1000_tx_extended_sendv(dw1000_t *dw,
 			     ...) {
     va_list ap;
     va_start(ap, tx_mode);
-    int rc = dw1000_tx_extended_sendv(dw, iovec, iovcnt, tx_mode, ap);
+    int rc = dw1000_tx_extended_vsendv(dw, iovec, iovcnt, tx_mode, ap);
     va_end(ap);
     return rc;
 }
