@@ -48,6 +48,20 @@ config DW1000_HOTFIX_AAT_IEEE802_15_4_2011
           for IEEE802.15.4-2011 compliant frames).
 	default y
 
+config DW1000_TX_DELAYED_DEFAULT_DELAY
+        int "Specify the delay to used when embeding timestamp"
+ 	help
+	  Value can be between 1 and 2^32 in DW1000_TIME_CLOCK_HZ steps.
+          A value of 0 means disable.
+	default 0
+
+config DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY
+        int "Specify the retry delay to used when embeding timestamp"
+ 	help
+	  Value can be between 1 and 2^32 in DW1000_TIME_CLOCK_HZ steps.
+          A value of 0 means disable.
+	default 0
+
 endif
 
 endmenu

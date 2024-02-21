@@ -64,6 +64,11 @@
 #define DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011	0
 #endif
 
+#define DW1000_TX_DELAYED_DEFAULT_DELAY			\
+    CONFIG_DW1000_TX_DELAYED_DEFAULT_DELAY
+
+#define DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY		\
+    CONFIG_DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY
 
 
 /*----------------------------------------------------------------------*/
