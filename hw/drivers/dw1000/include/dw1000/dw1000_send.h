@@ -207,15 +207,14 @@ int dw1000_tx_sendv(dw1000_t *dw,
  *                           DW1000_TX_DELAYED_EMBED_TIMESTAMP_BIG_ENDIAN,
  *                           DW1000_TX_DELAYED_EMBED_TIMESTAMP_40BIT,
  *                           DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT.
- *         If not specified default to big-endian 40-bit encoding.
- *         If specified DW1000_TX_DELAYED_EMBED_TIMESTAMP_DELAY,
- *         DW1000_TX_DELAYED_EMBED_TIMESTAMP_RETRY_DELAY additional
- *         parameter are used to specifield necessary delay to perform
+ *         If specified @p DW1000_TX_DELAYED_DELAY and
+ *         @p DW1000_TX_DELAYED_RETRY_DELAY additional
+ *         parameter are used to set the necessary delay to perform
  *         frame encoding/processing before transmit, respectively
  *         @a delay (@p uint32_t) and @a retry_delay (@p uint32_t).
  *         Theses delay are highly system specific and should be choosen
  *         carrefully otherwise sending frame will fails.
- *         
+ *
  *
  * @param dw        driver context
  * @param data      data to send
@@ -225,20 +224,20 @@ int dw1000_tx_sendv(dw1000_t *dw,
  *                  @p DW1000_TX_RANGING,
  *                  @p DW1000_TX_NO_AUTO_CRC,
  *                  @p DW1000_TX_DELAYED_START,
+ *                  @p DW1000_TX_DELAYED_DELAY,
+ *                  @p DW1000_TX_DELAYED_RETRY_DELAY,
  *                  @p DW1000_TX_DELAYED_EMBED_TIMESTAMP,
  *                  @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_BIG_ENDIAN,
  *                  @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN,
  *                  @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_40BIT,
- *                  @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT,
- *                  @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_DELAY,
- *                  @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_RETRY_DELAY
- * @param ts_offset Timestamp placement in the frame, offset is specified from
- *                  the start of the frame. Encoding will be done according
- *                  to @p tx_mode parameter.
+ *                  @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT
+ * @param ts_offset Timestamp placement in the frame (size_t),
+ *                  offset is specified from the start of the frame.
+ *                  Encoding will be done according to @p tx_mode parameter.
  *                  (parameter only available if @p DW1000_TX_DELAYED_EMBED_TIMESTAMP is specified)
- * @param delay     Timestamp placement in the frame.
+ * @param delay     Scheduling delay (uint32_t)
  *                  (parameter only available if @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_DELAY is specified)
- * @param retry_delay
+ * @param retry_delay Scheduling delay for second attempt (uint32_t)
  *                  (parameter only available if @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_RETRY_DELAY is specified)
  *
  * @retval  0        Transmission started
@@ -247,13 +246,13 @@ int dw1000_tx_sendv(dw1000_t *dw,
  */
 int dw1000_tx_extended_vsendv(dw1000_t *dw,
 			      struct iovec *iovec, int iovcnt,
-			       int tx_mode,
+			      int tx_mode,
 			      va_list ap);
 
 static inline
 int dw1000_tx_extended_sendv(dw1000_t *dw,
-			    struct iovec *iovec, int iovcnt,
-			    int tx_mode,
+			     struct iovec *iovec, int iovcnt,
+			     int tx_mode,
 			     ...) {
     va_list ap;
     va_start(ap, tx_mode);

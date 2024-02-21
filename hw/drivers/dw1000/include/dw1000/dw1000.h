@@ -433,7 +433,7 @@ struct dw1000 {
     uint32_t wait4resp;
     uint32_t sleep_mode;
 
-    int8_t rxpacc_adj;
+    int8_t   rxpacc_adj;
     
     struct {
 	uint32_t sys_cfg;
@@ -920,7 +920,7 @@ bool dw1000_process_events(dw1000_t *dw);
 /**
  * @brief Set time for delayed send or received time
  *
- * @note  The device time unit is 1 / (499.2 * 128) second
+ * @note  The device time unit is 1 / (499.2e6 * 128) second
  * @note  The device assignable time unit is 512 (about 8ns),
  *        which means that the 9 lower bytes of the given time are ignored.
  *
