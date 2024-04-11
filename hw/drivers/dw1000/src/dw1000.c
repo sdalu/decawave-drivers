@@ -998,7 +998,7 @@ int dw1000_initialise(dw1000_t *dw) {
     dw->id.lot  = dw1000_otp_get(dw, DW1000_OTP_LOT_ID ) & DW1000_MSK_LOT_ID;
     
     // Clock PLL lock detect tune.
-    //  (Default value for the while register is 0)
+    //  (Default value for the WAIT register is 0)
     // UM §7.2.37.1: Ensure reliable operation of the clock PLL lock
     //               detect flags.
     _dw1000_reg_write32(dw, DW1000_REG_EXT_SYNC, DW1000_OFF_EC_CTRL,
@@ -1129,7 +1129,7 @@ int dw1000_initialise(dw1000_t *dw) {
     gpio_mode &= ~(DW1000_MSK_GPIO_MSGP8);
     gpio_mode |= ((cfg->irq == DW1000_IOLINE_NONE)
 		  ? DW1000_VAL_GPIO_8_GPIO
-		  : DW1000_VAL_GPIO_8_IRQ) << DW1000_SFT_GPIO_MSGP8;    
+		  : DW1000_VAL_GPIO_8_IRQ) << DW1000_SFT_GPIO_MSGP8;
     _dw1000_reg_write32(dw, DW1000_REG_GPIO_CTRL, DW1000_OFF_GPIO_MODE,
 		       gpio_mode);
 
