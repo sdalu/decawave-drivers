@@ -16,6 +16,8 @@
  * @{
  */
 
+#include <stdarg.h>
+
 #include "dw1000/osal.h"
 #include "dw1000.h"
 
