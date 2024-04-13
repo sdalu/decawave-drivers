@@ -554,6 +554,7 @@
 #define DW1000_FLG_OTP_SF_LDO_KICK              0x02
 
 #define DW1000_REG_LDE_IF                       0x2E
+#define DW1000_LEN_LDE_IF                      10246
 #define DW1000_OFF_LDE_THRESH                 0x0000
 #define DW1000_OFF_LDE_CFG1                   0x0806
 #define DW1000_OFF_LDE_PPINDX                 0x1000
