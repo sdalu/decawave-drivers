@@ -44,7 +44,7 @@ _dw1000_tx_prepare_data_send(
 }
 
 static inline void
-_dw1000_tx_prepare_fctl(dw1000_t *dw, size_t length, int tx_mode)
+_dw1000_tx_prepare_fctrl(dw1000_t *dw, size_t length, int tx_mode)
 {
     // Adjust data length if CRC is automatically appended
     if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
@@ -121,7 +121,7 @@ dw1000_tx_sendv(
 {
     // Prepare data and frame control
     size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt, tx_mode);
-    _dw1000_tx_prepare_fctl(dw, length, tx_mode);
+    _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
     // Start trasmit
     return dw1000_tx_start(dw, tx_mode);
 }
@@ -132,7 +132,7 @@ dw1000_tx_send(
 {
     // Prepare data and frame control
     _dw1000_tx_prepare_data_send(dw, data, length, tx_mode);
-    _dw1000_tx_prepare_fctl(dw, length, tx_mode);
+    _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
     // Start trasmit
     return dw1000_tx_start(dw, tx_mode);
 }
@@ -148,7 +148,7 @@ dw1000_tx_extended_vsendv(
 {
     // Prepare data and frame control
     size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt, tx_mode);
-    _dw1000_tx_prepare_fctl(dw, length, tx_mode);
+    _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
 
     // If not embedding timestamp, send it now
     if (! (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP)) {
