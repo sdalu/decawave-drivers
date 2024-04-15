@@ -17,6 +17,8 @@
  * LEN = lenght (bytes)
  */
 
+#define DW1000_COUNT_REGISTERS		        0x40
+
 #define DW1000_OFF_NONE                            0
 
 /*
