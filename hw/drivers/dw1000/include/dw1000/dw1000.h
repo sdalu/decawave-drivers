@@ -1156,7 +1156,7 @@ dw1000_rx_get_frame_info(dw1000_t *dw, size_t *length, bool *ranging)
     if (length) {
 #if DW1000_WITH_PROPRIETARY_LONG_FRAME
 	const uint32_t msk = dw->radio->proprietary.long_frames
-	                   ? DW1000_MSK_RX_FINFO_RXFLEN_EXT
+	                   ? DW1000_MSK_RX_FINFO_RXFLE_RXFLEN
 	                   : DW1000_MSK_RX_FINFO_RXFLEN;
 #else
 	const uint32_t msk = DW1000_MSK_RX_FINFO_RXFLEN;
