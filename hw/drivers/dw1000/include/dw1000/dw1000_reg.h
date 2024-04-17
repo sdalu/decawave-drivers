@@ -8,6 +8,29 @@
 #ifndef __DW1000_REG_H__
 #define __DW1000_REG_H__
 
+#define DW1000_GET_VAL(v, type)						\
+    (((v) & (DW1000_MSK_##type)) >> (DW1000_SFT_##type))
+
+#define DW1000_SET_VAL(v, type, val)					\
+    do {								\
+	(v) |= ((val) << (DW1000_SFT_##type)) & (DW1000_MSK_##type);	\
+    } while(0)
+
+#define DW1000_GET_FLG(v, type)						\
+    (!!((v) & (DW1000_FLG_##type)))
+
+#define DW1000_SET_FLG(v, type)						\
+    do {								\
+	(v) |= (DW1000_FLG_##type);					\
+    } while(0)
+
+#define DW1000_CLR_FLG(v, type)						\
+    do {								\
+	(v) &= ~(DW1000_FLG_##type);					\
+    } while(0)
+
+
+
 /*
  * REG = register 
  * OFF = offset (bytes)
