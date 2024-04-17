@@ -489,7 +489,7 @@
 #define DW1000_FLG_GPIO_GOM8               (1 << 20)
 
 #define DW1000_REG_DRX_CONF                     0x27
-#define DW1000_LEN_DRX_CONF                       44
+#define DW1000_LEN_DRX_CONF                       46
 #define DW1000_OFF_DRX_TUNE0B                   0x02
 #define DW1000_OFF_DRX_TUNE1A                   0x04
 #define DW1000_OFF_DRX_TUNE1B                   0x06
