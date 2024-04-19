@@ -1407,6 +1407,9 @@ bool dw1000_process_events(dw1000_t *dw) {
         }
 #endif
 
+	// Clear wait4resp internal flag
+	dw->wait4resp = 0;
+
 	// Effectively clearing status
         _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE, clear);
 
