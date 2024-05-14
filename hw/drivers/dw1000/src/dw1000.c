@@ -1397,7 +1397,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 	    uint8_t fctrl[2];
 	    dw1000_rx_read_frame_data(dw, fctrl, sizeof(fctrl), 0);
 
-	    if ((fctrl[0] & 0x20) == 0) {
+	    if ((fctrl[0] & 0x20) == 0) { 
 		// Clear AAT status
 		clear  |=  DW1000_FLG_SYS_STATUS_AAT;
 		status &= ~DW1000_FLG_SYS_STATUS_AAT;
@@ -1418,7 +1418,7 @@ bool dw1000_process_events(dw1000_t *dw) {
             cfg->cb.rx_ok(dw, status, length, ranging);
         }
 
-	// Toggle the Host side Receive Buffer Pointer
+        // Toggle the Host side Receive Buffer Pointer
         if (cfg->dblbuff) {
 	    // UM §7.2.15: System Control Register
 	    //  => Only accessing last byte of SYS_CTRL (where is HRBPT flag)
