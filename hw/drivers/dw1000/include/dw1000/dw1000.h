@@ -894,6 +894,24 @@ uint64_t dw1000_get_eui(dw1000_t *dw)
 /*===========================================================================*/
 
 /**
+ * @brief Check if an interrupt is pending
+ *
+ * @param[in]  dw       driver context
+ *
+ * @return true if an interrupt is pending, false otherwise.
+ */
+static inline bool
+dw1000_pending_interrupt(dw1000_t *dw)
+{
+    // UM §7.2.17: System Event Status Register
+    //  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
+    //     we will use only the first 4 bytes to access
+    return _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE) &
+	     DW1000_FLG_SYS_STATUS_IRQS;
+}
+
+
+/**
  * @brief Set interrupt mask.
  *
  * @param dw        driver context
