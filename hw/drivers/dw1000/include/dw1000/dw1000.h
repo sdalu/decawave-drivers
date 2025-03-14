@@ -925,7 +925,19 @@ void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable);
 /**
  * @brief To be used for interrupt processing
  *
+ * Will perform basic low-level processing of the events and will
+ * call the registered event handler (rx_ok, tx_done, rx_timeout, rx_error).
+ *
+ * In the case of rx_timeout and rx_error, the dw1000 is forcefully returned
+ * to the IDLE state. For rx_ok and tx_done, it is left in the programmed
+ * next step.
+ *
  * @note  This *can't* be used in interrupt handler, due to SPI request
+ *
+ * @param dw        driver context
+ *
+ * @retval true     at least one event has been processed
+ * @retval false    there was no event to process
  */
 bool dw1000_process_events(dw1000_t *dw);
 
@@ -1116,8 +1128,8 @@ dw1000_rx_set_timeout_preamble(dw1000_t *dw, uint16_t timeout)
  *          delay before transmission and the transmission time of
  *          the whole frame.
  *
- * @param [in]  dw      driver context
- * @param [in]  timeout timeout in "UWB microsencond" units (between 0..65535),
+ * @param [in] dw       driver context
+ * @param [in] timeout  timeout in "UWB microsencond" units (between 0..65535),
  *                       a value of 0 disable the timeout
  */
 void dw1000_rx_set_timeout(dw1000_t *dw, uint16_t timeout);
@@ -1126,7 +1138,7 @@ void dw1000_rx_set_timeout(dw1000_t *dw, uint16_t timeout);
 /**
  * @brief Enable/Disable frame filtering
  *
- * @param dw        driver context
+ * @param[in] dw        driver context
  * @param[in] bitmask   enabling filtering: DW1000_FF_DISABLED
  *                      or a combination of
  *      DW1000_FF_COORDINATOR    frames with no destination address
