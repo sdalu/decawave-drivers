@@ -11,24 +11,24 @@
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,
 		      uint8_t *hdr,  size_t hdrlen,
 		      uint8_t *data, size_t datalen) {
-    const struct bitters_spi_transfert xfr[] = {
+    const struct bitters_spi_transfer xfr[] = {
         { .tx = hdr,  .len = hdrlen  },
 	{ .tx = data, .len = datalen }
     };
 
-    int rc = bitters_spi_transfert(spi->dev, xfr, 2);
+    int rc = bitters_spi_transfer(spi->dev, xfr, 2);
     assert(rc >= 0);
 }
 
 void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
 		      uint8_t *hdr,  size_t hdrlen,
 		      uint8_t *data, size_t datalen) {
-    const struct bitters_spi_transfert xfr[] = {
+    const struct bitters_spi_transfer xfr[] = {
         { .tx = hdr,  .len = hdrlen  },
 	{ .rx = data, .len = datalen }
     };
 
-    int rc = bitters_spi_transfert(spi->dev, xfr, 2);
+    int rc = bitters_spi_transfer(spi->dev, xfr, 2);
     assert(rc >= 0);
 }
 
