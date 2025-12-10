@@ -279,7 +279,7 @@ dw1000_tx_extended_send(dw1000_t *dw,
 			uint8_t *data, size_t length, uint8_t tx_mode, ...) {
     struct iovec iovec = { .iov_base = data,
 			   .iov_len  = length };
-    return dw1000_tx_sendv(dw, &iovec, 1, tx_mode);
+    return dw1000_tx_extended_sendv(dw, &iovec, 1, tx_mode);
 }
 
 #endif
