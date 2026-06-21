@@ -1606,9 +1606,10 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
 void dw1000_tx_write_frame_data(dw1000_t *dw,
 			  uint8_t *data, size_t length, size_t offset) {
     // Protect device from buffer overflow
-    if (offset > 1024)
+    //  (Computed without overflow to avoid bypassing the clamp)
+    if (offset >= 1024)
 	return;
-    if ((offset + length) > 1024)
+    if (length > 1024 - offset)
 	length = 1024 - offset;
 
     // Write data
@@ -1758,11 +1759,12 @@ inline
 void dw1000_rx_read_frame_data(dw1000_t *dw,
 			       uint8_t *data, size_t length, size_t offset) {
     // Protect device from overreading the buffer
-    if (offset > 1024)
+    //  (Computed without overflow to avoid bypassing the clamp)
+    if (offset >= 1024)
 	return;
-    if ((offset + length) > 1024)
+    if (length > 1024 - offset)
 	length = 1024 - offset;
-    
+
     // Read data
     _dw1000_reg_read(dw, DW1000_REG_RX_BUFFER, offset, data, length);
 }
