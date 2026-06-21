@@ -9,7 +9,7 @@
 #define __DW1000_SEND_H__
 
 /**
- * @file    dw1000_send.c
+ * @file    dw1000_send.h
  * @brief   DW1000 send functions
  *
  * @addtogroup DW1000
@@ -96,7 +96,7 @@
 
 /**
  * @brief Embed timestamp in the trasmitted frame.
- * @pre   @p DW1000_TX_DELAYED should also be enabled
+ * @pre   @p DW1000_TX_DELAYED_START should also be enabled
  */
 #define DW1000_TX_DELAYED_EMBED_TIMESTAMP			0x1000
 /**
@@ -230,8 +230,8 @@ int dw1000_tx_sendv(dw1000_t *dw,
  *
  *
  * @param dw        driver context
- * @param data      data to send
- * @param length    length of the data
+ * @param iovec     io vector
+ * @param iovcnt    number of elements in vector
  * @param tx_mode   a set of the following flags/values are supported:
  *                  @p DW1000_TX_RESPONSE_EXPECTED,
  *                  @p DW1000_TX_RANGING,
@@ -249,9 +249,11 @@ int dw1000_tx_sendv(dw1000_t *dw,
  *                  Encoding will be done according to @p tx_mode parameter.
  *                  (parameter only available if @p DW1000_TX_DELAYED_EMBED_TIMESTAMP is specified)
  * @param delay     Scheduling delay (uint32_t)
- *                  (parameter only available if @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_DELAY is specified)
+ *                  (parameter only available if @p DW1000_TX_DELAYED_DELAY is specified)
  * @param retry_delay Scheduling delay for second attempt (uint32_t)
- *                  (parameter only available if @p DW1000_TX_DELAYED_EMBED_TIMESTAMP_RETRY_DELAY is specified)
+ *                  (parameter only available if @p DW1000_TX_DELAYED_RETRY_DELAY is specified)
+ * @param ap        variadic arguments (ts_offset, delay, retry_delay) as
+ *                  described above, packed in a @p va_list
  *
  * @retval  0        Transmission started
  * @retval -1        It was not possible to start transmission.

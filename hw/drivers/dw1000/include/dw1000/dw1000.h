@@ -9,8 +9,8 @@
 #define __DW1000_H__
 
 /**
- * @file    dw1000.c
- * @brief   DW1000 low level driver source.
+ * @file    dw1000.h
+ * @brief   DW1000 low level driver header.
  *
  * @addtogroup DW1000
  * @{
@@ -342,11 +342,11 @@ typedef struct dw1000_config {
      */
     uint8_t    leds;
     /**
-     * @brief Delay to take into account for antenna reception
+     * @brief Delay to take into account for antenna transmission
      */
     uint16_t   tx_antenna_delay;
     /**
-     * @brief Delay to take into account for antenna transmission
+     * @brief Delay to take into account for antenna reception
      */
     uint16_t   rx_antenna_delay;
     /**
@@ -543,10 +543,10 @@ void _dw1000_reg_read(dw1000_t *dw,
 
 /**
  * @internal
- * @brief Write date to the DW1000 register
+ * @brief Write data to the DW1000 register
  *
  * @param[in]  dw       driver context
- * @param[in]  reg      register to read [0x00..0x3F]
+ * @param[in]  reg      register to write [0x00..0x3F]
  * @param[in]  offset   write data at the offset [0x000..0x7FFF]
  * @param[in]  data     data to be written
  * @param[in]  length   length of data to write
@@ -954,7 +954,7 @@ bool dw1000_process_events(dw1000_t *dw);
  *
  * @note  The device time unit is 1 / (499.2e6 * 128) second
  * @note  The device assignable time unit is 512 (about 8ns),
- *        which means that the 9 lower bytes of the given time are ignored.
+ *        which means that the 9 lower bits of the given time are ignored.
  *
  * @param dw        driver context
  * @param time      time for delayed send or received time
