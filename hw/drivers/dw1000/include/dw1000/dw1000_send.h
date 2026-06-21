@@ -278,10 +278,14 @@ int dw1000_tx_extended_sendv(dw1000_t *dw,
 
 static inline int
 dw1000_tx_extended_send(dw1000_t *dw,
-			uint8_t *data, size_t length, uint8_t tx_mode, ...) {
+			uint8_t *data, size_t length, int tx_mode, ...) {
     struct iovec iovec = { .iov_base = data,
 			   .iov_len  = length };
-    return dw1000_tx_extended_sendv(dw, &iovec, 1, tx_mode);
+    va_list ap;
+    va_start(ap, tx_mode);
+    int rc = dw1000_tx_extended_vsendv(dw, &iovec, 1, tx_mode, ap);
+    va_end(ap);
+    return rc;
 }
 
 #endif
