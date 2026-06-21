@@ -735,8 +735,10 @@ static inline uint32_t
 dw1000_otp_get(dw1000_t *dw, uint16_t address)
 {
     uint32_t data;
+    // dw1000_otp_read() already returns host-order words, so no further
+    // endian conversion must be applied here.
     dw1000_otp_read(dw, address, &data, 1);
-    return dw1000_le32_to_cpu(data);
+    return data;
 }
 
 
