@@ -101,7 +101,7 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
 	break;
     case DW1000_TX_DELAYED_EMBED_TIMESTAMP_BIG_ENDIAN:
 	for (int i = 0 ; i < size ; i++)
-	    data[i] = (time >> ((4-i) * 8)) & 0xff;
+	    data[i] = (time >> ((size - 1 - i) * 8)) & 0xff;
 	break;
     }
     
