@@ -532,8 +532,12 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
     if (radio->tx_power & DW1000_TX_POWER_FLG_MANUAL) {
 	uint8_t power_05db = radio->tx_power & DW1000_TX_POWER_MSK_MANUAL;
 	if (power_05db > 61) power_05db = 61;
-	uint8_t coarse = power_05db / 10;
-	uint8_t fine   = power_05db - coarse * 5;
+	// UM §7.2.31.4: power = coarse (DA, 3dB = 6 x 0.5dB steps)
+	//                     + fine (mixer, 0.5dB steps, 0..31)
+	// Coarse field is (6 - coarse) and is 3-bit encoded (110..000)
+	uint8_t coarse = power_05db / 6;
+	if (coarse > 6) coarse = 6;
+	uint8_t fine   = power_05db - coarse * 6;
 	uint8_t power  = ((6 - coarse) << 5) | (fine);
 	dw->tx_power = (power << 16) | (power << 8);
     } else {
