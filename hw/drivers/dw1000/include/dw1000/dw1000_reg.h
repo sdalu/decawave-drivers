@@ -373,9 +373,9 @@
 #define DW1000_LEN_ACK_RESP_T                      4
 
 #define DW1000_SFT_ACK_RESP_T_W4R_TIM              0
-#define DW1000_MSK_ACK_RESP_T_W4R_TIM    (0xFF << 0)
+#define DW1000_MSK_ACK_RESP_T_W4R_TIM (0xFFFFF << 0)
 #define DW1000_SFT_ACK_RESP_T_ACK_TIM             24
-#define DW1000_MSK_ACK_RESP_T_ACK_TIM (0xFFFFF << 24)
+#define DW1000_MSK_ACK_RESP_T_ACK_TIM    (0xFF << 24)
 
 
 #define DW1000_REG_RX_SNIFF                     0x1D
