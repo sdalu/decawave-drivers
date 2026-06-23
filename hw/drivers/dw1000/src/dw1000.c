@@ -1296,7 +1296,7 @@ void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
 // System
 //----------------------------------------------------------------------
 
-void dw1000_read_temp_vbat(dw1000_t *dw, uint16_t *temp, uint16_t *vbat) {
+void dw1000_read_temp_vbat(dw1000_t *dw, int16_t *temp, uint16_t *vbat) {
     // From official deca_device.c (undocummented, part of RF_RES2)
     //   These writes should be single writes and in sequence
     // Enable TLD Bias

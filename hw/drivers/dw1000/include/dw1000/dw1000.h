@@ -839,10 +839,10 @@ dw1000_get_system_time(dw1000_t *dw)
  * @brief Read temperature and battery voltage
  *
  * @param dw         driver context
- * @param[out] temp  temperature (in 1/100 °C)
+ * @param[out] temp  temperature (in 1/100 °C, signed: can be below 0 °C)
  * @param[out] vbat  battery voltage in mV
  */
-void dw1000_read_temp_vbat(dw1000_t *dw, uint16_t *temp, uint16_t *vbat);
+void dw1000_read_temp_vbat(dw1000_t *dw, int16_t *temp, uint16_t *vbat);
 
 
 /**
