@@ -13,6 +13,13 @@
 #define DW1000_OSAL_SPI_BUFSIZE 196
 
 // XXX: WTF using a before and not 2 spiExchange ?!
+//
+// NOTE: This port copies header + payload into a fixed bounce buffer
+//       before a single spiExchange(). The buffer is only large enough
+//       for standard frames (<= 127 bytes payload + 3 bytes header), so
+//       this port does *not* support proprietary long frames. The guards
+//       below trap any transfer that would overflow the buffer instead of
+//       silently corrupting memory.
 
 static struct {
     uint8_t tx[DW1000_OSAL_SPI_BUFSIZE];
@@ -22,6 +29,9 @@ static struct {
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,
 		      uint8_t *hdr,  size_t hdrlen,
 		      uint8_t *data, size_t datalen) {
+    DW1000_ASSERT(hdrlen + datalen <= DW1000_OSAL_SPI_BUFSIZE,
+		  "SPI transfer too large (long frames unsupported on cf2)");
+
     spiBeginTransaction(spi->speed);
     digitalWrite(spi->cs_pin, LOW);
     memcpy(_dw1000_spi_buffer.tx, hdr, hdrlen);
@@ -34,6 +44,9 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
 void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
 		      uint8_t *hdr,  size_t hdrlen,
 		      uint8_t *data, size_t datalen) {
+    DW1000_ASSERT(hdrlen + datalen <= DW1000_OSAL_SPI_BUFSIZE,
+		  "SPI transfer too large (long frames unsupported on cf2)");
+
     spiBeginTransaction(spi->speed);
     digitalWrite(spi->cs_pin, LOW);
     memcpy(_dw1000_spi_buffer.tx, hdr, hdrlen);
