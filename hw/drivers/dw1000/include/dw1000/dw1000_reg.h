@@ -562,7 +562,7 @@
 #define DW1000_OFF_AON_CFG1                     0x0A
 
 #define DW1000_REG_OTP_IF                       0x2D
-#define DW1000_LEN_OTP_IF                         18
+#define DW1000_LEN_OTP_IF                         19
 #define DW1000_OFF_OTP_WDAT                     0x00
 #define DW1000_OFF_OTP_ADDR                     0x04
 #define DW1000_OFF_OTP_CTRL                     0x06
