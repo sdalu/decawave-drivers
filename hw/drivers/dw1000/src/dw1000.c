@@ -1248,17 +1248,17 @@ void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
     //  The DWSFD will trigger reading of USR_SFD#SFD_LENGTH
     const uint32_t chan_ctrl =
 	// Channel
-	(radio->channel         << DW1000_SFT_CHAN_CTRL_TX_CHAN ) | 
-	(radio->channel         << DW1000_SFT_CHAN_CTRL_RX_CHAN ) | 
+	((uint32_t)radio->channel  << DW1000_SFT_CHAN_CTRL_TX_CHAN ) |
+	((uint32_t)radio->channel  << DW1000_SFT_CHAN_CTRL_RX_CHAN ) |
 	// PRF
-	(radio->prf             << DW1000_SFT_CHAN_CTRL_RXPRF   ) | 
+	((uint32_t)radio->prf      << DW1000_SFT_CHAN_CTRL_RXPRF   ) |
 #if DW1000_WITH_PROPRIETARY_SFD
 	// SFD
-	(radio->proprietary.sfd << DW1000_SFT_CHAN_CTRL_DWSFD   ) |
+	((uint32_t)radio->proprietary.sfd << DW1000_SFT_CHAN_CTRL_DWSFD) |
 #endif
 	// Preamble code (TX/RX)
-	(radio->tx_pcode        << DW1000_SFT_CHAN_CTRL_TX_PCODE) | 
-	(radio->rx_pcode        << DW1000_SFT_CHAN_CTRL_RX_PCODE) ; 
+	((uint32_t)radio->tx_pcode << DW1000_SFT_CHAN_CTRL_TX_PCODE) |
+	((uint32_t)radio->rx_pcode << DW1000_SFT_CHAN_CTRL_RX_PCODE) ;
     
 
     /* Configure TX FCTRL (UM §7.2.10)
