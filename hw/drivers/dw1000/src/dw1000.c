@@ -1220,6 +1220,12 @@ void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
 		  ((radio->prf == DW1000_PRF_16MHZ) &&
 		   (radio->tx_pcode >= 1) && (radio->tx_pcode <=  8)),
 		  "incoherency between preamble code and prf");
+
+    DW1000_ASSERT(((radio->prf == DW1000_PRF_64MHZ) &&
+		   (radio->rx_pcode >= 9) && (radio->rx_pcode <= 24)) ||
+		  ((radio->prf == DW1000_PRF_16MHZ) &&
+		   (radio->rx_pcode >= 1) && (radio->rx_pcode <=  8)),
+		  "incoherency between preamble code and prf");
     
 
     
