@@ -87,7 +87,7 @@
 #define DW1000_FLG_SYS_CFG_RXWTOE          (1 << 28)
 #define DW1000_FLG_SYS_CFG_RXAUTR          (1 << 29)
 #define DW1000_FLG_SYS_CFG_AUTOACK         (1 << 30)
-#define DW1000_FLG_SYS_CFG_AACKPEND        (1 << 31)
+#define DW1000_FLG_SYS_CFG_AACKPEND        (1u << 31)
 #define DW1000_MSK_SYS_CFG        (             \
     DW1000_FLG_SYS_CFG_FFEN       |             \
     DW1000_FLG_SYS_CFG_FFBC       |             \
@@ -276,10 +276,10 @@
 #define DW1000_FLG_SYS_STATUS_TXBERR       (1 << 28)
 #define DW1000_FLG_SYS_STATUS_AFFREJ       (1 << 29)
 #define DW1000_FLG_SYS_STATUS_HSRBP        (1 << 30)
-#define DW1000_FLG_SYS_STATUS_ICRBP        (1 << 31)
-#define DW1000_FLG_SYS_STATUS_RXRSCS       (1 << 32)
-#define DW1000_FLG_SYS_STATUS_RXPREJ       (1 << 33)
-#define DW1000_FLG_SYS_STATUS_TXPUTE       (1 << 34)
+#define DW1000_FLG_SYS_STATUS_ICRBP        (1u << 31)
+#define DW1000_FLG_SYS_STATUS_RXRSCS       (1ull << 32)
+#define DW1000_FLG_SYS_STATUS_RXPREJ       (1ull << 33)
+#define DW1000_FLG_SYS_STATUS_TXPUTE       (1ull << 34)
 #define DW1000_MSK_SYS_STATUS_ALL_DBLBUFF       \
     (DW1000_FLG_SYS_STATUS_RXDFR   |            \
      DW1000_FLG_SYS_STATUS_RXFCG)
