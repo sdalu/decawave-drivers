@@ -797,8 +797,13 @@ uint16_t dw1000_rx_get_pacc_count(dw1000_t *dw) {
 	 DW1000_MSK_RX_FINFO_RXPACC) >> DW1000_SFT_RX_FINFO_RXPACC;
     uint16_t rxpacc_nosat =
 	_dw1000_reg_read16(dw, DW1000_REG_DRX_CONF,DW1000_OFF_DRX_RXPACC_NOSAT);
-    if (rxpacc == rxpacc_nosat)
-	rxpacc += dw->rxpacc_adj;
+    if (rxpacc == rxpacc_nosat) {
+	// The SFD adjustment is negative; clamp at 0 instead of
+	// wrapping the unsigned count when the accumulation was
+	// shorter than the adjustment
+	int32_t adjusted = (int32_t)rxpacc + dw->rxpacc_adj;
+	rxpacc = (adjusted > 0) ? adjusted : 0;
+    }
 
     return rxpacc;
 }
