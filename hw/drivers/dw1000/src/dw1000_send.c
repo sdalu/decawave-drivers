@@ -84,7 +84,12 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
     // Adjust time to take into account antenna delay
     // when embedding timestamp
     time += dw->config->tx_antenna_delay;
-    
+
+    // Keep the value within the 40-bit device clock: the DX_TIME
+    // register write truncates naturally, but the 64-bit embed below
+    // would otherwise leak the wrap carry into byte 5
+    time &= (1ull << DW1000_TIME_CLOCK_BITS) - 1;
+
     // Build timestamp data
     switch(tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_SIZE_MASK) {
     case DW1000_TX_DELAYED_EMBED_TIMESTAMP_40BIT:
