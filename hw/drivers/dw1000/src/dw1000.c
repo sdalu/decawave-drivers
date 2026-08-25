@@ -1605,7 +1605,11 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
 		  (dw->radio->proprietary.long_frames && (length <= 1023)) ||
 #endif
 		  (length <= 127), "bad frame length");
-    
+
+    // TXBOFFS is a 10-bit field; a larger offset would corrupt the
+    // neighbouring TX_FCTRL bits
+    DW1000_ASSERT(offset <= 1023, "bad buffer offset");
+
     uint32_t tx_fctrl = dw->reg.tx_fctrl;
     if (tx_mode & DW1000_TX_RANGING)
 	tx_fctrl |= DW1000_FLG_TX_FCTRL_TR;
