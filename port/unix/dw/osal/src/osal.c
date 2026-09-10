@@ -6,7 +6,13 @@
  */
 
 #include "dw1000/osal.h"
+#include <string.h>
 
+static inline
+void _dw1000_spi_record(dw1000_spi_driver_t *spi, int rc) {
+    if (rc < 0 && spi->error == 0)
+        spi->error = rc;
+}
 
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,
 		      uint8_t *hdr,  size_t hdrlen,
@@ -17,7 +23,7 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
     };
 
     int rc = bitters_spi_transfer(spi->dev, xfr, 2);
-    assert(rc >= 0);
+    _dw1000_spi_record(spi, rc);
 }
 
 void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
@@ -29,7 +35,9 @@ void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
     };
 
     int rc = bitters_spi_transfer(spi->dev, xfr, 2);
-    assert(rc >= 0);
+    _dw1000_spi_record(spi, rc);
+    if (rc < 0)
+        memset(data, 0, datalen);
 }
 
 void _dw1000_spi_low_speed(dw1000_spi_driver_t *spi) {

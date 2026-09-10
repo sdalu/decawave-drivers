@@ -87,6 +87,7 @@ typedef struct dw1000_spi_driver {
     struct bitters_spi_cfg  *config;
     uint32_t      	     high_speed;
     uint32_t	             low_speed;
+    int                      error;
 } dw1000_spi_driver_t;
 
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,
