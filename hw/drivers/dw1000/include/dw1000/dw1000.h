@@ -963,11 +963,54 @@ void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time);
 
 
 /**
- * @brief Turn off transceiver
+ * @internal
+ * @brief Turn off transceiver, clearing the given event status bits
+ *
+ * Backs dw1000_txrx_off() and dw1000_txrx_idle(); the event processing
+ * calls it directly to drop what the receiver raised without touching
+ * what the transmitter did.
+ *
+ * @param dw        driver context
+ * @param clear     event status bits to clear (none when 0)
+ */
+void _dw1000_txrx_off(dw1000_t *dw, uint32_t clear);
+
+
+/**
+ * @brief Turn off transceiver, dropping the pending events
+ *
+ * The transceiver returns to IDLE and every event the transmitter or the
+ * receiver had raised is cleared, whether it has been reported or not.
+ * That is what makes it the right call for shutting the radio down or
+ * abandoning an operation; when the pending events still matter, use
+ * dw1000_txrx_idle().
  *
  * @param dw        driver context
  */
-void dw1000_txrx_off(dw1000_t *dw);
+static inline void
+dw1000_txrx_off(dw1000_t *dw)
+{
+    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_TX     |
+			 DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+			 DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+			 DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+}
+
+
+/**
+ * @brief Turn off transceiver, keeping the pending events
+ *
+ * The transceiver returns to IDLE, leaving the event status untouched:
+ * a frame the receiver has already reported, or a transmission that has
+ * just completed, is still there to be processed.
+ *
+ * @param dw        driver context
+ */
+static inline void
+dw1000_txrx_idle(dw1000_t *dw)
+{
+    _dw1000_txrx_off(dw, 0);
+}
 
 
 

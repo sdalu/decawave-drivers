@@ -1491,8 +1491,15 @@ bool dw1000_process_events(dw1000_t *dw) {
         _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
 			   DW1000_MSK_SYS_STATUS_ALL_RX_TO); 
 
-	// Turn off receiver (return to IDLE state)
-	dw1000_txrx_off(dw);
+	// Turn off receiver (return to IDLE state), dropping what the
+	// receiver raised -- the frame-ready flags the failed frame
+	// leaves behind included, or the receiver stays confused -- but
+	// not what the transmitter raised: dw1000_txrx_off() would also
+	// clear a completion set since the status snapshot taken above,
+	// and nothing would ever report it
+	_dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+			     DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+			     DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
 
 	// HOTFIX: UM §4.1.6: RX Message timestamp
 	//   "Due to an issue in the re-initialisation of the receiver,
@@ -1515,8 +1522,15 @@ bool dw1000_process_events(dw1000_t *dw) {
         _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
 			   DW1000_MSK_SYS_STATUS_ALL_RX_ERR);
 
-	// Turn off receiver (return to IDLE state)
-	dw1000_txrx_off(dw);
+	// Turn off receiver (return to IDLE state), dropping what the
+	// receiver raised -- the frame-ready flags the failed frame
+	// leaves behind included, or the receiver stays confused -- but
+	// not what the transmitter raised: dw1000_txrx_off() would also
+	// clear a completion set since the status snapshot taken above,
+	// and nothing would ever report it
+	_dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+			     DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+			     DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
 
 	// HOTFIX: UM §4.1.6: RX Message timestamp
 	//   "Due to an issue in the re-initialisation of the receiver,
@@ -1549,7 +1563,7 @@ void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time) {
 }
 
 
-void dw1000_txrx_off(dw1000_t *dw) {   
+void _dw1000_txrx_off(dw1000_t *dw, uint32_t clear) {
     // Save interrupt mask
     uint32_t sys_mask =
 	_dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE);
@@ -1563,12 +1577,9 @@ void dw1000_txrx_off(dw1000_t *dw) {
 
     
     // UM §7.2.17: System Event Status Register
-    // Clear events bits (done by writting 1 to seem)
-    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
-		       (DW1000_MSK_SYS_STATUS_ALL_TX     |
-			DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
-			DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
-			DW1000_MSK_SYS_STATUS_ALL_RX_GOOD));
+    // Clear the requested events bits (done by writting 1 to them)
+    if (clear != 0)
+	_dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE, clear);
 
     // Reset double buffer
     dw1000_rx_sync_dblbuf(dw);
