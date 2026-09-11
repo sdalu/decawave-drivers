@@ -8,6 +8,16 @@
 #include "dw1000/osal.h"
 
 
+/* Keep the first failure for the caller to find (see the error field):
+ * asserting here would take the node down on a transient bus error,
+ * and returning nothing leaves a zeroed read passing for register
+ * content. */
+static inline
+void _dw1000_spi_record(dw1000_spi_driver_t *spi, int rc) {
+    if (rc < 0 && spi->error == 0)
+        spi->error = rc;
+}
+
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,
 		      uint8_t *hdr,  size_t hdrlen,
 		      uint8_t *data, size_t datalen) {
@@ -17,9 +27,7 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
 	.count   = 2,
     };
 
-    int rc __attribute__((unused)) =
-	spi_write(spi->dev, spi->config, &tx);
-    __ASSERT(rc >= 0, "spi write failed (%d)", rc);
+    _dw1000_spi_record(spi, spi_write(spi->dev, spi->config, &tx));
 }
 
 void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
@@ -36,9 +44,7 @@ void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
 	.count   = 2,
     };
 
-    int rc __attribute__((unused)) =
-	spi_transceive(spi->dev, spi->config, &tx, &rx);
-    __ASSERT(rc >= 0, "spi transceive failed (%d)", rc);
+    _dw1000_spi_record(spi, spi_transceive(spi->dev, spi->config, &tx, &rx));
 }
 
 void _dw1000_spi_low_speed(dw1000_spi_driver_t *spi) {

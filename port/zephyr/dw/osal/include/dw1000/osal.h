@@ -64,11 +64,17 @@
 #define DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011	0
 #endif
 
+/* Delayed-send defaults: a Kconfig value of 0 leaves the driver's own
+ * (2 ms, and twice that for the retry; see dw1000_send.h) */
+#if CONFIG_DW1000_TX_DELAYED_DEFAULT_DELAY != 0
 #define DW1000_TX_DELAYED_DEFAULT_DELAY			\
     CONFIG_DW1000_TX_DELAYED_DEFAULT_DELAY
+#endif
 
+#if CONFIG_DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY != 0
 #define DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY		\
     CONFIG_DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY
+#endif
 
 
 /*----------------------------------------------------------------------*/
@@ -148,6 +154,12 @@ typedef struct dw1000_spi_driver {
     struct spi_config *config_low_speed;
     struct spi_config *config_high_speed;
     struct spi_config *config;
+    /* First failure of a transfer since the field was last cleared
+     * (a negative errno), 0 when all transfers went through. The
+     * driver has no error path: a failed read leaves its buffer as it
+     * was, so the caller must look here to tell a failure from data.
+     * Cleared by whoever reports it. */
+    int                error;
 } dw1000_spi_driver_t;
 
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,

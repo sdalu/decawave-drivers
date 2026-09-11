@@ -49,17 +49,20 @@ config DW1000_HOTFIX_AAT_IEEE802_15_4_2011
 	default y
 
 config DW1000_TX_DELAYED_DEFAULT_DELAY
-        int "Specify the delay to used when embeding timestamp"
+        int "Default lead time of a delayed send"
  	help
-	  Value can be between 1 and 2^32 in DW1000_TIME_CLOCK_HZ steps.
-          A value of 0 means disable.
+	  How far ahead a delayed send (embedded timestamp) is scheduled
+	  when the caller gives no delay, in DW1000_TIME_CLOCK_HZ steps
+	  (1 to 2^32). 0 keeps the driver's own default, 2 ms.
 	default 0
 
 config DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY
-        int "Specify the retry delay to used when embeding timestamp"
+        int "Default lead time of the retry after a late delayed send"
  	help
-	  Value can be between 1 and 2^32 in DW1000_TIME_CLOCK_HZ steps.
-          A value of 0 means disable.
+	  Lead time given to the retry that follows a delayed send the chip
+	  reported as too late, in DW1000_TIME_CLOCK_HZ steps (1 to 2^32),
+	  not below the delay. 0 keeps the driver's own default, twice the
+	  delay.
 	default 0
 
 endif
