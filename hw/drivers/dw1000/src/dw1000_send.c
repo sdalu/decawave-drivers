@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <stdarg.h>
+#include <string.h>
 
 #include "dw1000/osal.h"
 #include "dw1000/dw1000.h"
@@ -53,9 +54,34 @@ _dw1000_tx_prepare_fctrl(dw1000_t *dw, size_t length, int tx_mode)
     dw1000_tx_fctrl(dw, length, 0, tx_mode);
 }
 
+/* Copy `size` bytes of `data` into the caller's scattered buffer at
+ * frame offset `offset`, spanning segments if need be, so the caller's
+ * copy of the frame carries the same timestamp as the one in the chip.
+ * Bytes falling past the end of the buffer are not written (the caller
+ * gave an offset beyond its own data: the chip still got them). */
+static inline void
+_dw1000_iovec_write(struct iovec *iovec, int iovcnt,
+		    size_t offset, const uint8_t *data, size_t size)
+{
+    for ( ; (iovcnt > 0) && (size > 0) ; iovec++, iovcnt--) {
+	if (offset >= iovec->iov_len) {
+	    offset -= iovec->iov_len;
+	    continue;
+	}
+	size_t n = iovec->iov_len - offset;
+	if (n > size)
+	    n = size;
+	memcpy((uint8_t *)iovec->iov_base + offset, data, n);
+	data   += n;
+	size   -= n;
+	offset  = 0;
+    }
+}
+
 static inline void
 _dw1000_tx_prepare_delayed_embed_timestamp(
-	dw1000_t *dw, size_t offset, uint32_t delay, int tx_mode)
+	dw1000_t *dw, struct iovec *iovec, int iovcnt,
+	size_t offset, uint32_t delay, int tx_mode)
 {
     // Sanity check
     DW1000_ASSERT(((tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_ENDIAN_MASK)
@@ -71,7 +97,7 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
 
     // Variables
     size_t   size    = 0;
-    char     data[8] = { 0 };
+    uint8_t  data[8] = { 0 };
     uint64_t time;
 
     // Compute delayed send
@@ -101,17 +127,21 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
     }
     switch(tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_ENDIAN_MASK) {
     case DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN:
-	for (int i = 0 ; i < size ; i++)
+	for (size_t i = 0 ; i < size ; i++)
 	    data[i] = (time >> (i     * 8)) & 0xff;
 	break;
     case DW1000_TX_DELAYED_EMBED_TIMESTAMP_BIG_ENDIAN:
-	for (int i = 0 ; i < size ; i++)
+	for (size_t i = 0 ; i < size ; i++)
 	    data[i] = (time >> ((size - 1 - i) * 8)) & 0xff;
 	break;
     }
     
-    // Embed timestamp
+    // Embed timestamp, in the chip's transmit buffer and in the caller's
+    // copy of the frame alike: the caller then knows the exact time the
+    // frame goes out (TX_STAMP will report the same value on completion,
+    // a self-check for the host), without waiting for that completion.
     dw1000_tx_write_frame_data(dw, data, size, offset);
+    _dw1000_iovec_write(iovec, iovcnt, offset, data, size);
 }
 
 
@@ -182,7 +212,8 @@ dw1000_tx_extended_vsendv(
 	return -1;
 	
     // Prepare embedded timestamp and start transmit
-    _dw1000_tx_prepare_delayed_embed_timestamp(dw, offset, delay, tx_mode);
+    _dw1000_tx_prepare_delayed_embed_timestamp(dw, iovec, iovcnt,
+					       offset, delay, tx_mode);
     rc = dw1000_tx_start(dw, tx_mode);
     if ((rc < 0) && !last_try) {
 	delay    = retry_delay;

@@ -39,29 +39,48 @@
 #endif
 
 /**
+ * @brief Milliseconds to ticks of the device clock (DW1000_TIME_CLOCK_HZ)
+ *
+ * @note  Usable in preprocessor conditionals (no cast): the result is an
+ *        unsigned long long, to be assigned to a uint32_t delay (fits
+ *        below ~67 ms).
+ */
+#define DW1000_TX_DELAYED_MS(ms)					\
+    ((DW1000_TIME_CLOCK_HZ * (ms)) / 1000)
+
+/**
  * @brief Value for default delay when embedding timestamp automatically
  *
- * @details Value can be between 0 and 2^32, in DW1000_TIME_CLOCK_HZ steps.
- *          A value of 0 means disabled.
+ * @details Value can be between 0 and 2^32, in DW1000_TIME_CLOCK_HZ steps
+ *          (2^32 ticks is ~67 ms). A value of 0 means disabled: the send
+ *          fails unless the caller passes a delay (DW1000_TX_DELAYED_DELAY).
  * @note  The value should be selected to allow enough time for the
- *        system and dw1000 chip to prepare the frame.
+ *        system and dw1000 chip to prepare the frame: between the read of
+ *        the system time and TXSTRT sit the DX_TIME write, the timestamp
+ *        write and the SYS_CTRL write, plus the chip's transmit power-up.
+ *        On a Linux host driving the chip over spidev, each transaction
+ *        costs tens of microseconds and the thread may be preempted, so
+ *        2 ms is the default; a bare-metal host can go well below 1 ms.
  * @note  Setting delay for TX, only consider a DW1000_CLOCK_MIN rounded time
  */
 #if !defined(DW1000_TX_DELAYED_DEFAULT_DELAY) || defined(__DOXYGEN__)
-#define DW1000_TX_DELAYED_DEFAULT_DELAY 0
+#define DW1000_TX_DELAYED_DEFAULT_DELAY DW1000_TX_DELAYED_MS(2)
 #endif
 
 /**
  * @brief Value for default delay when retrying to embed timestamp automatically
  *
  * @details Value can be between 0 and 2^32, in DW1000_TIME_CLOCK_HZ steps.
- *          A value of 0 means disabled.
- * @note  The value should be selected to allow enough time for the
- *        system and dw1000 chip to prepare the frame.
+ *          A value of 0 means disabled (no retry). The retry happens after
+ *          the chip found the first attempt too late (HPDWARN), so it must
+ *          be at least the initial delay; twice the initial delay is the
+ *          default, so that overriding DW1000_TX_DELAYED_DEFAULT_DELAY
+ *          alone keeps the two in proportion.
  * @note  Setting delay for TX, only consider a DW1000_CLOCK_MIN rounded time
  */
 #if !defined(DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY) || defined(__DOXYGEN__)
-#define DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY 0
+#define DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY				\
+    (2 * DW1000_TX_DELAYED_DEFAULT_DELAY)
 #endif
 
 /** @} */
@@ -72,8 +91,11 @@
 /* Sanity check                                                              */
 /*===========================================================================*/
 
-#if DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY > DW1000_TX_DELAYED_DEFAULT_DELAY
-#error "Retry delay can't be lower than intial delay"
+/* A retry follows a "too late" (HPDWARN) and must leave more time than
+ * the attempt that was late, unless retries are disabled (0). */
+#if (DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY != 0) &&			\
+    (DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY < DW1000_TX_DELAYED_DEFAULT_DELAY)
+#error "Retry delay can't be lower than initial delay"
 #endif
 
 
@@ -247,6 +269,13 @@ int dw1000_tx_sendv(dw1000_t *dw,
  * @param ts_offset Timestamp placement in the frame (size_t),
  *                  offset is specified from the start of the frame.
  *                  Encoding will be done according to @p tx_mode parameter.
+ *                  The timestamp is written both in the chip's transmit
+ *                  buffer and, at the same offset, in the caller's @p iovec
+ *                  data: on return the caller's frame carries the exact
+ *                  time the frame leaves (the value TX_STAMP will report,
+ *                  antenna delay included), without waiting for the
+ *                  completion. The caller's buffers must therefore be
+ *                  writable.
  *                  (parameter only available if @p DW1000_TX_DELAYED_EMBED_TIMESTAMP is specified)
  * @param delay     Scheduling delay (uint32_t)
  *                  (parameter only available if @p DW1000_TX_DELAYED_DELAY is specified)
