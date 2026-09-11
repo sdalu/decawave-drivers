@@ -307,8 +307,14 @@ typedef struct dw1000_config {
      * as a good frame is reported, before calling the rx_ok callback,
      * so that the next frame lands in the other buffer while the
      * callback reads this one out; it toggles the host side buffer
-     * pointer once the callback returns. The rx_ok callback must then
-     * NOT re-enable the receiver itself. A receiver overrun (RXOVRR,
+     * pointer once the callback returns. Two obligations follow for the
+     * rx_ok callback: it must NOT re-enable the receiver itself, and it
+     * must read everything it needs from the frame (RX_BUFFER, RX_TIME,
+     * RX_FQUAL, RX_TTCKI, RX_TTCKO) BEFORE returning -- once the pointer
+     * has been toggled those registers show the other buffer, and a
+     * host that defers the read-out to a later step gets the previous
+     * frame's data with the current frame's length. A receiver overrun
+     * (RXOVRR,
      * both buffers held while a third frame arrived) is recovered
      * (transceiver off, receiver reset, pointers re-aligned) and
      * reported through the rx_error callback with RXOVRR set in the
