@@ -301,7 +301,20 @@ typedef struct dw1000 dw1000_t;
  */
 typedef struct dw1000_config {
     /**
-     * @brief Use of double buffer
+     * @brief Use of double buffer (UM §4.3.3)
+     *
+     * When set, dw1000_process_events() re-enables the receiver as soon
+     * as a good frame is reported, before calling the rx_ok callback,
+     * so that the next frame lands in the other buffer while the
+     * callback reads this one out; it toggles the host side buffer
+     * pointer once the callback returns. The rx_ok callback must then
+     * NOT re-enable the receiver itself. A receiver overrun (RXOVRR,
+     * both buffers held while a third frame arrived) is recovered
+     * (transceiver off, receiver reset, pointers re-aligned) and
+     * reported through the rx_error callback with RXOVRR set in the
+     * status, which is expected to re-enable the receiver as for any
+     * error. Interrupts on RXOVRR (DW1000_FLG_SYS_MASK_MRXOVRR) should
+     * be enabled along with the receive ones.
      */
     uint8_t    dblbuff:1;
     /**

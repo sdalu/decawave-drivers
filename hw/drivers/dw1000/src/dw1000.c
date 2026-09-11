@@ -1378,6 +1378,31 @@ bool dw1000_process_events(dw1000_t *dw) {
     uint32_t status =
 	_dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE); 
     
+    // Handle RX overrun (double buffered receive only)
+    //   UM §4.3.3: a frame arrived while both buffers were still held
+    //   by the host, so the buffered data can no longer be trusted.
+    //   Recover the receiver (transceiver off, receiver reset, buffer
+    //   pointers re-aligned) and report it as a receive error, so that
+    //   the host re-arms the receiver as it does for any other error.
+    if (cfg->dblbuff && (status & DW1000_FLG_SYS_STATUS_RXOVRR)) {
+	_dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
+			     DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
+			     DW1000_MSK_SYS_STATUS_ALL_RX_TO   |
+			     DW1000_FLG_SYS_STATUS_RXOVRR);
+	dw1000_rx_reset(dw);
+	dw->wait4resp = 0;
+
+	if (cfg->cb.rx_error) {
+	    cfg->cb.rx_error(dw, status);
+	}
+
+	// Nothing of the receive side is left to handle below
+	status &= ~(DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
+		    DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
+		    DW1000_MSK_SYS_STATUS_ALL_RX_TO   |
+		    DW1000_FLG_SYS_STATUS_RXOVRR);
+    }
+
     // Handle RX good frame event
     // We just care about RXFCG, which means everything is ok
     //   RXPRD   : Receiver Preamble Detected status
@@ -1389,6 +1414,21 @@ bool dw1000_process_events(dw1000_t *dw) {
     if (status & DW1000_FLG_SYS_STATUS_RXFCG) {
 	// Clear all receive status bits
 	uint32_t clear = DW1000_MSK_SYS_STATUS_ALL_RX_GOOD;
+
+	// UM §4.3.3: double buffered receive
+	//   The frame sits in the host side buffer, and the receive
+	//   registers (RX_FINFO, RX_BUFFER, RX_FQUAL, RX_TTCKI, RX_TTCKO,
+	//   RX_TIME) are read from it, so the receiver can be re-enabled
+	//   right away: the next frame lands in the other buffer while
+	//   this one is read out, instead of being lost during that time.
+	//   The buffer pointers must not be synced here (the host side one
+	//   still designates the buffer being read); the host side pointer
+	//   is toggled once the callback has consumed the frame, below.
+	//   The rx_ok callback must therefore NOT re-enable the receiver.
+	if (cfg->dblbuff) {
+	    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
+				DW1000_FLG_SYS_CTRL_RXENAB);
+	}
 
         // Read frame info
 	//   and deduce length and ranging
@@ -1581,9 +1621,15 @@ void _dw1000_txrx_off(dw1000_t *dw, uint32_t clear) {
     if (clear != 0)
 	_dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE, clear);
 
-    // Reset double buffer
-    dw1000_rx_sync_dblbuf(dw);
-    
+    // Re-align the double buffer pointers, but only when the received
+    // frames are being dropped along with their status: in double
+    // buffered mode a frame reported and not yet read out sits in the
+    // host side buffer, and syncing the pointers would hand that buffer
+    // back to the chip (dw1000_txrx_idle() is used before a transmit
+    // for exactly that case).
+    if (clear & DW1000_MSK_SYS_STATUS_ALL_RX_GOOD)
+	dw1000_rx_sync_dblbuf(dw);
+
     // Reset internal flags
     dw->wait4resp = 0;
 
