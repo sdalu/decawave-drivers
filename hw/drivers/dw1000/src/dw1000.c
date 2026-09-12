@@ -498,11 +498,10 @@ void _dw1000_softreset(dw1000_t *dw) {
  */
 static inline
 void _dw1000_radio_tuning(dw1000_t *dw) {
-    const dw1000_radio_t radio = dw->radio;
-
-    /* Sanity check
+    /* The driver's own copy, already validated by _dw1000_radio_is_valid()
+     * and stored by dw1000_configure() before this is called.
      */
-    DW1000_ASSERT(radio != NULL, "radio parameter not defined");
+    const struct dw1000_radio *radio = &dw->radio;
 
 
     /* Retrieve channel/PRF/Bitrate table helpers
@@ -1393,7 +1392,7 @@ int dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
 
     /* Save radio and some register settings to driver memory
      */
-    dw->radio        = radio;    
+    dw->radio        = *radio;   
     dw->reg.tx_fctrl = tx_fctrl;
     dw->reg.sys_cfg  = sys_cfg;
 
@@ -1811,7 +1810,7 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
 		     int tx_mode) {
     DW1000_ASSERT(
 #if DW1000_WITH_PROPRIETARY_LONG_FRAME
-		  (dw->radio->proprietary.long_frames && (length <= 1023)) ||
+		  (dw->radio.proprietary.long_frames && (length <= 1023)) ||
 #endif
 		  (length <= 127), "bad frame length");
 
@@ -2061,8 +2060,8 @@ void dw1000_rx_get_time_tracking(dw1000_t *dw,
 void dw1000_rx_get_power_estimate(dw1000_t *dw,
 				  double *signal, double *firstpath) {
     // PRF of 4MHZ is unsupported by DW1000
-    DW1000_ASSERT((dw->radio->prf == DW1000_PRF_16MHZ) ||
-		  (dw->radio->prf == DW1000_PRF_64MHZ),
+    DW1000_ASSERT((dw->radio.prf == DW1000_PRF_16MHZ) ||
+		  (dw->radio.prf == DW1000_PRF_64MHZ),
 		  "unsupported PRF value");
 
     // UM §4.7.1/§4.7.2: "A = is the constant 113.77 for a PRF of 16 MHz,
@@ -2071,7 +2070,7 @@ void dw1000_rx_get_power_estimate(dw1000_t *dw,
     //  PRF     4   16        64
     //  A       -   113.77    121.74
     double N  = (double) dw1000_rx_get_pacc_count(dw);
-    double A  = dw->radio->prf == DW1000_PRF_16MHZ ? 113.77 : 121.74;
+    double A  = dw->radio.prf == DW1000_PRF_16MHZ ? 113.77 : 121.74;
 
     // Firstpath power
     if (firstpath) {
@@ -2097,7 +2096,7 @@ void dw1000_rx_get_power_estimate(dw1000_t *dw,
 
 double dw1000_rx_power_correction(dw1000_t *dw, double p) {
     // UM §4.7: [Figure 22]: Estimated RX level versus actual RX level
-    switch (dw->radio->prf) {
+    switch (dw->radio.prf) {
     case DW1000_PRF_16MHZ:
 	// Approximated by segment:
 	// Estimated: -105 / -88 / -81

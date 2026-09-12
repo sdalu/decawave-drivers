@@ -441,7 +441,16 @@ typedef struct dw1000_config {
 struct dw1000 {
     const dw1000_config_t *config;
 
-    dw1000_radio_t radio;
+    /* The radio configuration, held by value: dw1000_configure() copies
+     * the caller's struct in, so the caller's own does not have to
+     * outlive the call. Several entry points read it long afterwards
+     * (dw1000_rx_get_power_estimate(), dw1000_rx_power_correction(), and
+     * with long frames dw1000_rx_get_frame_info() on every received
+     * frame), so holding the caller's pointer made the natural spelling
+     * -- a local struct in a setup function -- a use after return.
+     * Zeroed by dw1000_init() until a configure succeeds, which the PRF
+     * of 0 (DW1000_PRF_4MHZ, not a usable value) makes detectable. */
+    struct dw1000_radio radio;
 
     struct {
 	uint32_t device;
@@ -847,6 +856,9 @@ int dw1000_initialise(dw1000_t *dw);
  *          configuration it already had -- which on a first call is
  *          none at all. Transmitting or receiving after a failed
  *          configure is a programming error.
+ *
+ * @note  The configuration is copied into @p dw, so @p radio does not
+ *        need to outlive the call.
  *
  * @param dw        driver context
  * @param radio     radio configuration
@@ -1280,7 +1292,7 @@ dw1000_rx_get_frame_info(dw1000_t *dw, size_t *length, bool *ranging)
 
     if (length) {
 #if DW1000_WITH_PROPRIETARY_LONG_FRAME
-	const uint32_t msk = dw->radio->proprietary.long_frames
+	const uint32_t msk = dw->radio.proprietary.long_frames
 	                   ? DW1000_MSK_RX_FINFO_RXFLE_RXFLEN
 	                   : DW1000_MSK_RX_FINFO_RXFLEN;
 #else
