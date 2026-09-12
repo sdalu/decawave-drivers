@@ -1757,6 +1757,21 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
     // neighbouring TX_FCTRL bits
     DW1000_ASSERT(offset <= 1023, "bad buffer offset");
 
+    // The asserts above are compiled out on four of the five ports, so
+    // both values are clamped as well before they are shifted into
+    // place. TFLEN+TFLE occupy bits 0-9 and TXBOFFS bits 22-31: an
+    // out of range length shifts into TXBR (bits 13-14) and silently
+    // changes the on-air bitrate, which is a far worse failure than the
+    // truncated frame clamping gives -- and the same silent-clamp
+    // behaviour dw1000_tx_write_frame_data() already applies to the
+    // buffer write this length describes.
+    const size_t max_length =
+	DW1000_MSK_TX_FCTRL_TFLE_TFLEN >> DW1000_SFT_TX_FCTRL_TFLEN;
+    const size_t max_offset =
+	DW1000_MSK_TX_FCTRL_TXBOFFS    >> DW1000_SFT_TX_FCTRL_TXBOFFS;
+    if (length > max_length) length = max_length;
+    if (offset > max_offset) offset = max_offset;
+
     uint32_t tx_fctrl = dw->reg.tx_fctrl;
     if (tx_mode & DW1000_TX_RANGING)
 	tx_fctrl |= DW1000_FLG_TX_FCTRL_TR;
