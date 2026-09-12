@@ -603,6 +603,8 @@
 #define DW1000_VAL_PMSC_CTRL0_SYSCLKS_125M       0x2
 
 #define DW1000_FLG_PMSC_CTRL0_FACE         (1 <<  6)
+/* Reserved in the UM, and unnamed: see _dw1000_clocks() */
+#define DW1000_FLG_PMSC_CTRL0_LDECLK       (1 <<  8)
 #define DW1000_FLG_PMSC_CTRL0_ADCCE        (1 << 10)
 #define DW1000_FLG_PMSC_CTRL0_AMCE         (1 << 15)
 #define DW1000_FLG_PMSC_CTRL0_GPCE         (1 << 16)

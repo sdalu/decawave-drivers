@@ -104,6 +104,7 @@
 #define DW1000_CLOCK_SYS_XTI               1
 #define DW1000_CLOCK_SYS_PLL               2
 #define DW1000_CLOCK_TX_CONTINOUSFRAME     3
+#define DW1000_CLOCK_LDE_LOAD              4
 
 
 
@@ -380,21 +381,28 @@ void _dw1000_reg_clear32(dw1000_t *dw,
  *                       - DW1000_CLOCK_SYS_XTI
  *                       - DW1000_CLOCK_SYS_PLL
  *                       - DW1000_CLOCK_TX_CONTINOUSFRAME
+ *                       - DW1000_CLOCK_LDE_LOAD
  */
 static
 void _dw1000_clocks(dw1000_t *dw, int mode) {
-    /* PMSC CTRL0 is a 4-byte length field
-     * Here we are only interested in the first byte (holding SYSCLKS)
+    /* PMSC CTRL0 is a 4-byte length field.
+     * Byte 0 holds the sys/tx/rx clock selections, and byte 1 holds the
+     * LDECLK bit that UM §2.5.5.10 (table 4) requires set while the LDE
+     * microcode is copied from ROM to RAM. Both are read-modify-written,
+     * so bits no mode touches keep their value -- except the high byte
+     * during DW1000_CLOCK_LDE_LOAD, which table 4 pins to an exact value.
      */
 
     // Read current value
-    uint8_t pmsc_ctrl0[1];
-    _dw1000_reg_read(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0, pmsc_ctrl0, 1);
+    uint8_t pmsc_ctrl0[2];
+    _dw1000_reg_read(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0, pmsc_ctrl0, 2);
 
     // Change value according to mode
     switch(mode) {
     case DW1000_CLOCK_SEQUENCING:
+	// UM §2.5.5.10 (table 4, step L-3): 0x0200 once the LDE load is done
 	pmsc_ctrl0[0] &= ~DW1000_MSK_PMSC_CTRL0_SYSCLKS;
+	pmsc_ctrl0[1] &= ~(DW1000_FLG_PMSC_CTRL0_LDECLK >> 8);
 	break;
 
     case DW1000_CLOCK_SYS_XTI:
@@ -411,6 +419,23 @@ void _dw1000_clocks(dw1000_t *dw, int mode) {
 	pmsc_ctrl0[0] = 0x22 | (pmsc_ctrl0[0] & 0xCC);	
         break;
 
+    case DW1000_CLOCK_LDE_LOAD:
+	// UM §2.5.5.10 (table 4, step L-1): PMSC_CTRL0[15:0] = 0x0301, ie:
+	// system clock forced to the 19.2MHz XTI *and* LDECLK enabled.
+	// LDECLK (bit 8) is marked reserved in UM §7.2.50.1 and has no
+	// mnemonic there, but table 4 requires it set while the microcode is
+	// copied from ROM to RAM; deca_device.c sets it too, in
+	// _dwt_enableclocks(FORCE_LDE). Without it the microcode is not
+	// copied, the LDE runs on an empty RAM (LDERUNE defaults to 1), and
+	// RX_STAMP never gets its leading edge correction.
+	// The high byte is assigned, not or-ed: the table prescribes the
+	// exact value, and or-ing would make the sequence depend on bit 9
+	// still holding its reset value.
+	pmsc_ctrl0[0] &= ~DW1000_MSK_PMSC_CTRL0_SYSCLKS;
+	pmsc_ctrl0[0] |=  DW1000_VAL_PMSC_CTRL0_SYSCLKS_19M;
+	pmsc_ctrl0[1]  =  0x03;
+        break;
+
     default:
         break;
     }
@@ -418,6 +443,8 @@ void _dw1000_clocks(dw1000_t *dw, int mode) {
     // Force sending lower byte (ie: sys/tx/rx clocks) first
     _dw1000_reg_write(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0,
 		     &pmsc_ctrl0[0], 1);
+    _dw1000_reg_write(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0 + 1,
+		     &pmsc_ctrl0[1], 1);
 }
 
 
@@ -1086,7 +1113,12 @@ int dw1000_initialise(dw1000_t *dw) {
     // Dealing with LDE (leading edge detect) code
     // UM §7.2.46.3: Load code or clear run bit
     if (cfg->lde_loading) { //-> Loading of LDE code
-	// Start the LDE load
+	// UM §2.5.5.10 (table 4, step L-1): the load only happens with
+	// PMSC_CTRL0[15:0] at 0x0301; step L-3 (back to 0x0200) is done by
+	// the DW1000_CLOCK_SEQUENCING switch below.
+	_dw1000_clocks(dw, DW1000_CLOCK_LDE_LOAD);
+
+	// Start the LDE load (table 4, step L-2)
 	_dw1000_reg_write16(dw, DW1000_REG_OTP_IF, DW1000_OFF_OTP_CTRL,
 			    DW1000_FLG_OTP_CTRL_LDELOAD);
 
