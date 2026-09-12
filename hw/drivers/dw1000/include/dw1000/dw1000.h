@@ -188,15 +188,17 @@
 #define DW1000_TX_POWER_AUTO	0
 
 /**
- * @brief Define the transmit power up to 30.5dB in 0.5db unit.
- * @note  Values above 61 are clamped to 61 (30.5dB); the argument must
+ * @brief Define the transmit power up to 33.5dB in 0.5db unit.
+ * @note  UM §7.2.31.1: the gain control range is 33.5dB (7 coarse steps
+ *        of 3dB plus 32 fine steps of 0.5dB), ie 67 half-dB steps.
+ *        Values above 67 are clamped to 67 (33.5dB); the argument must
  *        stay below 128 or the uint8_t encoding wraps.
  */
 #define DW1000_TX_POWER_05DB(v)					\
     ((v) | DW1000_TX_POWER_FLG_MANUAL)
 /**
- * @brief Define the transmit power up to 30.5dB in 0.5db step.
- * @note  Values above 30.5 are clamped to 30.5dB; the argument must stay
+ * @brief Define the transmit power up to 33.5dB in 0.5db step.
+ * @note  Values above 33.5 are clamped to 33.5dB; the argument must stay
  *        below 64 or the uint8_t encoding wraps.
  */
 #define DW1000_TX_POWER(v)					\
@@ -263,7 +265,7 @@ typedef struct dw1000_radio {
      */
     uint8_t    bitrate;
     /**
-     * @brief Transmit power (max 30.5dB in 0.5db step).
+     * @brief Transmit power (max 33.5dB in 0.5db step).
      *        If not set, will default to maximal allowed regulation value
      *        according to channel and prf setting.
      */

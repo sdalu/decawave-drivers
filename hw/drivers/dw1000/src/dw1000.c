@@ -556,8 +556,11 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
      *      by default, and doesn't support changing it for now
      */
     if (radio->tx_power & DW1000_TX_POWER_FLG_MANUAL) {
+	// UM §7.2.31.1: "The gain control range is 33.5 dB consisting of 32
+	// fine (mixer gain) control steps of 0.5 dB and 7 coarse (DA gain)
+	// steps of 3 dB", ie 67 half-dB steps: 18 dB coarse + 15.5 dB fine.
 	uint8_t power_05db = radio->tx_power & DW1000_TX_POWER_MSK_MANUAL;
-	if (power_05db > 61) power_05db = 61;
+	if (power_05db > 67) power_05db = 67;
 	// UM §7.2.31.4: power = coarse (DA, 3dB = 6 x 0.5dB steps)
 	//                     + fine (mixer, 0.5dB steps, 0..31)
 	// Coarse field is (6 - coarse) and is 3-bit encoded (110..000)
