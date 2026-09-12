@@ -949,8 +949,13 @@ void dw1000_otp_read(dw1000_t *dw,
     // Assuming we have exclusive use of the OTP_CTRL,
     // so we don't care about previously assigned value
 
-    uint16_t otp_ctrl = DW1000_FLG_OTP_CTRL_OTPREAD |
-	                DW1000_FLG_OTP_CTRL_OTPRDEN;
+    // UM §6.3.2 (table 13): each word is read by writing the address,
+    // then OTPREAD|OTPRDEN, then clearing OTP_CTRL, and only then
+    // reading OTP_RDAT. OTPREAD is self clearing, OTPRDEN is not, so
+    // leaving it asserted across the read departs from the documented
+    // sequence (and from deca_device.c's _dwt_otpread()).
+    const uint16_t otp_ctrl = DW1000_FLG_OTP_CTRL_OTPREAD |
+	                      DW1000_FLG_OTP_CTRL_OTPRDEN;
     for ( ; length-- > 0 ; address++, data++) {
 	// Write the address to read
 	_dw1000_reg_write16(dw, DW1000_REG_OTP_IF, DW1000_OFF_OTP_ADDR,
@@ -959,13 +964,12 @@ void dw1000_otp_read(dw1000_t *dw,
 	// and having OTP Read Enable set
 	_dw1000_reg_write16(dw, DW1000_REG_OTP_IF, DW1000_OFF_OTP_CTRL,
 			   otp_ctrl);
+	// Clear OTP_CTRL (OTPRDEN is not self clearing)
+	_dw1000_reg_write16(dw, DW1000_REG_OTP_IF, DW1000_OFF_OTP_CTRL,
+			   0x0000);
 	// Read Value
 	*data = _dw1000_reg_read32(dw, DW1000_REG_OTP_IF, DW1000_OFF_OTP_RDAT);
     }
-
-    // Clear OTPRDEN
-    otp_ctrl = 0x0000;
-    _dw1000_reg_write16(dw, DW1000_REG_OTP_IF, DW1000_OFF_OTP_CTRL, otp_ctrl);
 }
 
 
