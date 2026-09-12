@@ -831,9 +831,27 @@ int dw1000_initialise(dw1000_t *dw);
 /**
  * @brief Configure the DW1000 driver
  *
+ * @note  The configuration is validated in every build, not only where
+ *        assertions are enabled. Each field indexes a tuning table, so an
+ *        out of range value would be an out of range read.
+ *
+ * @warning On failure the chip is left untouched and @p dw keeps the
+ *          configuration it already had -- which on a first call is
+ *          none at all. Transmitting or receiving after a failed
+ *          configure is a programming error.
+ *
  * @param dw        driver context
+ * @param radio     radio configuration
+ *
+ * @retval  0       DW1000 configured
+ * @retval -1       Invalid or unsupported radio configuration:
+ *                  channel not one of 1, 2, 3, 4, 5, 7; unknown bitrate,
+ *                  PAC or preamble length; preamble code outside 1..24
+ *                  or not matching the PRF (1..8 for 16MHz, 9..24 for
+ *                  64MHz); PRF of 4MHz, which the receiver does not
+ *                  support; or @p radio being NULL.
  */
-void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio);
+int dw1000_configure(dw1000_t *dw, dw1000_radio_t radio);
 
 
 

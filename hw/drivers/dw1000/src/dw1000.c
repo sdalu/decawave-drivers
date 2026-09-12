@@ -1233,74 +1233,109 @@ int dw1000_initialise(dw1000_t *dw) {
 }
 
 
-void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
-    /* Guard against out of range value
+/**
+ * @internal
+ * @brief Check a radio configuration against what the DW1000 accepts
+ *
+ * Every field checked here indexes a tuning table, so a bad value is an
+ * out of range read and not merely a wrong setting: a channel of 0 or 6
+ * makes channel_table_mapping[] yield -1, and channel_tunning[-1] and
+ * manual_tx_power[-1] are then read out of bounds.
+ *
+ * This used to be a wall of DW1000_ASSERT inside dw1000_configure().
+ * That maps to assert() / __ASSERT / osalDbgAssert on four of the five
+ * ports, so it vanished under NDEBUG, without CONFIG_ASSERT, or without
+ * CH_DBG_ENABLE_ASSERTS -- exactly the builds that ship.
+ *
+ * @param[in]  radio    radio configuration
+ *
+ * @return true when every field is usable
+ */
+static
+bool _dw1000_radio_is_valid(dw1000_radio_t radio) {
+    if (radio == NULL)
+	return false;
+
+    /* Values must be in range, each one is a table index
      */
-#if DW1000_WITH_PROPRIETARY_SFD
-    DW1000_ASSERT((radio->proprietary.sfd == 0) ||
-		  (radio->proprietary.sfd == 1),
-		  "invalid sfd flag");
-#endif
-    
-    DW1000_ASSERT((radio->bitrate == DW1000_BITRATE_110KBPS ) ||
-		  (radio->bitrate == DW1000_BITRATE_850KBPS ) ||
-		  (radio->bitrate == DW1000_BITRATE_6800KBPS),
-		  "invalid bit rate");
+    switch (radio->bitrate) {
+    case DW1000_BITRATE_110KBPS:
+    case DW1000_BITRATE_850KBPS:
+    case DW1000_BITRATE_6800KBPS:
+	break;
+    default:
+	return false;
+    }
 
-    DW1000_ASSERT((radio->channel >= 1) &&
-		  (radio->channel <= 7) &&
-		  (radio->channel != 6),
-		  "invalid channel");
+    switch (radio->channel) {
+    case 1: case 2: case 3: case 4: case 5: case 7:
+	break;
+    default:                    // 0, 6, and anything above 7
+	return false;
+    }
 
-    DW1000_ASSERT((radio->prf == DW1000_PRF_4MHZ ) ||
-		  (radio->prf == DW1000_PRF_16MHZ) ||
-		  (radio->prf == DW1000_PRF_64MHZ),
-		  "invalid PRF value");
+    switch (radio->rx_pac) {
+    case DW1000_PAC8:  case DW1000_PAC16:
+    case DW1000_PAC32: case DW1000_PAC64:
+	break;
+    default:
+	return false;
+    }
 
-    DW1000_ASSERT((radio->tx_pcode >= 1) && (radio->tx_pcode <= 24),
-		  "invalid TX pcode value");
-
-    DW1000_ASSERT((radio->rx_pcode >= 1) && (radio->rx_pcode <= 24),
-		  "invalid RX pcode value");
-	
-    DW1000_ASSERT((radio->tx_plen == DW1000_PLEN_64  ) ||
-		  (radio->tx_plen == DW1000_PLEN_1024) ||
-		  (radio->tx_plen == DW1000_PLEN_4096) ||
+    switch (radio->tx_plen) {
+    case DW1000_PLEN_64:
+    case DW1000_PLEN_1024:
+    case DW1000_PLEN_4096:
 #if DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH
-		  (radio->tx_plen == DW1000_PLEN_128 ) ||
-		  (radio->tx_plen == DW1000_PLEN_256 ) ||
-		  (radio->tx_plen == DW1000_PLEN_512 ) ||
-		  (radio->tx_plen == DW1000_PLEN_1536) ||
-		  (radio->tx_plen == DW1000_PLEN_2048) ||
+    case DW1000_PLEN_128:
+    case DW1000_PLEN_256:
+    case DW1000_PLEN_512:
+    case DW1000_PLEN_1536:
+    case DW1000_PLEN_2048:
 #endif
-		  0,
-		  "invalid preambule length");
+	break;
+    default:
+	return false;
+    }
 
-    DW1000_ASSERT((radio->rx_pac == DW1000_PAC8 ) ||
-		  (radio->rx_pac == DW1000_PAC16) ||
-		  (radio->rx_pac == DW1000_PAC32) ||
-		  (radio->rx_pac == DW1000_PAC64),
-		  "invalid PAC value");
-    
-    /* Guard against value unsupported by DW1000
+    if ((radio->tx_pcode < 1) || (radio->tx_pcode > 24) ||
+	(radio->rx_pcode < 1) || (radio->rx_pcode > 24))
+	return false;
+
+    /* Values must be supported by the DW1000
+     *  (4MHz PRF is accepted by the API but not by the receiver)
      */
-    DW1000_ASSERT(radio->prf != DW1000_PRF_4MHZ,
-		  "PRF at 4MHz is unsupported by DW1000 receiver");
+    // UM §10.5: preamble codes 1..8 go with 16MHz PRF, 9..24 with 64MHz
+    switch (radio->prf) {
+    case DW1000_PRF_16MHZ:
+	if ((radio->tx_pcode > 8) || (radio->rx_pcode > 8))
+	    return false;
+	break;
+    case DW1000_PRF_64MHZ:
+	if ((radio->tx_pcode < 9) || (radio->rx_pcode < 9))
+	    return false;
+	break;
+    case DW1000_PRF_4MHZ:
+	// FALLTHROUGH
+    default:
+	return false;
+    }
 
-    DW1000_ASSERT(((radio->prf == DW1000_PRF_64MHZ) &&
-		   (radio->tx_pcode >= 9) && (radio->tx_pcode <= 24)) ||
-		  ((radio->prf == DW1000_PRF_16MHZ) &&
-		   (radio->tx_pcode >= 1) && (radio->tx_pcode <=  8)),
-		  "incoherency between preamble code and prf");
+    // radio->proprietary.sfd is a one bit field, it cannot be out of range
 
-    DW1000_ASSERT(((radio->prf == DW1000_PRF_64MHZ) &&
-		   (radio->rx_pcode >= 9) && (radio->rx_pcode <= 24)) ||
-		  ((radio->prf == DW1000_PRF_16MHZ) &&
-		   (radio->rx_pcode >= 1) && (radio->rx_pcode <=  8)),
-		  "incoherency between preamble code and prf");
-    
+    return true;
+}
 
-    
+
+int dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
+    /* Guard against out of range and unsupported values.
+     * Checked in every build: on failure nothing is written to the chip
+     * and dw->radio is left alone, so the driver keeps whatever
+     * configuration it already had.
+     */
+    if (! _dw1000_radio_is_valid(radio))
+	return -1;
+
     /* Configure SYS_CFG
      */
     // Use driver reference value
@@ -1373,6 +1408,9 @@ void dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
     /* Perform radio tuning...
      */
     _dw1000_radio_tuning(dw);
+
+    // Job's done
+    return 0;
 }
 
 
