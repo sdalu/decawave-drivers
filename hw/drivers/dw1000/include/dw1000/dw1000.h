@@ -453,6 +453,11 @@ struct dw1000 {
     uint32_t sleep_mode;
 
     int8_t   rxpacc_adj;
+    /* RXPACC_NOSAT sampled for the frame being reported. Only used in
+     * double buffered mode, where the live register cannot be trusted
+     * by the time the host reads the frame out (see
+     * dw1000_rx_get_pacc_count()). */
+    uint16_t rxpacc_nosat;
     
     struct {
 	uint32_t sys_cfg;

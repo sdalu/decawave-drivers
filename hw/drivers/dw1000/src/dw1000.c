@@ -822,8 +822,14 @@ uint16_t dw1000_rx_get_pacc_count(dw1000_t *dw) {
     uint16_t rxpacc       =
 	(_dw1000_reg_read32(dw, DW1000_REG_RX_FINFO, DW1000_OFF_NONE) &
 	 DW1000_MSK_RX_FINFO_RXPACC) >> DW1000_SFT_RX_FINFO_RXPACC;
-    uint16_t rxpacc_nosat =
-	_dw1000_reg_read16(dw, DW1000_REG_DRX_CONF,DW1000_OFF_DRX_RXPACC_NOSAT);
+    // UM table 7 lists RX_FINFO (and so RXPACC) among the double
+    // buffered registers, but not DRX_RXPACC_NOSAT. In double buffered
+    // mode the live register may already describe the *next* frame, so
+    // use the value dw1000_process_events() sampled for this one.
+    uint16_t rxpacc_nosat = dw->config->dblbuff
+	? dw->rxpacc_nosat
+	: _dw1000_reg_read16(dw, DW1000_REG_DRX_CONF,
+			     DW1000_OFF_DRX_RXPACC_NOSAT);
     if (rxpacc == rxpacc_nosat) {
 	// The SFD adjustment is negative; clamp at 0 instead of
 	// wrapping the unsigned count when the accumulation was
@@ -1492,6 +1498,16 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//   is toggled once the callback has consumed the frame, below.
 	//   The rx_ok callback must therefore NOT re-enable the receiver.
 	if (cfg->dblbuff) {
+	    //   One register the read-out needs is *not* in that set:
+	    //   DRX_RXPACC_NOSAT (0x27:2C) is absent from UM table 7, so
+	    //   there is a single live instance of it and the next frame
+	    //   overwrites it. Sample it here, while it still belongs to
+	    //   the frame being reported, and before the receiver is
+	    //   re-enabled below.
+	    dw->rxpacc_nosat =
+		_dw1000_reg_read16(dw, DW1000_REG_DRX_CONF,
+				   DW1000_OFF_DRX_RXPACC_NOSAT);
+
 	    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
 				DW1000_FLG_SYS_CTRL_RXENAB);
 	}
