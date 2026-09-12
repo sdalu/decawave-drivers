@@ -201,7 +201,21 @@ dw1000_tx_extended_vsendv(
     offset = va_arg(ap, size_t);
     if (tx_mode & DW1000_TX_DELAYED_DELAY) {
 	delay       = va_arg(ap, uint32_t);
+	// The retry follows an attempt the chip reported as too late
+	// (HPDWARN), so it must not be given *less* lead time than that
+	// attempt had. The #error in dw1000_send.h only relates the two
+	// compile time defaults; a caller raising the delay here would
+	// otherwise keep a retry sized for the default -- the 2ms default
+	// retrying a 10ms delay, which cannot help precisely on the slow
+	// hosts that raised it. Keep the documented proportion (twice the
+	// delay), saturating rather than wrapping, and keep a compile time
+	// default of 0 meaning "retries disabled".
+	if (DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY != 0)
+	    retry_delay = (delay > (UINT32_MAX / 2))
+		        ? UINT32_MAX : (2 * delay);
     }
+    // An explicit retry delay is the caller's own choice and is honoured
+    // as given.
     if (tx_mode & DW1000_TX_DELAYED_RETRY_DELAY) {
 	retry_delay = va_arg(ap, uint32_t);
     }
