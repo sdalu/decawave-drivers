@@ -1495,11 +1495,29 @@ bool dw1000_process_events(dw1000_t *dw) {
     //   pointers re-aligned) and report it as a receive error, so that
     //   the host re-arms the receiver as it does for any other error.
     if (cfg->dblbuff && (status & DW1000_FLG_SYS_STATUS_RXOVRR)) {
+	// RXOVRR is deliberately absent from the bits cleared here: UM
+	// §7.2.17 makes it READ ONLY, so writing 1 to it does nothing.
 	_dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
 			     DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
-			     DW1000_MSK_SYS_STATUS_ALL_RX_TO   |
-			     DW1000_FLG_SYS_STATUS_RXOVRR);
+			     DW1000_MSK_SYS_STATUS_ALL_RX_TO);
 	dw1000_rx_reset(dw);
+
+	// UM §4.3.5: "The overrun condition and the RXOVRR status bit will
+	// be cleared as soon as the host issues the HRBPT command". That is
+	// the only thing that clears it, and the re-align inside
+	// _dw1000_txrx_off() will not do it: on overrun the IC has wrapped
+	// back onto the buffer the host still holds (§4.3.5), so ICRBP ==
+	// HSRBP and the conditional toggle issues nothing. Both buffers are
+	// being discarded here, so issue HRBPT unconditionally, then
+	// re-align, leaving the pointers matched whichever way the chip
+	// moved ICRBP. Without this the flag stays set and every later call
+	// re-enters this branch, tearing the receiver down again each time
+	// the rx_error callback re-arms it.
+	// UM §7.2.15: only the last byte of SYS_CTRL, where HRBPT lives.
+	_dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3,
+			   (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
+	dw1000_rx_sync_dblbuf(dw);
+
 	dw->wait4resp = 0;
 
 	if (cfg->cb.rx_error) {
