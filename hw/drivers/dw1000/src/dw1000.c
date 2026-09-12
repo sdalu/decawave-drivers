@@ -1481,6 +1481,11 @@ void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
 
 bool dw1000_process_events(dw1000_t *dw) {
     const dw1000_config_t *cfg = dw->config;
+
+    // Set for events that are handled and reported but do not survive in
+    // the status word returned below -- the overrun, whose bits are
+    // stripped from it once handled.
+    bool processed = false;
     
     // UM §7.2.17: System Event Status Register
     // It's a 5 bytes register, the last byte contain low-status information
@@ -1519,6 +1524,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 	dw1000_rx_sync_dblbuf(dw);
 
 	dw->wait4resp = 0;
+	processed     = true;
 
 	if (cfg->cb.rx_error) {
 	    cfg->cb.rx_error(dw, status);
@@ -1731,10 +1737,10 @@ bool dw1000_process_events(dw1000_t *dw) {
         }
     }
 
-    return status & (DW1000_FLG_SYS_STATUS_RXFCG     |
-		     DW1000_FLG_SYS_STATUS_TXFRS     |
-		     DW1000_MSK_SYS_STATUS_ALL_RX_TO |
-		     DW1000_MSK_SYS_STATUS_ALL_RX_ERR);
+    return processed || (status & (DW1000_FLG_SYS_STATUS_RXFCG     |
+				   DW1000_FLG_SYS_STATUS_TXFRS     |
+				   DW1000_MSK_SYS_STATUS_ALL_RX_TO |
+				   DW1000_MSK_SYS_STATUS_ALL_RX_ERR));
 }
 
 
