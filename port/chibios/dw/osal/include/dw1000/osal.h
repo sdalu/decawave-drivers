@@ -76,6 +76,18 @@ typedef struct dw1000_spi_driver {
     SPIDriver *drv;
     const SPIConfig *low_cfg;
     const SPIConfig *high_cfg;
+    /* First failure of a transfer since the field was last cleared
+     * (a ChibiOS msg_t, so MSG_TIMEOUT or MSG_RESET), 0 when all
+     * transfers went through. The driver has no error path: a failed
+     * read zeroes its buffer so it can never pass for data, so the
+     * caller must look here to tell a failure from a register that
+     * really did read 0. Cleared by whoever reports it.
+     *
+     * Only ever set when the SPI v2 API is in use: the v1 spiSend()
+     * and spiReceive() return void and report nothing. The field is
+     * carried in both cases so the interface stays the same as the
+     * unix and zephyr ports. */
+    int error;
 } dw1000_spi_driver_t;
 
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,
