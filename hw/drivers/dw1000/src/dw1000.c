@@ -834,6 +834,36 @@ void dw1000_rx_sync_dblbuf(dw1000_t *dw) {
 }
 
 
+/**
+ * @internal
+ * @brief Clear event status bits with the interrupts masked off
+ *
+ * @note  UM §4.3.3 (figure 14) and §4.3.4 (figure 15): the status bits
+ *        of the double buffered swinging set (RXDFR, RXFCG, RXFCE,
+ *        LDEDONE) glitch when they are cleared, so the interrupts must
+ *        be masked while it happens or the glitch is delivered as a
+ *        spurious interrupt. Only needed in double buffered mode; in
+ *        single buffer mode those bits don't swing and a plain write
+ *        does, saving two SPI transactions per frame.
+ *
+ * @param dw        driver context
+ * @param clear     event status bits to clear
+ */
+static inline
+void dw1000_rx_clear_status_dblbuf(dw1000_t *dw, uint32_t clear) {
+    // Save and clear interrupt mask
+    uint32_t sys_mask =
+	_dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE);
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE, 0);
+
+    // Clear the requested events bits (done by writting 1 to them)
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE, clear);
+
+    // Restore interrupt mask
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE, sys_mask);
+}
+
+
 
 /*===========================================================================*/
 /* Exported functions                                                        */
@@ -1466,7 +1496,15 @@ bool dw1000_process_events(dw1000_t *dw) {
 	dw->wait4resp = 0;
 
 	// Effectively clearing status
-        _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE, clear);
+	//   In double buffered mode the bits being cleared are part of
+	//   the swinging set and glitch as they go, so the interrupts
+	//   are masked around the write (UM §4.3.3, figure 14)
+	if (cfg->dblbuff) {
+	    dw1000_rx_clear_status_dblbuf(dw, clear);
+	} else {
+	    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS,
+				DW1000_OFF_NONE, clear);
+	}
 
 	// Call the corresponding callback if present
         if (cfg->cb.rx_ok) {
