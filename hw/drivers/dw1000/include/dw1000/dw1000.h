@@ -1372,6 +1372,10 @@ void dw1000_rx_get_time_tracking(dw1000_t *dw,
 /**
  * @brief Compute the estimated received signal and/or firstpath power in dBm
  *
+ * @note  Both are set to -INFINITY when the preamble accumulation count
+ *        is 0, which leaves no usable estimate (a frame shorter than the
+ *        SFD adjustment, or a failed SPI read).
+ *
  * @param[in]  dw         driver context
  * @param[out] signal     received signal power in dBm
  * @param[out] firstpath  received firstpath power in dBm

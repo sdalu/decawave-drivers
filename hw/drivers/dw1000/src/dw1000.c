@@ -2072,6 +2072,18 @@ void dw1000_rx_get_power_estimate(dw1000_t *dw,
     double N  = (double) dw1000_rx_get_pacc_count(dw);
     double A  = dw->radio.prf == DW1000_PRF_16MHZ ? 113.77 : 121.74;
 
+    // N divides both estimates below. The SFD adjustment in
+    // dw1000_rx_get_pacc_count() can legitimately leave it at 0, and so
+    // can a failed SPI read (the OSAL contract zeroes the buffer). 0 here
+    // would yield +inf / NaN, which is worse than an obvious sentinel:
+    // every comparison against NaN is false, so dw1000_rx_power_correction()
+    // would hand it straight back and the caller would see it as a reading.
+    if (N < 1.0) {
+	if (signal)    *signal    = -INFINITY;
+	if (firstpath) *firstpath = -INFINITY;
+	return;
+    }
+
     // Firstpath power
     if (firstpath) {
         // UM §7.2.23: Receive Time Stamp
