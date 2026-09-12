@@ -143,7 +143,7 @@
 #define DW1000_MSK_TX_FCTRL_TXBR         (0x3 << 13)
 #define DW1000_MSK_TX_FCTRL_TXPRF        (0x3 << 16)
 #define DW1000_MSK_TX_FCTRL_PE_TXPSR     (0xF << 18)
-#define DW1000_MSK_TX_FCTRL_TXBOFFS    (0x3FF << 22)
+#define DW1000_MSK_TX_FCTRL_TXBOFFS    (0x3FFu << 22)
 
 #define DW1000_REG_TX_BUFFER                    0x09
 #define DW1000_LEN_TX_BUFFER                    1024
@@ -328,7 +328,7 @@
 #define DW1000_MSK_RX_FINFO_RXFLEN              0x7F
 #define DW1000_MSK_RX_FINFO_RXFLE_RXFLEN        0x03FF
 #define DW1000_FLG_RX_FINFO_RNG            (1 << 15)
-#define DW1000_MSK_RX_FINFO_RXPACC (0xFFF << DW1000_SFT_RX_FINFO_RXPACC)
+#define DW1000_MSK_RX_FINFO_RXPACC (0xFFFu << DW1000_SFT_RX_FINFO_RXPACC)
 
 
 #define DW1000_REG_RX_BUFFER                    0x11
@@ -375,7 +375,7 @@
 #define DW1000_SFT_ACK_RESP_T_W4R_TIM              0
 #define DW1000_MSK_ACK_RESP_T_W4R_TIM (0xFFFFF << 0)
 #define DW1000_SFT_ACK_RESP_T_ACK_TIM             24
-#define DW1000_MSK_ACK_RESP_T_ACK_TIM    (0xFF << 24)
+#define DW1000_MSK_ACK_RESP_T_ACK_TIM    (0xFFu << 24)
 
 
 #define DW1000_REG_RX_SNIFF                     0x1D
@@ -401,7 +401,7 @@
 #define DW1000_FLG_CHAN_CTRL_TNSSFD     (   1 << 20)
 #define DW1000_FLG_CHAN_CTRL_RNSSFD     (   1 << 21)
 #define DW1000_MSK_CHAN_CTRL_TX_PCODE   (0x1F << 22)
-#define DW1000_MSK_CHAN_CTRL_RX_PCODE   (0x1F << 27)
+#define DW1000_MSK_CHAN_CTRL_RX_PCODE   (0x1Fu << 27)
 
 #define DW1000_REG_USR_SFD                      0x21
 #define DW1000_LEN_USR_SFD                        41
