@@ -107,6 +107,13 @@ _dw1000_ioline_clear(dw1000_ioline_t line) {
 typedef struct dw1000_spi_driver {
     dw1000_ioline_t cs_pin;
     uint16_t speed;
+    /* First failure of a transfer since the field was last cleared
+     * (-1; spiExchange() reports only a boolean), 0 when all transfers
+     * went through. The driver has no error path: a failed read zeroes
+     * its buffer so it can never pass for data, so the caller must look
+     * here to tell a failure from a register that really did read 0.
+     * Cleared by whoever reports it. */
+    int error;
 } dw1000_spi_driver_t;
 
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,
