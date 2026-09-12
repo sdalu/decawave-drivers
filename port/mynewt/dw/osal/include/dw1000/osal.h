@@ -98,6 +98,13 @@ typedef struct dw1000_spi_driver {
     void (*lock  )(struct dw1000_spi_driver *spi);
     void (*unlock)(struct dw1000_spi_driver *spi);
     struct hal_spi_settings settings;
+    /* First failure since the field was last cleared (the non-zero code
+     * hal_spi_txrx() or hal_spi_config() returned), 0 when everything
+     * went through. The driver has no error path: a failed read zeroes
+     * its buffer so it can never pass for data, so the caller must look
+     * here to tell a failure from a register that really did read 0.
+     * Cleared by whoever reports it. */
+    int error;
 } dw1000_spi_driver_t;
 
 void _dw1000_spi_send(dw1000_spi_driver_t *spi,
