@@ -2041,11 +2041,13 @@ void dw1000_rx_get_power_estimate(dw1000_t *dw,
 		  (dw->radio->prf == DW1000_PRF_64MHZ),
 		  "unsupported PRF value");
 
-    // UM §4.7: Assessing the quality of reception and the RX timestamp
+    // UM §4.7.1/§4.7.2: "A = is the constant 113.77 for a PRF of 16 MHz,
+    // or, the constant 121.74 for a PRF of 64 MHz" (unchanged in UM 2.05,
+    // 2.09 and 2.15).
     //  PRF     4   16        64
-    //  A       -   113.77    127.74
+    //  A       -   113.77    121.74
     double N  = (double) dw1000_rx_get_pacc_count(dw);
-    double A  = dw->radio->prf == DW1000_PRF_16MHZ ? 113.77 : 127.74;
+    double A  = dw->radio->prf == DW1000_PRF_16MHZ ? 113.77 : 121.74;
 
     // Firstpath power
     if (firstpath) {
