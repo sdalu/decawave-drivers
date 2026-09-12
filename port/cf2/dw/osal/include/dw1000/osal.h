@@ -61,8 +61,15 @@ _dw1000_ioline_set(dw1000_ioline_t line) {
 	uint16_t      pin  = line & 0xFFFF;
 	switch(line >> 16) {
 	case 3: port = GPIOC; break;
-	default: DW1000_ASSERT(0, "unhandled GPIO port");
-	}	
+	default:
+	    /* No mapping for this port index, so there is no pin to drive.
+	     * Returning leaves the line alone; falling through would call
+	     * GPIO_WriteBit() with an uninitialised pointer, and
+	     * DW1000_ASSERT is a bkpt that does not stop a build running
+	     * without a debugger attached. */
+	    DW1000_ASSERT(0, "unhandled GPIO port");
+	    return;
+	}
 	GPIO_WriteBit(port, pin, 1);
     } else {
 	digitalWrite(line, HIGH);
@@ -76,8 +83,15 @@ _dw1000_ioline_clear(dw1000_ioline_t line) {
 	uint16_t      pin  = line & 0xFFFF;
 	switch(line >> 16) {
 	case 3: port = GPIOC; break;
-	default: DW1000_ASSERT(0, "unhandled GPIO port");
-	}	
+	default:
+	    /* No mapping for this port index, so there is no pin to drive.
+	     * Returning leaves the line alone; falling through would call
+	     * GPIO_WriteBit() with an uninitialised pointer, and
+	     * DW1000_ASSERT is a bkpt that does not stop a build running
+	     * without a debugger attached. */
+	    DW1000_ASSERT(0, "unhandled GPIO port");
+	    return;
+	}
 	GPIO_WriteBit(port, pin, 0);
     } else {
 	digitalWrite(line, LOW);
