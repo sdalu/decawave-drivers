@@ -176,7 +176,11 @@
 
 
 #define DW1000_TX_POWER_FLG_MANUAL  0x80 /**< @internal */
-#define DW1000_TX_POWER_MSK_MANUAL  0x3f /**< @internal */
+/* 7 bits, so that a request above the 30.5dB ceiling lands outside the
+ * usable range and is clamped by _dw1000_radio_tuning(), instead of
+ * losing bit 6 to the gap between mask and flag and silently asking for
+ * the *minimum* output power. */
+#define DW1000_TX_POWER_MSK_MANUAL  0x7f /**< @internal */
 
 /**
  * @brief Transmit power
@@ -185,11 +189,15 @@
 
 /**
  * @brief Define the transmit power up to 30.5dB in 0.5db unit.
+ * @note  Values above 61 are clamped to 61 (30.5dB); the argument must
+ *        stay below 128 or the uint8_t encoding wraps.
  */
 #define DW1000_TX_POWER_05DB(v)					\
     ((v) | DW1000_TX_POWER_FLG_MANUAL)
 /**
  * @brief Define the transmit power up to 30.5dB in 0.5db step.
+ * @note  Values above 30.5 are clamped to 30.5dB; the argument must stay
+ *        below 64 or the uint8_t encoding wraps.
  */
 #define DW1000_TX_POWER(v)					\
     DW1000_TX_POWER_05DB((uint8_t)(2 * (v)))
