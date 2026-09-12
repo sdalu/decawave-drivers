@@ -145,7 +145,7 @@
  * @brief Convert DW1000 clock unit to µsec
  */
 #define DW1000_CLOCK_TO_USEC(x)					\
-    (x / DW1000_TIME_CLOCK_MHZ)
+    ((x) / DW1000_TIME_CLOCK_MHZ)
 
 /**
  * @brief Convert msec to DW1000 clock unit (rounded)
