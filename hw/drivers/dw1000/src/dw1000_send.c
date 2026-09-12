@@ -54,6 +54,11 @@ _dw1000_tx_prepare_fctrl(dw1000_t *dw, size_t length, int tx_mode)
     dw1000_tx_fctrl(dw, length, 0, tx_mode);
 }
 
+#if DW1000_WITH_EXTENDED_SEND
+/* The two helpers below serve dw1000_tx_extended_vsendv() alone, and use
+ * the DW1000_TX_DELAYED_EMBED_TIMESTAMP_* constants that dw1000_send.h
+ * only defines for the extended send, so they are guarded with it. */
+
 /* Copy `size` bytes of `data` into the caller's scattered buffer at
  * frame offset `offset`, spanning segments if need be, so the caller's
  * copy of the frame carries the same timestamp as the one in the chip.
@@ -143,6 +148,7 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
     dw1000_tx_write_frame_data(dw, data, size, offset);
     _dw1000_iovec_write(iovec, iovcnt, offset, data, size);
 }
+#endif
 
 
 
