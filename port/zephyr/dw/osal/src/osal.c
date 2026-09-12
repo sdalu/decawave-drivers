@@ -6,6 +6,7 @@
  */
 
 #include "dw1000/osal.h"
+#include <string.h>
 
 
 /* Keep the first failure for the caller to find (see the error field):
@@ -44,7 +45,14 @@ void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
 	.count   = 2,
     };
 
-    _dw1000_spi_record(spi, spi_transceive(spi->dev, spi->config, &tx, &rx));
+    int rc = spi_transceive(spi->dev, spi->config, &tx, &rx);
+    _dw1000_spi_record(spi, rc);
+    /* The read helpers (_dw1000_reg_read8/16/32/64) hand us an
+     * uninitialised stack local and return it whatever happens, so a
+     * failed transfer must not leave it holding what the stack held:
+     * zero it, so it can never pass for register content. */
+    if (rc < 0)
+        memset(data, 0, datalen);
 }
 
 void _dw1000_spi_low_speed(dw1000_spi_driver_t *spi) {
