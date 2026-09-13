@@ -14,6 +14,18 @@ if (CONFIG_DW1000)
 # starts naming them itself again.
 include(${CMAKE_CURRENT_LIST_DIR}/../dw1000.cmake)
 
+# The git part of the release, from scripts/gitversion.sh: no external tool,
+# and guarded so a tree copied into another repository reports nothing rather
+# than that repository's commit. It is what makes DW1000_VERSION_FULL say
+# 1.1.0+59.ga77b193 in a firmware as well as in a Makefile-driven build.
+execute_process(COMMAND sh ${CMAKE_CURRENT_LIST_DIR}/../scripts/gitversion.sh
+		OUTPUT_VARIABLE DW1000_VERSION_GIT
+		OUTPUT_STRIP_TRAILING_WHITESPACE
+		ERROR_QUIET)
+if(DW1000_VERSION_GIT)
+  zephyr_compile_definitions(DW1000_VERSION_GIT="${DW1000_VERSION_GIT}")
+endif()
+
 zephyr_include_directories(${DW1000_INCLUDE_DIR})
 zephyr_include_directories(${DW1000_OSAL_ZEPHYR_INCLUDE_DIR})
 
