@@ -226,12 +226,12 @@ no `make install`, and the top-level `Makefile` does the other half of
 the job. It works with both GNU make and BSD make.
 
 ```text
-make check          compile the option matrix, and check dw1000.cmake agrees
+make                print the targets; nothing is built by default
+make check          compile the option matrix, and check the manifest
 make sources        print the files and flags to vendor, as shell variables
 make lib            build libdw1000.a locally, against OSAL=<port>
 make options        print the option table above
 make doc            run doxygen
-make help           the rest
 ```
 
 `make check` compiles the core over all 256 combinations of the eight
@@ -240,6 +240,17 @@ of them -- whoever vendors the driver does -- so without this an option
 that stopped compiling would be found by the one consumer who wanted it,
 which is how `DW1000_WITH_EXTENDED_SEND=0` came to spend an unknown
 length of time broken. `make check WERROR=yes` is the CI form.
+
+It takes about a minute, and prints a row of dots as it goes so that it
+is visibly working. One broken option breaks half the matrix, so failures
+are grouped by the errors they produced and reported once per group, with
+the options every member of the group shares -- which is the option to go
+and look at:
+
+```text
+  FAILED  128 combinations, all with these errors.
+          What they have in common: DW1000_WITH_EXTENDED_SEND=0
+```
 
 To vendor from a shell-driven build:
 

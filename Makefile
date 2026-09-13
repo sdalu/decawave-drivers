@@ -88,9 +88,33 @@ ALL_CFLAGS   = $(CFLAGS) $(WARNINGS) $(W_$(WERROR))
 .SUFFIXES:
 .SUFFIXES: .c .o
 
-# The compile check is the default: it is the one target that works
-# wherever a C compiler does, and it is what this Makefile is for.
-all: check					## run the option matrix (default)
+# First target, so a bare `make` runs it: nothing here is worth building
+# by default -- there is no artifact a consumer wants out of this tree,
+# and `make check` takes the better part of a minute, which a bare `make`
+# should not spend. Printing the targets says what to type instead.
+# .DEFAULT_GOAL and .MAIN would each say so in one make only; being first
+# says it in both.
+help:						## show this help (the default)
+	@echo 'dw1000 -- a driver for the DecaWave DW1000 transceiver'
+	@echo ''
+	@echo 'Targets:'
+	@awk -F':.*## ' '/^[a-z][a-z-]*:.*## /{printf "  %-14s %s\n", $$1, $$2}' \
+	    Makefile
+	@echo ''
+	@echo 'Variables (current value):'
+	@printf '  %-14s %s\n' \
+	    OSAL     '$(OSAL)  (one of: $(OSAL_PORTS))' \
+	    CC       '$(CC)' \
+	    CFLAGS   '$(CFLAGS)  (yours; the project always adds $(WARNINGS))' \
+	    WERROR   '$(WERROR)  (yes turns warnings into errors)'
+	@echo ''
+	@echo 'There is no install target: the compile-time options change the'
+	@echo 'public headers, so the driver is vendored, not linked against.'
+	@echo 'See `make sources`, dw1000.cmake, and the note atop this file.'
+	@echo ''
+	@echo 'The file list lives in dw1000.cmake; this Makefile reads it.'
+	@echo ''
+	@echo 'This Makefile works with both GNU make and BSD make.'
 
 # An unknown OSAL leaves OSAL_INC empty, and the core then picks up
 # whatever <dw1000/osal.h> is on the system include path, or none. Say so
@@ -103,10 +127,10 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-manifest		## compile the option matrix, and check the manifest
+check: check-options check-manifest		## compile the option matrix (~1 min), check the manifest
 
-# 256 compiles, a few seconds each hundred. CC, CFLAGS and WERROR reach
-# the script through the environment.
+# 256 compiles, tens of seconds in total, so the script reports progress
+# as it goes. CC, CFLAGS and WERROR reach it through the environment.
 check-options:					## compile the core over every option combination
 	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-options.sh
 
@@ -179,27 +203,5 @@ clean:						## remove build products
 distclean: clean				## clean, plus the generated documentation
 	rm -rf doc/generated
 
-help:						## show this help
-	@echo 'dw1000 -- a driver for the DecaWave DW1000 transceiver'
-	@echo ''
-	@echo 'Targets:'
-	@awk -F':.*## ' '/^[a-z][a-z-]*:.*## /{printf "  %-14s %s\n", $$1, $$2}' \
-	    Makefile
-	@echo ''
-	@echo 'Variables (current value):'
-	@printf '  %-14s %s\n' \
-	    OSAL     '$(OSAL)  (one of: $(OSAL_PORTS))' \
-	    CC       '$(CC)' \
-	    CFLAGS   '$(CFLAGS)  (yours; the project always adds $(WARNINGS))' \
-	    WERROR   '$(WERROR)  (yes turns warnings into errors)'
-	@echo ''
-	@echo 'There is no install target: the compile-time options change the'
-	@echo 'public headers, so the driver is vendored, not linked against.'
-	@echo 'See `make sources`, dw1000.cmake, and the note atop this file.'
-	@echo ''
-	@echo 'The file list lives in dw1000.cmake; this Makefile reads it.'
-	@echo ''
-	@echo 'This Makefile works with both GNU make and BSD make.'
-
-.PHONY: all portcheck check check-options check-manifest lib version ports \
-	options sources doc clean distclean help
+.PHONY: help portcheck check check-options check-manifest lib version ports \
+	options sources doc clean distclean

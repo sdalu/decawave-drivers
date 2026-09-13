@@ -10,6 +10,8 @@
 #
 # Only -fsyntax-only: this is about the options being coherent, not about
 # codegen, and 256 real compiles would cost more than the answer is worth.
+#
+# POSIX sh and awk only.
 set -e
 top=`dirname "$0"`/..
 cc=${CC:-cc}
@@ -37,8 +39,20 @@ DW1000_WITH_DWM1000_EVK_COMPATIBILITY'
 
 n=`echo "$OPTS" | wc -l | tr -d ' '`
 total=`awk -v n="$n" 'BEGIN{print 2^n}'`
+row=64          # dots per progress line
 bad=0
 run=0
+
+# One option breaking the build breaks it in half the matrix, so failures
+# are grouped by the compiler output they produced rather than printed as
+# they happen: 128 copies of the same fourteen errors is not a report.
+# The group's file names come from a checksum of that output.
+: > "$tmp/order"
+
+# Say what is about to happen, and then show it happening. This takes tens
+# of seconds, and a silent minute is indistinguishable from a hang.
+echo "options: $total combinations of $n options, port/null, $cc"
+printf '  '
 
 # Counting to 2^n and reading the bits off the counter, rather than
 # nesting eight loops. `expr` and `test` are all this needs, so it stays
@@ -58,22 +72,74 @@ while [ "$i" -lt "$total" ]; do
     done
 
     if $cc $cflags $inc $defs -fsyntax-only $src > "$tmp/log" 2>&1; then
-        :
+        printf '.'
     else
-        echo "  FAILED  $label"
-        # Spell the combination out: the bit string says which, but not
-        # what, and the point of the report is to be pasteable.
-        echo "    `echo $defs`"
-        sed 's/^/      /' "$tmp/log"
+        printf 'X'
+        sig=`cksum < "$tmp/log" | tr -d ' \t'`
+        if [ ! -f "$tmp/g.$sig.log" ]; then
+            cp "$tmp/log" "$tmp/g.$sig.log"
+            echo "$sig" >> "$tmp/order"
+        fi
+        echo "$label" >> "$tmp/g.$sig.labels"
         bad=1
     fi
     run=$(( run + 1 ))
     i=$(( i + 1 ))
+
+    if [ $(( run % row )) -eq 0 ]; then
+        printf ' %4d/%d\n' "$run" "$total"
+        if [ "$run" -lt "$total" ]; then printf '  '; fi
+    fi
 done
 
+# A total that is not a whole number of rows would leave the last row
+# unterminated. It always is here, but the script should not depend on
+# eight being the number of options.
+if [ $(( run % row )) -ne 0 ]; then
+    printf ' %4d/%d\n' "$run" "$total"
+fi
+
+# The options every member of a group agrees on are the ones that caused
+# it; the ones that vary across the group are along for the ride. Saying
+# so turns "128 combinations failed" into the name of the option to look
+# at. Positions where the group disagrees print nothing.
+common() {
+    awk -v opts="`echo $OPTS`" '
+	{
+	    for (i = 1; i <= length($0); i++) {
+		c = substr($0, i, 1)
+		if (NR == 1)        v[i] = c
+		else if (v[i] != c) v[i] = "?"
+	    }
+	}
+	END {
+	    n = split(opts, o, " ")
+	    for (i = 1; i <= n; i++)
+		if (v[i] != "?") printf " %s=%s", o[i], v[i]
+	    printf "\n"
+	}
+    ' "$1"
+}
+
+nf=0
+for sig in `cat "$tmp/order"`; do
+    labels="$tmp/g.$sig.labels"
+    cnt=`wc -l < "$labels" | tr -d ' '`
+    nf=$(( nf + cnt ))
+    echo ""
+    if [ "$cnt" -eq 1 ]; then
+	echo "  FAILED  one combination:`common "$labels"`"
+    else
+	echo "  FAILED  $cnt combinations, all with these errors."
+	echo "          What they have in common:`common "$labels"`"
+    fi
+    sed 's/^/      /' "$tmp/g.$sig.log"
+done
+
+echo ""
 if [ "$bad" -eq 0 ]; then
-    echo "options: $run combinations of $n options compile"
+    echo "options: all $run compile"
 else
-    echo "options: FAILURES above, out of $run combinations"
+    echo "options: $nf of $run FAILED, reported above"
 fi
 exit $bad
