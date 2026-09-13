@@ -18,7 +18,7 @@
 
 static inline size_t
 _dw1000_tx_prepare_data_sendv(
-	dw1000_t *dw, struct iovec *iovec, int iovcnt, int tx_mode)
+	dw1000_t *dw, struct iovec *iovec, int iovcnt)
 {
     size_t length = 0;
 
@@ -35,7 +35,7 @@ _dw1000_tx_prepare_data_sendv(
 
 static inline size_t
 _dw1000_tx_prepare_data_send(
-	dw1000_t *dw, uint8_t *data, size_t length, int tx_mode)
+	dw1000_t *dw, uint8_t *data, size_t length)
 {
     // Write data to DW TX buffer
     dw1000_tx_write_frame_data(dw, data, length, 0);
@@ -161,7 +161,7 @@ dw1000_tx_sendv(
 	dw1000_t *dw, struct iovec *iovec, int iovcnt, int tx_mode)
 {
     // Prepare data and frame control
-    size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt, tx_mode);
+    size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt);
     _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
     // Start trasmit
     return dw1000_tx_start(dw, tx_mode);
@@ -172,7 +172,7 @@ dw1000_tx_send(
 	dw1000_t *dw, uint8_t *data, size_t length, int tx_mode)
 {
     // Prepare data and frame control
-    _dw1000_tx_prepare_data_send(dw, data, length, tx_mode);
+    _dw1000_tx_prepare_data_send(dw, data, length);
     _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
     // Start trasmit
     return dw1000_tx_start(dw, tx_mode);
@@ -188,7 +188,7 @@ dw1000_tx_extended_vsendv(
 	va_list ap)
 {
     // Prepare data and frame control
-    size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt, tx_mode);
+    size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt);
     _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
 
     // If not embedding timestamp, send it now

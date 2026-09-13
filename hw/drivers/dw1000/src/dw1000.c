@@ -345,20 +345,6 @@ void _dw1000_spi_header(uint8_t reg,  size_t offset, bool write,
 
 /**
  * @internal
- * @brief Set bits for settings register
- *
- * @param[in]  dw       driver context
- */
-static inline
-void _dw1000_reg_set32(dw1000_t *dw,
-		      uint8_t reg, size_t offset, uint32_t value) {
-    uint32_t val = _dw1000_reg_read32(dw, reg, offset);
-    _dw1000_reg_write32(dw, reg, offset, val | value);
-}
-
-
-/**
- * @internal
  * @brief Clear bits for clearing register
  *
  * @param[in]  dw       driver context
