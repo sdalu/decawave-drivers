@@ -253,6 +253,14 @@ static const uint16_t lde_repc_tunning[] = {
     0x35C2, 0x47AE, 0x3AE0, 0x3850, 0x30A2, 0x3850
 };
 
+/* The computed SFD timeout is the only user of the two tables below, and
+ * of the checks that the enum values still index them the way the tables
+ * are laid out. With DW1000_WITH_SFD_TIMEOUT_DEFAULT there is nothing to
+ * compute, so leave them out rather than carry two unused tables -- and
+ * two -Wunused-const-variable warnings -- into every image built that
+ * way. */
+#if !DW1000_WITH_SFD_TIMEOUT_DEFAULT
+
 // PAC symbol size
 #if (DW1000_PAC8  != 0) || (DW1000_PAC16 != 1) ||	\
     (DW1000_PAC32 != 2) || (DW1000_PAC64 != 3)
@@ -291,6 +299,8 @@ static const uint16_t plen_symbol_size[] = {
      512, // 0xD
 #endif
 };
+
+#endif // !DW1000_WITH_SFD_TIMEOUT_DEFAULT
 
 
 
