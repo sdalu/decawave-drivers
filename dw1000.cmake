@@ -10,7 +10,10 @@
 # yourself keeps the choice where it belongs, and lets one project build
 # the driver twice with different options if it needs to.
 #
-#   DW1000_VERSION           the release this tree is
+#   DW1000_VERSION           the release this tree is (from
+#                            <dw1000/dw1000_version.h>, which is where it
+#                            is written; DW1000_VERSION_FULL adds the
+#                            commit a between-releases build was made from)
 #   DW1000_INCLUDE_DIR       the driver API, add to your include path
 #   DW1000_SOURCES           the whole core
 #   DW1000_SOURCES_CORE      registers, configuration, receive, events
@@ -51,10 +54,42 @@
 # zephyr/Kconfig. Under MyNewt, hw/drivers/dw1000/pkg.yml does the same
 # job. This file is for everyone else.
 
-set(DW1000_VERSION 1.1.0)
-
 set(DW1000_INCLUDE_DIR
     ${CMAKE_CURRENT_LIST_DIR}/hw/drivers/dw1000/include)
+
+# The release, read from <dw1000/dw1000_version.h> rather than written
+# here. That header is the one place it lives, because a C header can read
+# no other file and a consumer must have the version without running
+# anything -- so the header holds it and everyone else parses it: this
+# file, and scripts/manifest.sh for the Makefile. Nothing keeps a second
+# copy, so there is no second copy to drift.
+#
+# DW1000_VERSION is the release, which is all a source list can honestly
+# claim to be. A build made between releases says so through
+# DW1000_VERSION_FULL, whose git part is passed on the command line
+# (`make -s version-full` prints it, and `make sources` hands it over as
+# DW1000_VERSION_GIT) -- not from here, where the tree may be a copy
+# sitting in your repository rather than a clone of its own.
+file(STRINGS ${DW1000_INCLUDE_DIR}/dw1000/dw1000_version.h
+     _dw1000_version_lines
+     REGEX "^#define[ \t]+DW1000_VERSION_(MAJOR|MINOR|PATCH)[ \t]+[0-9]+")
+foreach(_line IN LISTS _dw1000_version_lines)
+    string(REGEX MATCH "DW1000_VERSION_([A-Z]+)[ \t]+([0-9]+)" _m "${_line}")
+    set(_dw1000_v_${CMAKE_MATCH_1} ${CMAKE_MATCH_2})
+endforeach()
+if(NOT DEFINED _dw1000_v_MAJOR OR
+   NOT DEFINED _dw1000_v_MINOR OR
+   NOT DEFINED _dw1000_v_PATCH)
+    message(FATAL_ERROR
+	"dw1000: no version in ${DW1000_INCLUDE_DIR}/dw1000/dw1000_version.h")
+endif()
+set(DW1000_VERSION ${_dw1000_v_MAJOR}.${_dw1000_v_MINOR}.${_dw1000_v_PATCH})
+unset(_dw1000_version_lines)
+unset(_line)
+unset(_m)
+unset(_dw1000_v_MAJOR)
+unset(_dw1000_v_MINOR)
+unset(_dw1000_v_PATCH)
 
 set(DW1000_SOURCES_CORE
     ${CMAKE_CURRENT_LIST_DIR}/hw/drivers/dw1000/src/dw1000.c)

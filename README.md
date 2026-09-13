@@ -292,6 +292,93 @@ that reads `dw1000.cmake` itself, and `hw/drivers/dw1000/pkg.yml` is a
 MyNewt package.
 
 
+Version
+=======
+
+`<dw1000/dw1000_version.h>` carries the release, and is the one place it
+is written -- a C header can read no other file, so a consumer must be
+able to have the version without running anything. `dw1000.cmake` parses
+those three lines for `DW1000_VERSION`, and the Makefile asks
+`scripts/manifest.sh`, which parses them too, so nothing can disagree
+with the header.
+
+`<dw1000/dw1000.h>` includes it, so a consumer of the driver API already
+has these; include it directly if the version is all you want.
+
+```c
+#include <dw1000/dw1000.h>          /* or <dw1000/dw1000_version.h> alone */
+
+#if !DW1000_VERSION_AT_LEAST(1, 1, 0)
+#error this application needs dw1000 1.1.0 or newer
+#endif
+
+printf("dw1000 %s\n", DW1000_VERSION_FULL);
+```
+
+| **Macro** | **What it says** |
+|---|---|
+| `DW1000_VERSION_MAJOR` / `_MINOR` / `_PATCH` | the release, as numbers |
+| `DW1000_VERSION_STRING` | the release, as `"1.1.0"` |
+| `DW1000_VERSION_NUMBER` | the release as one comparable integer -- 1.2.3 is `10203` |
+| `DW1000_VERSION_AT_LEAST(maj, min, pat)` | for `#if` |
+| `DW1000_VERSION_FULL` | the release, plus the commit a build between releases came from |
+
+All macros, and no function: there is no library here to have been
+replaced underneath you -- the driver is vendored, so its headers and its
+sources are compiled together out of one tree -- and a call would cost an
+MCU a symbol and a string it may not want.
+
+A release is the release alone, `1.1.0`. Anything else appends SemVer
+build metadata: `1.1.0+58.g3403fe0`, fifty-eight commits past the tag,
+plus `.dirty` for uncommitted changes. `scripts/gitversion.sh` works that
+out, and it is empty when the answer would be somebody else's -- a tarball
+has no repository, and a tree copied into your repository rather than
+cloned would otherwise report *your* tags and dirt as the driver's. An
+empty answer is never wrong, only less precise.
+
+`make version` prints the release, `make version-full` what this tree
+builds as, the two being equal exactly when it is a release tree. The git
+part reaches the code only through `-DDW1000_VERSION_GIT`, which this
+tree's `make lib` passes and `make sources` hands over for a vendoring
+build to pass on:
+
+```sh
+eval "$(make -s -C 3rd/decawave-drivers sources OSAL=unix)"
+cc $DW1000_CFLAGS -DDW1000_VERSION_GIT="\"$DW1000_VERSION_GIT\"" \
+   -c $DW1000_SOURCES $DW1000_OSAL_SOURCES
+```
+
+Unlike the `DW1000_WITH_*` options it changes no structure and no entry
+point, so it is the one define that need not reach every translation unit.
+
+Bumping a release is editing the three numbers in the header, committing,
+and `make tag`, which reads the number out of the header rather than
+having it typed again -- so the tag and the header cannot end up saying
+different things. It refuses on an uncommitted worktree or an existing
+tag, and pushes nothing.
+
+```sh
+$EDITOR hw/drivers/dw1000/include/dw1000/dw1000_version.h
+git commit -am 'Bump the version to 1.1.1.'
+make tag                             # v1.1.1, from the header
+git push origin v1.1.1
+```
+
+`make tag` refuses an unclean worktree or an existing tag, then asks, then
+runs the whole check suite before it tags — so declining costs nothing and
+nothing gets tagged that the suite has not passed. `YES=1` answers yes for
+a script; a non-interactive run without it declines.
+
+A tag made by hand can still disagree, so `make check` gates the other
+direction (`scripts/checktag.sh`): on a tag with a clean worktree -- a
+release build, which has no later chance to be wrong -- the header must
+say what the tag says, and anywhere else it must be at or ahead of the
+nearest tag. Bumped-but-not-yet-tagged is the normal state between
+releases and passes; behind a tag that exists does not. It says nothing at
+all where the answer would be somebody else's: no git, a tarball, or a
+tree copied into another project's repository.
+
+
 Documentation
 =============
 

@@ -21,6 +21,10 @@
 #include "dw1000/dw1000_bswap.h"
 #include "dw1000/dw1000_otp.h"
 #include "dw1000/dw1000_reg.h"
+/* Macros only, no declarations: so that a consumer of this header can
+ * check the release it is compiling against (DW1000_VERSION_AT_LEAST)
+ * without a second include, and log DW1000_VERSION_FULL. */
+#include "dw1000/dw1000_version.h"
 
 
 

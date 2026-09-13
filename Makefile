@@ -27,8 +27,17 @@
 NAME       = dw1000
 MANIFEST   = sh scripts/manifest.sh
 
-# Keep in step with the release tag; dw1000.cmake is where it is written.
+# The release, from <dw1000/dw1000_version.h>, which is the one place it
+# is written -- bump it there and tag v<VERSION>. `make version` prints it.
 VERSION   != $(MANIFEST) version
+
+# What a build between releases adds to it: +58.g3403fe0[.dirty], and
+# nothing for a release, for a tarball, or for a tree copied into another
+# project's repository (whose git state is not the driver's). It is
+# compiled in, where DW1000_VERSION_FULL reports it; `make version-full`
+# prints what this tree builds as, and `make sources` hands a vendoring
+# build the same answer to pass on if it wants to.
+GITVER    != sh scripts/gitversion.sh
 
 CC        ?= cc
 AR        ?= ar
@@ -67,6 +76,7 @@ W_no       =
 # dw1000.c never calls into dw1000_send.c, so an application that only
 # receives can vendor SRC_CORE alone. Nothing works without SRC_CORE.
 INCDIR    != $(MANIFEST) incdir
+VERSIONHDR = $(INCDIR)/dw1000/dw1000_version.h
 SRC_CORE  != $(MANIFEST) core
 SRC_SEND  != $(MANIFEST) send
 SRC        = $(SRC_CORE) $(SRC_SEND)
@@ -82,7 +92,11 @@ OBJ        = $(SRC_CORE:.c=.o) $(SRC_SEND:.c=.o)
 OSALOBJ    = $(OSAL_SRC:.c=.o)
 STATIC     = lib$(NAME).a
 
-ALL_CPPFLAGS = -I$(INCDIR) -I$(OSAL_INC) $(CPPFLAGS)
+# DW1000_VERSION_GIT is the one thing here that no file holds; the version
+# header defaults it to "" for everyone who compiles these sources without
+# it, which is every vendoring build that does not ask for it.
+ALL_CPPFLAGS = -I$(INCDIR) -I$(OSAL_INC) \
+               -DDW1000_VERSION_GIT='"$(GITVER)"' $(CPPFLAGS)
 ALL_CFLAGS   = $(CFLAGS) $(WARNINGS) $(W_$(WERROR))
 
 .SUFFIXES:
@@ -106,7 +120,8 @@ help:						## show this help (the default)
 	    OSAL     '$(OSAL)  (one of: $(OSAL_PORTS))' \
 	    CC       '$(CC)' \
 	    CFLAGS   '$(CFLAGS)  (yours; the project always adds $(WARNINGS))' \
-	    WERROR   '$(WERROR)  (yes turns warnings into errors)'
+	    WERROR   '$(WERROR)  (yes turns warnings into errors)' \
+	    YES      '$(YES)  (1 answers yes to `make tag`)'
 	@echo ''
 	@echo 'There is no install target: the compile-time options change the'
 	@echo 'public headers, so the driver is vendored, not linked against.'
@@ -147,14 +162,85 @@ lib: portcheck $(STATIC)			## build libdw1000.a against OSAL=<port>
 $(STATIC): $(OBJ) $(OSALOBJ)
 	$(AR) rcs $@ $(OBJ) $(OSALOBJ)
 
+# The git part is in no file, so nothing would make an object stale when
+# HEAD moves, and the archive would keep reporting the commit it was first
+# built at. This stamp remembers the answer instead. The rule runs every
+# time -- FORCE is a target that never exists, which is how both makes are
+# told to -- and does nothing at all unless the answer changed, so an
+# unmoved HEAD costs a `cat`.
+#
+# When it did change, the objects are removed rather than left to a
+# timestamp comparison: BSD make compares against the mtime it read before
+# this rule ran, so it would notice one `make` late. Deleting what was
+# compiled with the old answer says the same thing in a way both makes act
+# on at once. Every port's object goes, for the reason ALLOSALOBJ exists:
+# which port was built is recorded nowhere.
+FORCE:
+
+.gitversion: FORCE
+	@if [ "`cat $@ 2>/dev/null`" != '$(GITVER)' ]; then \
+	    echo '$(GITVER)' > $@; rm -f $(OBJ) $(ALLOSALOBJ); fi
+
+# ... and on the header the release is written in, so that bumping it
+# recompiles what carries it. The only header dependency here: the rest of
+# the API does not change what an object *says about itself*.
+$(OBJ) $(ALLOSALOBJ): .gitversion $(VERSIONHDR)
+
 .c.o:
 	$(CC) $(ALL_CFLAGS) $(ALL_CPPFLAGS) -c -o $@ $<
 
 # --- information ------------------------------------------------------
 
 # Bare, so a script can use it:  v=`make -s version`
-version:					## print the driver version
+version:					## print the release version
 	@echo '$(VERSION)'
+
+# The same, plus what a build from this tree adds to it -- which is what
+# DW1000_VERSION_FULL reports in a build made here. Equal to
+# `make version` exactly when this is a release tree.
+version-full:					## print the version this tree builds as
+	@echo '$(VERSION)$(GITVER)'
+
+# Tag the release from the version header, so that the tag and the header
+# cannot say different things: the number is not typed here, it is read
+# from $(VERSIONHDR). tests/check-manifest.sh checks the other direction,
+# for a tag made by hand -- scripts/checktag.sh, run below so that a tag
+# this target just made is confirmed rather than assumed.
+#
+# Refuses on an unclean worktree: a release tag names committed work, and
+# the version a build reports would otherwise include `.dirty`. Nothing is
+# pushed; that stays yours.
+#
+# In that order on purpose: the two refusals are instant, so they come
+# before the question -- there is no point asking about a tag that cannot be
+# made -- and the full check comes after it, because a minute of tests is
+# not worth spending on a `make tag` the answer to which is no. Tagging
+# something the suite has not passed is the mistake this exists to prevent,
+# so the check is inside the recipe rather than a prerequisite, which would
+# have run before the prompt.
+#
+# `make tag YES=1` answers yes for a script, and a non-interactive run with
+# no YES=1 reads EOF and declines -- the safe way round.
+tag: $(VERSIONHDR)				## tag this release, from the version header
+	@if [ -n "`git status --porcelain --untracked-files=no`" ]; then \
+	    echo 'make: uncommitted changes; commit them before tagging' >&2; \
+	    exit 1; fi
+	@if git rev-parse -q --verify 'refs/tags/v$(VERSION)' >/dev/null; then \
+	    echo 'make: v$(VERSION) exists already; bump $(VERSIONHDR) first' >&2; \
+	    exit 1; fi
+	@if [ "$(YES)" != 1 ]; then \
+	    printf 'tag v%s at %s? (the full check runs first) [y/N] ' \
+		'$(VERSION)' "`git rev-parse --short HEAD`"; \
+	    read -r ans || ans=; \
+	    case "$$ans" in \
+		y|Y|yes|YES) ;; \
+		*) echo 'make: not tagged'; exit 1 ;; \
+	    esac; \
+	fi
+	@$(MAKE) check
+	git tag -a -m '$(NAME) $(VERSION)' 'v$(VERSION)'
+	@sh scripts/checktag.sh '$(VERSION)'
+	@echo 'tagged v$(VERSION) -- push it with: git push origin v$(VERSION)'
 
 ports:						## print the OSAL ports this tree ships
 	@echo '$(OSAL_PORTS)'
@@ -194,14 +280,18 @@ options:					## print the compile-time options and their defaults
 sources: portcheck				## print vendoring files and flags as shell variables
 	@$(MANIFEST) vars $(OSAL) "`pwd`"
 
+# PROJECT_NUMBER is appended rather than written in the Doxyfile, so the
+# documentation says which version it documents without that being a
+# second place the version is kept.
 doc:						## generate the Doxygen documentation
-	$(DOXYGEN) Doxyfile
+	{ cat Doxyfile; echo 'PROJECT_NUMBER = $(VERSION)$(GITVER)'; } \
+	    | $(DOXYGEN) -
 
 clean:						## remove build products
-	rm -f $(STATIC) $(OBJ) $(ALLOSALOBJ)
+	rm -f $(STATIC) $(OBJ) $(ALLOSALOBJ) .gitversion
 
 distclean: clean				## clean, plus the generated documentation
 	rm -rf doc/generated
 
-.PHONY: help portcheck check check-options check-manifest lib version ports \
-	options sources doc clean distclean
+.PHONY: help portcheck check check-options check-manifest lib version \
+	version-full tag ports options sources doc clean distclean

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Read dw1000.cmake, which is the one place the file list lives.
+# Read dw1000.cmake, which is the one place the file list lives, and
+# <dw1000/dw1000_version.h>, which is the one place the release is written.
 #
 # CMake consumers include it directly. The Makefile cannot, so it asks
 # here instead -- `SRC_CORE != sh scripts/manifest.sh core` and so on --
@@ -47,6 +48,26 @@ cmvar() {
     ' "$cm"
 }
 
+# The release, from <dw1000/dw1000_version.h>. It is written there rather
+# than here because a C header can read no other file: a consumer must have
+# the version without running anything, so the header is where it lives and
+# this is one of the two readers (dw1000.cmake parses the same three lines).
+hdrversion() {
+    h="$top/$(cmvar DW1000_INCLUDE_DIR)/dw1000/dw1000_version.h"
+    awk '
+	/^#define[ \t]+DW1000_VERSION_MAJOR[ \t]/ { maj = $3 }
+	/^#define[ \t]+DW1000_VERSION_MINOR[ \t]/ { min = $3 }
+	/^#define[ \t]+DW1000_VERSION_PATCH[ \t]/ { pat = $3 }
+	END {
+	    if (maj == "" || min == "" || pat == "") exit 1
+	    print maj "." min "." pat
+	}
+    ' "$h" || {
+	echo "manifest: no version in $h" >&2
+	exit 1
+    }
+}
+
 # set(DW1000_OSAL_CF2_INCLUDE_DIR ...) for port cf2. An unknown port
 # gives an empty answer rather than an error: the Makefile's portcheck
 # turns that into the message that names the ports there are.
@@ -59,7 +80,7 @@ what=$1
 [ $# -gt 0 ] && shift
 
 case $what in
-version)  cmvar DW1000_VERSION ;;
+version)  hdrversion ;;
 incdir)   cmvar DW1000_INCLUDE_DIR ;;
 core)     cmvar DW1000_SOURCES_CORE ;;
 send)     cmvar DW1000_SOURCES_SEND ;;
@@ -86,6 +107,14 @@ objs)
 #
 # No option flags are emitted. Which ones you want is your choice, and a
 # default printed here would be a second place they are decided.
+#
+# The version comes in two pieces for the same reason. DW1000_VERSION is
+# the release; DW1000_VERSION_GIT is what a build between releases adds to
+# it, worked out here where the driver's own git tree is (it is empty for a
+# tarball, and for a tree copied into your repository rather than cloned).
+# Pass it on with -DDW1000_VERSION_GIT if you want the driver to know
+# it -- unlike the options it changes no structure, so it need not reach
+# every translation unit.
 vars)
     port=$1
     d=$2
@@ -110,6 +139,8 @@ vars)
     printf "DW1000_OSAL_INCLUDE='%s'\n" "$oinc"
     printf "DW1000_CFLAGS='%s'\n"       "-I$inc -I$oinc"
     printf "DW1000_LIBS='%s'\n"         "$libs"
+    printf "DW1000_VERSION='%s'\n"      "$(hdrversion)"
+    printf "DW1000_VERSION_GIT='%s'\n"  "$(sh "$top/scripts/gitversion.sh")"
     ;;
 
 *)
