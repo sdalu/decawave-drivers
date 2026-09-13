@@ -59,9 +59,15 @@ Supported hosts
 | Unix                      | `port/unix`   | via the [bitters][1] lib |
 | [ChibiOS][3]              | `port/chibios`| SPI API v1 or v2         |
 | [Apache MyNewt][4]        | `port/mynewt` | via `hal_spi_txrx()`     |
+| none                      | `port/null`   | no hardware; see below   |
 
 ChibiOS and MyNewt are built against their vendor headers but have not
 been exercised on hardware recently.
+
+`port/null` is not a host. It implements the whole port contract wired to
+nothing, so the core can be compiled where there is no DW1000 and no
+vendor tree -- which is what `make check` does. It is also the shortest
+thing to copy when writing a port of your own.
 
 
 Layout
@@ -83,8 +89,12 @@ decawave-drivers
 │   ├── zephyr                     Zephyr 2 and later
 │   ├── chibios                    ChibiOS, SPI API v1 or v2
 │   ├── mynewt                     Apache MyNewt
-│   └── cf2                        Crazyflie 2.x, on FreeRTOS
+│   ├── cf2                        Crazyflie 2.x, on FreeRTOS
+│   └── null                       no hardware, for compile checks
 │
+├── dw1000.cmake                   source lists, for CMake consumers
+├── Makefile                       compile checks, vendoring, doxygen
+├── tests                          what `make check` runs
 ├── zephyr                         Kconfig and CMakeLists, as a module
 └── doc                            generated doxygen output
 ```
@@ -176,19 +186,92 @@ error path of its own to carry it.
 Compile-time options
 ====================
 
-Undefined means off. Under Zephyr they are `CONFIG_DW1000_*` in
-`Kconfig`; elsewhere define them on the compiler command line.
+Undefined takes the default in the table, which is not always off. Under
+Zephyr they are `CONFIG_DW1000_*` in `Kconfig` and under MyNewt they are
+`syscfg` settings; elsewhere define them on the compiler command line.
+`make options` prints the table below.
 
-| Option                                     | Effect                   |
-| ------------------------------------------ | ------------------------ |
-| `DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH`  | preamble lengths outside the standard set |
-| `DW1000_WITH_PROPRIETARY_SFD`              | the Decawave non-standard SFD |
-| `DW1000_WITH_PROPRIETARY_LONG_FRAME`       | frames up to 1023 bytes, not 127 |
-| `DW1000_WITH_EXTENDED_SEND`                | delayed send with an embedded timestamp |
-| `DW1000_WITH_SFD_TIMEOUT`                  | caller-chosen SFD timeout |
-| `DW1000_WITH_SFD_TIMEOUT_DEFAULT`          | a fixed SFD timeout, not a computed one |
-| `DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011` | work around a spurious AAT on receive |
-| `DW1000_WITH_DWM1000_EVK_COMPATIBILITY`    | +3 dB, DWM1000 under EVB1000 software |
+| Option                                     | Default | Effect         |
+| ------------------------------------------ | ------- | -------------- |
+| `DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH`  | 1 | preamble lengths outside the standard set |
+| `DW1000_WITH_PROPRIETARY_SFD`              | 1 | the Decawave non-standard SFD |
+| `DW1000_WITH_PROPRIETARY_LONG_FRAME`       | 0 | frames up to 1023 bytes, not 127 |
+| `DW1000_WITH_EXTENDED_SEND`                | 1 | delayed send with an embedded timestamp |
+| `DW1000_WITH_SFD_TIMEOUT`                  | 0 | caller-chosen SFD timeout |
+| `DW1000_WITH_SFD_TIMEOUT_DEFAULT`          | 0 | a fixed SFD timeout, not a computed one |
+| `DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011` | 1 | work around a spurious AAT on receive |
+| `DW1000_WITH_DWM1000_EVK_COMPATIBILITY`    | 0 | +3 dB, DWM1000 under EVB1000 software |
+
+Three more take a value rather than a flag:
+`DW1000_SFD_TIMEOUT_DEFAULT` (default `DW1000_SFD_TIMEOUT_MAX`),
+`DW1000_TX_DELAYED_DEFAULT_DELAY` (2 ms, in `DW1000_TIME_CLOCK_HZ` steps)
+and `DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY` (twice the delay).
+
+**These are not internal to the driver.** `DW1000_WITH_SFD_TIMEOUT` and
+`DW1000_WITH_PROPRIETARY_SFD` add fields to `dw1000_config_t`, and
+`DW1000_WITH_EXTENDED_SEND` adds entry points to `<dw1000/dw1000_send.h>`,
+so the same set has to reach the driver and every translation unit that
+includes `<dw1000/dw1000.h>`. Define them in one place your whole build
+sees, not per file.
+
+
+Building
+========
+
+The driver is vendored into a project rather than installed: since the
+options above change the public headers, a shared library and a
+`pkg-config` file that could not carry them would be a trap. So there is
+no `make install`, and the top-level `Makefile` does the other half of
+the job. It works with both GNU make and BSD make.
+
+```text
+make check          compile the option matrix, and check dw1000.cmake agrees
+make sources        print the files and flags to vendor, as shell variables
+make lib            build libdw1000.a locally, against OSAL=<port>
+make options        print the option table above
+make doc            run doxygen
+make help           the rest
+```
+
+`make check` compiles the core over all 256 combinations of the eight
+boolean options, against `port/null`. Nothing in this tree selects any
+of them -- whoever vendors the driver does -- so without this an option
+that stopped compiling would be found by the one consumer who wanted it,
+which is how `DW1000_WITH_EXTENDED_SEND=0` came to spend an unknown
+length of time broken. `make check WERROR=yes` is the CI form.
+
+To vendor from a shell-driven build:
+
+```sh
+eval "$(make -s -C 3rd/decawave-drivers sources OSAL=unix)"
+cc $DW1000_CFLAGS -DDW1000_WITH_PROPRIETARY_LONG_FRAME=1 \
+   -c $DW1000_SOURCES $DW1000_OSAL_SOURCES
+```
+
+From CMake, `dw1000.cmake` says the same thing. It defines variables
+rather than targets, for the reason above -- a target would bake in one
+option set and hide it from you:
+
+```cmake
+include(3rd/decawave-drivers/dw1000.cmake)
+add_library(dw1000 INTERFACE)
+target_include_directories(dw1000 INTERFACE
+    ${DW1000_INCLUDE_DIR} ${DW1000_OSAL_UNIX_INCLUDE_DIR})
+target_sources(dw1000 INTERFACE
+    ${DW1000_SOURCES} ${DW1000_OSAL_UNIX_SOURCES})
+target_compile_definitions(dw1000 INTERFACE
+    DW1000_WITH_PROPRIETARY_LONG_FRAME=1)
+target_link_libraries(ranger PRIVATE dw1000 bitters m)
+```
+
+`DW1000_SOURCES_CORE` and `DW1000_SOURCES_SEND` are separable --
+`dw1000.c` never calls into `dw1000_send.c` -- so an application that
+only receives can leave the latter out. `dw1000.c` uses `<math.h>`, so a
+hosted link wants `-lm`.
+
+Zephyr and MyNewt need none of this: `zephyr/CMakeLists.txt` is a module
+that reads `dw1000.cmake` itself, and `hw/drivers/dw1000/pkg.yml` is a
+MyNewt package.
 
 
 Documentation
