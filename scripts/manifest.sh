@@ -1,0 +1,121 @@
+#!/bin/sh
+# Read dw1000.cmake, which is the one place the file list lives.
+#
+# CMake consumers include it directly. The Makefile cannot, so it asks
+# here instead -- `SRC_CORE != sh scripts/manifest.sh core` and so on --
+# and shell-driven builds get the whole answer at once from
+# `make sources`, which is `vars` below. Nothing keeps a second copy, so
+# there is no second copy to drift.
+#
+# Paths come out relative to the top of the tree, since that is what the
+# Makefile wants; `vars` takes a directory to make them absolute with,
+# because that is what a consumer elsewhere wants.
+#
+# POSIX sh and awk only.
+
+set -e
+
+top=`dirname "$0"`/..
+cm="$top/dw1000.cmake"
+
+if [ ! -f "$cm" ]; then
+    echo "manifest: no dw1000.cmake next to $0" >&2
+    exit 1
+fi
+
+# The values of one set(NAME ...), whether it is written on one line or
+# spread over several, with the ${CMAKE_CURRENT_LIST_DIR}/ prefix taken
+# off and the whitespace squeezed to single spaces.
+cmvar() {
+    awk -v want="$1" '
+	/^set\(/         { collecting = 1; buf = "" }
+	collecting       { buf = buf " " $0 }
+	collecting && /\)/ {
+	    collecting = 0
+	    sub(/^[ \t]*set\(/, "", buf)
+	    sub(/\)[ \t]*$/,    "", buf)
+	    name = buf
+	    sub(/[ \t].*$/, "", name)
+	    if (name == want) {
+		sub(/^[^ \t]+[ \t]*/, "", buf)
+		gsub(/\$\{CMAKE_CURRENT_LIST_DIR\}\//, "", buf)
+		gsub(/[ \t]+/, " ", buf)
+		sub(/^ /, "", buf); sub(/ $/, "", buf)
+		print buf
+	    }
+	}
+    ' "$cm"
+}
+
+# set(DW1000_OSAL_CF2_INCLUDE_DIR ...) for port cf2. An unknown port
+# gives an empty answer rather than an error: the Makefile's portcheck
+# turns that into the message that names the ports there are.
+portvar() {
+    up=`echo "$1" | tr 'a-z' 'A-Z'`
+    cmvar "DW1000_OSAL_${up}_$2"
+}
+
+what=$1
+[ $# -gt 0 ] && shift
+
+case $what in
+version)  cmvar DW1000_VERSION ;;
+incdir)   cmvar DW1000_INCLUDE_DIR ;;
+core)     cmvar DW1000_SOURCES_CORE ;;
+send)     cmvar DW1000_SOURCES_SEND ;;
+# DW1000_SOURCES is composed of the two in cmake syntax the Makefile
+# cannot expand, so compose it here from the same two pieces.
+sources)  echo "`cmvar DW1000_SOURCES_CORE` `cmvar DW1000_SOURCES_SEND`" ;;
+libs)     out=; for l in `cmvar DW1000_LIBS`; do out="$out -l$l"; done
+	  echo $out ;;
+ports)    cmvar DW1000_OSAL_PORTS ;;
+inc)      portvar "$1" INCLUDE_DIR ;;
+src)      portvar "$1" SOURCES ;;
+
+# Every port's OSAL object, for `make clean`: which port was built is not
+# recorded anywhere, so clean removes them all.
+objs)
+    for p in `cmvar DW1000_OSAL_PORTS`; do
+	echo "`portvar "$p" SOURCES`" | sed 's/\.c$/.o/'
+    done | tr '\n' ' '
+    echo
+    ;;
+
+# What `make sources` prints: everything a build script needs, as shell
+# variables, with $2 (the tree, absolutely) prefixed onto every path.
+#
+# No option flags are emitted. Which ones you want is your choice, and a
+# default printed here would be a second place they are decided.
+vars)
+    port=$1
+    d=$2
+    [ -n "$port" ] || { echo "manifest: vars needs a port" >&2; exit 1; }
+    [ -n "$d"    ] || { echo "manifest: vars needs a directory" >&2; exit 1; }
+
+    core=$d/`cmvar DW1000_SOURCES_CORE`
+    send=$d/`cmvar DW1000_SOURCES_SEND`
+    inc=$d/`cmvar DW1000_INCLUDE_DIR`
+    oinc=$d/`portvar "$port" INCLUDE_DIR`
+    osrc=$d/`portvar "$port" SOURCES`
+    libs=
+    for l in `cmvar DW1000_LIBS`; do libs="$libs -l$l"; done
+    libs=`echo $libs`
+
+    printf "DW1000_SOURCES_CORE='%s'\n" "$core"
+    printf "DW1000_SOURCES_SEND='%s'\n" "$send"
+    printf "DW1000_SOURCES='%s'\n"      "$core $send"
+    printf "DW1000_OSAL='%s'\n"         "$port"
+    printf "DW1000_OSAL_SOURCES='%s'\n" "$osrc"
+    printf "DW1000_INCLUDE='%s'\n"      "$inc"
+    printf "DW1000_OSAL_INCLUDE='%s'\n" "$oinc"
+    printf "DW1000_CFLAGS='%s'\n"       "-I$inc -I$oinc"
+    printf "DW1000_LIBS='%s'\n"         "$libs"
+    ;;
+
+*)
+    echo "usage: manifest.sh version|incdir|core|send|sources|libs|ports|objs" >&2
+    echo "       manifest.sh inc|src <port>" >&2
+    echo "       manifest.sh vars <port> <directory>" >&2
+    exit 1
+    ;;
+esac

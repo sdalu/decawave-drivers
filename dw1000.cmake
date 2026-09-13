@@ -65,6 +65,10 @@ set(DW1000_SOURCES
     ${DW1000_SOURCES_CORE}
     ${DW1000_SOURCES_SEND})
 
+# dw1000.c uses <math.h>. Nothing to link on a freestanding target, where
+# the compiler's own runtime supplies it.
+set(DW1000_LIBS m)
+
 set(DW1000_OSAL_PORTS cf2 chibios mynewt null unix zephyr)
 
 set(DW1000_OSAL_CF2_INCLUDE_DIR

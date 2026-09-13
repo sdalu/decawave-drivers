@@ -92,8 +92,9 @@ decawave-drivers
 │   ├── cf2                        Crazyflie 2.x, on FreeRTOS
 │   └── null                       no hardware, for compile checks
 │
-├── dw1000.cmake                   source lists, for CMake consumers
+├── dw1000.cmake                   the file list, read by both of these
 ├── Makefile                       compile checks, vendoring, doxygen
+├── scripts                        reads dw1000.cmake for the Makefile
 ├── tests                          what `make check` runs
 ├── zephyr                         Kconfig and CMakeLists, as a module
 └── doc                            generated doxygen output
@@ -248,9 +249,15 @@ cc $DW1000_CFLAGS -DDW1000_WITH_PROPRIETARY_LONG_FRAME=1 \
    -c $DW1000_SOURCES $DW1000_OSAL_SOURCES
 ```
 
-From CMake, `dw1000.cmake` says the same thing. It defines variables
-rather than targets, for the reason above -- a target would bake in one
-option set and hide it from you:
+That answer comes out of `dw1000.cmake`, which is the one place the file
+list lives. A CMake consumer includes it; the Makefile reads it through
+`scripts/manifest.sh`. Adding a source or a port means editing that file
+and nothing else, and `make check` fails if either side starts keeping a
+list of its own again.
+
+From CMake it is used directly. It defines variables rather than targets,
+for the reason above -- a target would bake in one option set and hide it
+from you:
 
 ```cmake
 include(3rd/decawave-drivers/dw1000.cmake)
@@ -267,7 +274,7 @@ target_link_libraries(ranger PRIVATE dw1000 bitters m)
 `DW1000_SOURCES_CORE` and `DW1000_SOURCES_SEND` are separable --
 `dw1000.c` never calls into `dw1000_send.c` -- so an application that
 only receives can leave the latter out. `dw1000.c` uses `<math.h>`, so a
-hosted link wants `-lm`.
+hosted link wants `DW1000_LIBS`, which is `m`.
 
 Zephyr and MyNewt need none of this: `zephyr/CMakeLists.txt` is a module
 that reads `dw1000.cmake` itself, and `hw/drivers/dw1000/pkg.yml` is a

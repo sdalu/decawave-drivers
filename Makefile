@@ -6,6 +6,11 @@
 #
 # Run `make help` for the targets and the variables you can override.
 #
+# The file list is not here. dw1000.cmake is the manifest -- CMake
+# consumers include it, and this Makefile reads it through
+# scripts/manifest.sh, with `!=` shell assignments (GNU make 4.0 and any
+# BSD make). One place to add a source or a port, and nothing to drift.
+#
 # There is no install target and no pkg-config file, deliberately. The
 # compile-time options add fields to dw1000_config_t and entry points to
 # <dw1000/dw1000_send.h>, so an application must be compiled with exactly
@@ -20,9 +25,10 @@
 # compiling. One already had.
 
 NAME       = dw1000
-# Keep in step with the release tag and with dw1000.cmake;
-# tests/check-cmake.sh checks the two agree.
-VERSION    = 1.1.0
+MANIFEST   = sh scripts/manifest.sh
+
+# Keep in step with the release tag; dw1000.cmake is where it is written.
+VERSION   != $(MANIFEST) version
 
 CC        ?= cc
 AR        ?= ar
@@ -36,32 +42,20 @@ WARNINGS   = -Wall -Wextra
 LDFLAGS   ?=
 
 # --- port selection ---------------------------------------------------
-# Selected by indirection rather than conditionals, so that one Makefile
-# serves both makes. An unknown name expands to nothing, which portcheck
-# catches before the compiler reports a missing <dw1000/osal.h>.
-#
 # null is the default because it is the only port that needs nothing
 # installed: the others want bitters, or a Zephyr tree, or a vendor HAL,
 # and cannot be built here without one.
+#
+# OSAL is read at parse time, so `make lib OSAL=unix` reaches the two
+# queries below: a command-line assignment is in force before either make
+# expands them. An unknown name gives an empty answer rather than an
+# error, which portcheck turns into the message that names the ports
+# there are.
 OSAL      ?= null
 
-OSAL_INC_cf2     = port/cf2/dw/osal/include
-OSAL_SRC_cf2     = port/cf2/dw/osal/src/osal.c
-OSAL_INC_chibios = port/chibios/dw/osal/include
-OSAL_SRC_chibios = port/chibios/dw/osal/src/dw_osal.c
-OSAL_INC_mynewt  = port/mynewt/dw/osal/include
-OSAL_SRC_mynewt  = port/mynewt/dw/osal/src/osal.c
-OSAL_INC_null    = port/null/dw/osal/include
-OSAL_SRC_null    = port/null/dw/osal/src/osal.c
-OSAL_INC_unix    = port/unix/dw/osal/include
-OSAL_SRC_unix    = port/unix/dw/osal/src/osal.c
-OSAL_INC_zephyr  = port/zephyr/dw/osal/include
-OSAL_SRC_zephyr  = port/zephyr/dw/osal/src/osal.c
-
-OSAL_PORTS       = cf2 chibios mynewt null unix zephyr
-
-OSAL_INC         = $(OSAL_INC_$(OSAL))
-OSAL_SRC         = $(OSAL_SRC_$(OSAL))
+OSAL_PORTS != $(MANIFEST) ports
+OSAL_INC   != $(MANIFEST) inc $(OSAL)
+OSAL_SRC   != $(MANIFEST) src $(OSAL)
 
 # Opt-in rather than default: a newer compiler inventing a new warning
 # should not break an ordinary user's build, but CI should stay clean.
@@ -70,27 +64,23 @@ W_yes      = -Werror
 W_no       =
 
 # --- sources ----------------------------------------------------------
-# Listed rather than globbed: $(wildcard) is GNU-only, and an explicit
-# list is what a vendoring consumer wants from `make sources` anyway.
-#
 # dw1000.c never calls into dw1000_send.c, so an application that only
-# receives can vendor CORE alone. Nothing works without CORE.
-COREDIR    = hw/drivers/dw1000
-INCDIR     = $(COREDIR)/include
-SRC_CORE   = $(COREDIR)/src/dw1000.c
-SRC_SEND   = $(COREDIR)/src/dw1000_send.c
+# receives can vendor SRC_CORE alone. Nothing works without SRC_CORE.
+INCDIR    != $(MANIFEST) incdir
+SRC_CORE  != $(MANIFEST) core
+SRC_SEND  != $(MANIFEST) send
 SRC        = $(SRC_CORE) $(SRC_SEND)
 
-HEADERS    = $(INCDIR)/dw1000/dw1000.h $(INCDIR)/dw1000/dw1000_send.h \
-             $(INCDIR)/dw1000/dw1000_reg.h $(INCDIR)/dw1000/dw1000_otp.h \
-             $(INCDIR)/dw1000/dw1000_bswap.h
+# What a hosted link needs; dw1000.c uses <math.h>.
+LIBS      != $(MANIFEST) libs
 
-OBJ        = $(COREDIR)/src/dw1000.o $(COREDIR)/src/dw1000_send.o
+# Which port was built is recorded nowhere, so clean removes every port's
+# object rather than guessing.
+ALLOSALOBJ != $(MANIFEST) objs
+
+OBJ        = $(SRC_CORE:.c=.o) $(SRC_SEND:.c=.o)
 OSALOBJ    = $(OSAL_SRC:.c=.o)
 STATIC     = lib$(NAME).a
-
-# dw1000.c uses <math.h>; a hosted link wants -lm.
-LIBS       = -lm
 
 ALL_CPPFLAGS = -I$(INCDIR) -I$(OSAL_INC) $(CPPFLAGS)
 ALL_CFLAGS   = $(CFLAGS) $(WARNINGS) $(W_$(WERROR))
@@ -113,15 +103,15 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-cmake		## compile the option matrix, and check dw1000.cmake agrees
+check: check-options check-manifest		## compile the option matrix, and check the manifest
 
 # 256 compiles, a few seconds each hundred. CC, CFLAGS and WERROR reach
 # the script through the environment.
 check-options:					## compile the core over every option combination
 	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-options.sh
 
-check-cmake:					## check dw1000.cmake and this Makefile still agree
-	@sh tests/check-cmake.sh
+check-manifest:					## check dw1000.cmake still describes the tree
+	@sh tests/check-manifest.sh
 
 # --- building ---------------------------------------------------------
 
@@ -175,31 +165,16 @@ options:					## print the compile-time options and their defaults
 #     cc $$DW1000_CFLAGS -c $$DW1000_SOURCES
 #
 # Paths are absolute, so the caller need not know where the tree sits.
-# No option flags are emitted: which ones you want is your choice, and
-# emitting a default here would put it in two places at once.
+# The answer comes from dw1000.cmake, the same file a CMake consumer
+# includes, so the two cannot disagree about what to vendor.
 sources: portcheck				## print vendoring files and flags as shell variables
-	@d=`pwd`; \
-	 printf "DW1000_SOURCES_CORE='%s'\n"  "$$d/$(SRC_CORE)"; \
-	 printf "DW1000_SOURCES_SEND='%s'\n"  "$$d/$(SRC_SEND)"; \
-	 printf "DW1000_SOURCES='%s'\n"       "$$d/$(SRC_CORE) $$d/$(SRC_SEND)"; \
-	 printf "DW1000_OSAL='%s'\n"          "$(OSAL)"; \
-	 printf "DW1000_OSAL_SOURCES='%s'\n"  "$$d/$(OSAL_SRC)"; \
-	 printf "DW1000_INCLUDE='%s'\n"       "$$d/$(INCDIR)"; \
-	 printf "DW1000_OSAL_INCLUDE='%s'\n"  "$$d/$(OSAL_INC)"; \
-	 printf "DW1000_CFLAGS='%s'\n"        "-I$$d/$(INCDIR) -I$$d/$(OSAL_INC)"; \
-	 printf "DW1000_LIBS='%s'\n"          "$(LIBS)"
+	@$(MANIFEST) vars $(OSAL) "`pwd`"
 
 doc:						## generate the Doxygen documentation
 	$(DOXYGEN) Doxyfile
 
 clean:						## remove build products
-	rm -f $(STATIC) $(OBJ) \
-	      port/cf2/dw/osal/src/osal.o \
-	      port/chibios/dw/osal/src/dw_osal.o \
-	      port/mynewt/dw/osal/src/osal.o \
-	      port/null/dw/osal/src/osal.o \
-	      port/unix/dw/osal/src/osal.o \
-	      port/zephyr/dw/osal/src/osal.o
+	rm -f $(STATIC) $(OBJ) $(ALLOSALOBJ)
 
 distclean: clean				## clean, plus the generated documentation
 	rm -rf doc/generated
@@ -222,7 +197,9 @@ help:						## show this help
 	@echo 'public headers, so the driver is vendored, not linked against.'
 	@echo 'See `make sources`, dw1000.cmake, and the note atop this file.'
 	@echo ''
+	@echo 'The file list lives in dw1000.cmake; this Makefile reads it.'
+	@echo ''
 	@echo 'This Makefile works with both GNU make and BSD make.'
 
-.PHONY: all portcheck check check-options check-cmake lib version ports \
+.PHONY: all portcheck check check-options check-manifest lib version ports \
 	options sources doc clean distclean help

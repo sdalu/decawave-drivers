@@ -15,8 +15,11 @@ top=`dirname "$0"`/..
 cc=${CC:-cc}
 cflags=${CFLAGS:--Wall -Wextra}
 
-inc="-I$top/hw/drivers/dw1000/include -I$top/port/null/dw/osal/include"
-src="$top/hw/drivers/dw1000/src/dw1000.c $top/hw/drivers/dw1000/src/dw1000_send.c"
+# From dw1000.cmake, like everything else that needs to know the files.
+m="sh $top/scripts/manifest.sh"
+inc="-I$top/`$m incdir` -I$top/`$m inc null`"
+src=
+for f in `$m sources` `$m src null`; do src="$src $top/$f"; done
 
 tmp=`mktemp -d`
 trap 'rm -rf "$tmp"' EXIT INT TERM
