@@ -478,6 +478,8 @@ struct dw1000_emulation *
 dw1000_emulation_create(rsvc_t *rsvc,
 			void (*line_cb)(int line, void *args), void *line_args) {
     struct dw1000_emulation *e = calloc(1, sizeof(struct dw1000_emulation));
+    if (e == NULL)
+	EMU_FATAL("out of memory allocating the emulation");
 
     pthread_mutex_init(&e->mutex, NULL);
     
@@ -588,14 +590,14 @@ void dw1000_emulation_reset(struct dw1000_emulation *e) {
 
 
     uint32_t gpio_ctrl =
-	(DW1000_VAL_GPIO_0_GPIO << DW1000_SFT_GPIO_MSGP8) |
-	(DW1000_VAL_GPIO_1_GPIO << DW1000_SFT_GPIO_MSGP8) |
-	(DW1000_VAL_GPIO_2_GPIO << DW1000_SFT_GPIO_MSGP8) |
-	(DW1000_VAL_GPIO_3_GPIO << DW1000_SFT_GPIO_MSGP8) |
-	(DW1000_VAL_GPIO_4_GPIO << DW1000_SFT_GPIO_MSGP8) |
-	(DW1000_VAL_GPIO_5_GPIO << DW1000_SFT_GPIO_MSGP8) |
-	(DW1000_VAL_GPIO_6_GPIO << DW1000_SFT_GPIO_MSGP8) |
-	(DW1000_VAL_GPIO_7_SYNC << DW1000_SFT_GPIO_MSGP8) |
+	(DW1000_VAL_GPIO_0_GPIO << DW1000_SFT_GPIO_MSGP0) |
+	(DW1000_VAL_GPIO_1_GPIO << DW1000_SFT_GPIO_MSGP1) |
+	(DW1000_VAL_GPIO_2_GPIO << DW1000_SFT_GPIO_MSGP2) |
+	(DW1000_VAL_GPIO_3_GPIO << DW1000_SFT_GPIO_MSGP3) |
+	(DW1000_VAL_GPIO_4_GPIO << DW1000_SFT_GPIO_MSGP4) |
+	(DW1000_VAL_GPIO_5_GPIO << DW1000_SFT_GPIO_MSGP5) |
+	(DW1000_VAL_GPIO_6_GPIO << DW1000_SFT_GPIO_MSGP6) |
+	(DW1000_VAL_GPIO_7_SYNC << DW1000_SFT_GPIO_MSGP7) |
 	(DW1000_VAL_GPIO_8_IRQ  << DW1000_SFT_GPIO_MSGP8) ;
     E_REG_IC_WRITE32_KEY(e, gpio_ctrl, GPIO_CTRL);
 
@@ -1057,7 +1059,7 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
     }
 	
     default:
-	EMU_FATAL("RSVC INT <unknown> (type=0x%x, size=%zd)",
+	EMU_FATAL("RSVC INT <unknown> (type=0x%x, size=%zu)",
 		    iopkt->type, iopktlen);
     }
 
