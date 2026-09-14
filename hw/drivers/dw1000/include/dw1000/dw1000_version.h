@@ -34,7 +34,7 @@
 /** Minor version of the release */
 #define DW1000_VERSION_MINOR 3
 /** Patch version of the release */
-#define DW1000_VERSION_PATCH 0
+#define DW1000_VERSION_PATCH 1
 
 /* Composed rather than spelled out, so the numbers above stay the only
  * copy. The two levels are the usual stringify dance: the inner one is
