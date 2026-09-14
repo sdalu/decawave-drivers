@@ -35,14 +35,6 @@
 /** @{ */
 
 /**
- * @brief Increase transmit power by about 3db, for compatibility with
- *        DecaRanging software when using DWM1000 module
- */
-#if !defined(DW1000_WITH_DWM1000_EVK_COMPATIBILITY) || defined(__DOXYGEN__)
-#define DW1000_WITH_DWM1000_EVK_COMPATIBILITY   0
-#endif
-
-/**
  * @brief Add support for proprieray preamble length
  */
 #if !defined(DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH) || defined(__DOXYGEN__)

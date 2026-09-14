@@ -209,13 +209,21 @@ Zephyr they are `CONFIG_DW1000_*` in `Kconfig` and under MyNewt they are
 | `DW1000_WITH_SFD_TIMEOUT`                  | 0 | caller-chosen SFD timeout |
 | `DW1000_WITH_SFD_TIMEOUT_DEFAULT`          | 0 | a fixed SFD timeout, not a computed one |
 | `DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011` | 1 | work around a spurious AAT on receive |
-| `DW1000_WITH_DWM1000_EVK_COMPATIBILITY`    | 0 | +3 dB, DWM1000 under EVB1000 software |
 
 Three more take a value rather than a flag:
 `DW1000_SFD_TIMEOUT_DEFAULT` (default `DW1000_SFD_TIMEOUT_MAX`),
 `DW1000_TX_DELAYED_DEFAULT_DELAY` (400 us, in `DW1000_TIME_CLOCK_HZ` steps;
 an nRF52 measured a need of 0.27 ms, a Raspberry Pi 4 over spidev 0.16 ms)
 and `DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY` (1.5 x the delay, 600 us).
+
+Transmit power is deliberately not among them: it is part of
+`dw1000_radio_t`, and `DW1000_TX_POWER(dB)` names it outright, so a board
+whose RF path differs from the reference one is corrected where the radio
+is configured rather than by a compile-time switch. The usual case is a
+DWM1000 module driven by software written for the EVB1000 evaluation
+board, which wants roughly 3 dB above the calibrated default for its
+channel and PRF (those defaults are `manual_tx_power[]` in `dw1000.c`,
+encoded as UM 7.2.31.4 describes).
 
 **These are not internal to the driver.** `DW1000_WITH_SFD_TIMEOUT` and
 `DW1000_WITH_PROPRIETARY_SFD` add fields to `dw1000_config_t`, and

@@ -621,26 +621,6 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
 			) << 8;
     }
     
-#if DW1000_WITH_DWM1000_EVK_COMPATIBILITY
-    // Increasing TX power by 3dbm
-    // Excerpt from ?????:
-    //   To achieve best results when using the DWM1000 with Decawave’s
-    //   DecaRanging software, you will need to adjust the default transmit
-    //   power value programmed into the DWM1000 by the software. This is
-    //   because DecaRanging software is targeted at Decawave ’s EVB1000
-    //   evaluation board which has a different RF path compared to the
-    //   DWM1000. You should increase the transmit power by approximately 3 dB.
-    uint8_t txpowsd  = (dw->tx_power >> 16) & 0xFF;
-    uint8_t txpowphr = (dw->tx_power >>  8) & 0xFF;
-    if      ((txpowsd  >> 5  ) >  0) { txpowsd -= 1 << 5;  }  // Coarse
-    else if ((txpowsd  & 0x1F) < 25) { txpowsd += 6;       }  // Fine
-    else                             { txpowsd  = 0x1F;    }  // (max power)
-    if      ((txpowphr >> 5  ) >  0) { txpowphr -= 1 << 5; }  // Coarse
-    else if ((txpowphr & 0x1F) < 25) { txpowphr += 6;      }  // Fine
-    else                             { txpowphr  = 0x1F;   }  // (max power)
-    dw->tx_power = (txpowsd << 16) | (txpowphr << 8);
-#endif
-    
     /* Configure DRX Tune
      */
     // UM §7.2.40.2: DRX_TUNE0b
