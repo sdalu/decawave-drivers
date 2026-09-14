@@ -293,3 +293,11 @@ uint32_t seed;
 size_t   seedlen = sizeof(seed);
 rsvc_o(rsvc, RSVC_SEED_GET, &seed, &seedlen);
 ```
+
+`tests/emulation/smoke.c` is the whole of both halves in one program: a
+medium that binds the socket, answers every request and loops a node's
+own frame back at it, and a node that runs the driver against it --
+transmit, receive, a damaged FCS, a ranging frame. It is the shortest
+worked example of the protocol above, and the smallest one that runs:
+`sh tests/check-emulation.sh` builds and runs it, needing nothing
+installed and no server started.

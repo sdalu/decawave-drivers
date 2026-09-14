@@ -142,7 +142,7 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-manifest check-emulation	## compile the option matrix (~1 min), check the manifest, and the emulation port
+check: check-options check-manifest check-emulation	## compile the option matrix (~1 min), check the manifest, run the emulation smoke test
 
 # 256 compiles, tens of seconds in total, so the script reports progress
 # as it goes. CC, CFLAGS and WERROR reach it through the environment.
@@ -153,20 +153,16 @@ check-manifest:					## check dw1000.cmake still describes the tree
 	@sh tests/check-manifest.sh
 
 # The emulation port has no vendor tree to wait for -- unlike unix,
-# chibios, mynewt, cf2 and zephyr, it needs nothing installed -- so
-# there is no reason for it to rot silently the way
-# DW1000_WITH_EXTENDED_SEND=0 once did. Compiled next to the option
-# matrix over port/null, with the same warnings `lib` builds with.
-# EMU_INC/EMU_SRC go through the manifest like OSAL_INC/OSAL_SRC do,
-# so this does not become a second place a port's paths are spelled
-# out (tests/check-manifest.sh fails the Makefile for that).
-EMU_INC   != $(MANIFEST) inc emulation
-EMU_SRC   != $(MANIFEST) src emulation
-
-check-emulation:				## compile the core against port/emulation
-	@$(CC) $(ALL_CFLAGS) -I$(INCDIR) -I$(EMU_INC) \
-	    -DDW1000_VERSION_GIT='"$(GITVER)"' $(CPPFLAGS) \
-	    -fsyntax-only $(SRC_CORE) $(EMU_SRC)
+# chibios, mynewt, cf2 and zephyr, it needs nothing installed -- and
+# tests/emulation/smoke.c brings its own medium, a thread in the test's
+# own process. So this is the one port the tree can *run* the driver
+# against rather than only compile, which subsumes the syntax check this
+# target used to be and catches what no syntax check would: the frame on
+# the wire, the timestamps, and the four callbacks. The script reads the
+# paths from the manifest, as everything here does (tests/check-manifest.sh
+# fails the Makefile for spelling a port path out itself).
+check-emulation:				## run the emulation smoke test (driver, port/emulation, stub medium)
+	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-emulation.sh
 
 # --- building ---------------------------------------------------------
 

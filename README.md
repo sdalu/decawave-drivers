@@ -234,7 +234,7 @@ the job. It works with both GNU make and BSD make.
 
 ```text
 make                print the targets; nothing is built by default
-make check          compile the option matrix, and check the manifest
+make check          compile the option matrix, check the manifest, run the emulation smoke test
 make sources        print the files and flags to vendor, as shell variables
 make lib            build libdw1000.a locally, against OSAL=<port>
 make options        print the option table above
