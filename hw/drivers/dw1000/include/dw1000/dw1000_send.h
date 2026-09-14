@@ -126,7 +126,10 @@
 
 /**
  * @brief Embed timestamp in the trasmitted frame.
- * @pre   @p DW1000_TX_DELAYED_START should also be enabled
+ * @note  Implies @p DW1000_TX_DELAYED_START: the embedded value is the
+ *        programmed transmission time plus the antenna delay, which is
+ *        only meaningful for a delayed send, so the extended send sets
+ *        that flag whether or not the caller passed it.
  */
 #define DW1000_TX_DELAYED_EMBED_TIMESTAMP			0x1000
 /**

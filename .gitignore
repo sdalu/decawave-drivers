@@ -3,3 +3,4 @@
 *.a
 doc/generated
 .gitversion
+docs/*.pdf

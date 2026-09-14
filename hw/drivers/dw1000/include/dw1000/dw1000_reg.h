@@ -57,6 +57,12 @@
 
 #define DW1000_REG_PANADR                       0x03
 #define DW1000_LEN_PANADR                          4
+#define DW1000_OFF_PANADR_SHORT_ADDR            0x00
+#define DW1000_OFF_PANADR_PAN_ID                0x02
+#define DW1000_SFT_PANADR_SHORT_ADDR               0
+#define DW1000_MSK_PANADR_SHORT_ADDR  (0xFFFFu <<  0)
+#define DW1000_SFT_PANADR_PAN_ID                  16
+#define DW1000_MSK_PANADR_PAN_ID      (0xFFFFu << 16)
 
 
 #define DW1000_REG_SYS_CFG                      0x04
@@ -601,6 +607,20 @@
 #define DW1000_VAL_PMSC_CTRL0_SYSCLKS_AUTO       0x0
 #define DW1000_VAL_PMSC_CTRL0_SYSCLKS_19M        0x1
 #define DW1000_VAL_PMSC_CTRL0_SYSCLKS_125M       0x2
+
+#define DW1000_OFF_PMSC_CTRL0_RXCLKS               2
+#define DW1000_MSK_PMSC_CTRL0_RXCLKS     (0x03 << 2)
+#define DW1000_VAL_PMSC_CTRL0_RXCLKS_AUTO        0x0
+#define DW1000_VAL_PMSC_CTRL0_RXCLKS_19M         0x1
+#define DW1000_VAL_PMSC_CTRL0_RXCLKS_125M        0x2
+#define DW1000_VAL_PMSC_CTRL0_RXCLKS_OFF         0x3
+
+#define DW1000_OFF_PMSC_CTRL0_TXCLKS               4
+#define DW1000_MSK_PMSC_CTRL0_TXCLKS     (0x03 << 4)
+#define DW1000_VAL_PMSC_CTRL0_TXCLKS_AUTO        0x0
+#define DW1000_VAL_PMSC_CTRL0_TXCLKS_19M         0x1
+#define DW1000_VAL_PMSC_CTRL0_TXCLKS_125M        0x2
+#define DW1000_VAL_PMSC_CTRL0_TXCLKS_OFF         0x3
 
 #define DW1000_FLG_PMSC_CTRL0_FACE         (1 <<  6)
 /* Reserved in the UM, and unnamed: see _dw1000_clocks() */

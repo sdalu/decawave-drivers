@@ -164,9 +164,9 @@ static const struct _channel_prf_calibration channel_prf_calibration[6][3] = {
     { { 0, 0 }, { 108, 1475 }, { 104,  930 } }, // 1
     { { 0, 0 }, { 108, 1290 }, { 104,  814 } }, // 2
     { { 0, 0 }, { 108, 1147 }, { 104,  724 } }, // 3
-    { { 0, 0 }, { 102,  868 }, { 102,  868 } }, // 4
+    { { 0, 0 }, { 104,  868 }, { 104,  868 } }, // 4
     { { 0, 0 }, { 108,  794 }, { 104,  501 } }, // 5
-    { { 0, 0 }, { 102,  534 }, { 102,  534 } }, // 7
+    { { 0, 0 }, { 104,  534 }, { 104,  534 } }, // 7
 };
 
 // Internal tunning tables
@@ -191,7 +191,7 @@ static const struct _tx_power manual_tx_power[] = {
 // UM §7.2.44.3: Frequency synthesiser - PLL tuning
 // UM §7.2.41.3: Value for RF_RXCTRLH
 // UM §7.2.41.4: Value for RF_TXCTRL
-// UM §7.2.43.4: Pulse Generator Delay
+// UM §7.2.43.6: Pulse Generator Delay
 struct _channel_tunning {
     uint32_t fs_pll_cfg;      // Frequency synthesiser - PLL configuration
     uint8_t  fs_pll_tune;     // Frequency synthesiser – PLL Tuning
@@ -446,6 +446,58 @@ void _dw1000_clocks(dw1000_t *dw, int mode) {
 
 /**
  * @internal
+ * @brief  Force the transmitter clock on, or return it to sequencing
+ *
+ * @details Errata 1.4 §3.1 (TX-1): for a delayed transmit whose send
+ *          time falls between the TXPUTE window and "time OK", the
+ *          frame is not sent and *neither* HPDWARN nor TXPUTE is
+ *          raised, so dw1000_tx_start() cannot tell the failure from a
+ *          success and no TX done event ever follows. The workaround
+ *          the erratum gives is to force the TX clock on before the
+ *          delayed TX command is issued ("PMSC_CTRL0 bits 5,4 set to
+ *          1,0"); returning it to automatic sequencing once the frame
+ *          is out is this driver's own doing, so that the forced clock
+ *          costs power only while a delayed send is pending.
+ *
+ * @note    PMSC_CTRL0 byte 0 holds SYSCLKS, RXCLKS and TXCLKS; it is
+ *          read-modify-written so the other selections keep their value.
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  force    true to force the clock on, false to release it
+ */
+static
+void _dw1000_tx_clock_force(dw1000_t *dw, bool force) {
+    uint8_t pmsc_ctrl0 =
+	_dw1000_reg_read8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0);
+
+    pmsc_ctrl0 &= ~DW1000_MSK_PMSC_CTRL0_TXCLKS;
+    pmsc_ctrl0 |= (force ? DW1000_VAL_PMSC_CTRL0_TXCLKS_125M
+		         : DW1000_VAL_PMSC_CTRL0_TXCLKS_AUTO)
+	          << DW1000_OFF_PMSC_CTRL0_TXCLKS;
+
+    _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0,
+		       pmsc_ctrl0);
+
+    dw->tx_clk_forced = force ? 1 : 0;
+}
+
+
+/**
+ * @internal
+ * @brief  Return the transmitter clock to sequencing if this driver
+ *         forced it on for a delayed send (Errata 1.4 §3.1, TX-1)
+ *
+ * @param[in]  dw       driver context
+ */
+static inline
+void _dw1000_tx_clock_release(dw1000_t *dw) {
+    if (dw->tx_clk_forced)
+	_dw1000_tx_clock_force(dw, false);
+}
+
+
+/**
+ * @internal
  * @brief Perform software reset of the DW1000
  *
  * @pre The SPI interface must have been initialized to call this
@@ -469,6 +521,11 @@ void _dw1000_softreset(dw1000_t *dw) {
     // Upload new configuration
     _dw1000_reg_write8 (dw, DW1000_REG_AON, DW1000_OFF_AON_CTRL,
 			DW1000_FLG_AON_CTRL_SAVE);
+    // UM §2.4.1.2: the AON array copy takes about 7µs, and SPI access
+    // must be avoided while it runs. At 3MHz the next transaction nearly
+    // covers it on its own, but nothing in the driver caps the SPI clock,
+    // so wait rather than rely on the port being slow.
+    _dw1000_delay_usec(10); // Be large, using 10µs instead of 7µs
 
     // Reset All (HIF, TX, RX, PMSC) (put flags to 0)
     _dw1000_reg_write8 (dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
@@ -480,7 +537,8 @@ void _dw1000_softreset(dw1000_t *dw) {
 			0xF0);
     
     // Reset internal flags
-    dw->wait4resp = 0;
+    dw->wait4resp     = 0;
+    dw->tx_clk_forced = 0;
 }
 
 
@@ -630,7 +688,7 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
     //  + SFD length (SFD = Start of Frame Delimiter)
     //  - PAC size   (PAC = Preamble Acquisition Chunk)
     //
-    // UM §4.1.13: SFD detection
+    // UM §4.1.3: SFD detection
     //  In the standard, the SFD is 64 symbols long for 110Kb/s,
     //  and 8 symbols for other bitrate (8500Kb/s, 6.8Mb/s)
     const uint16_t drx_sfdtoc =
@@ -695,12 +753,32 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
     //   proprietary | 16         | -18         |  850k
     //               | 64         | -82         |  110k
 #if DW1000_WITH_PROPRIETARY_SFD
+    /* UNSETTLED at 6.8 Mbps. The DWSFD field text (UM §7.2.32) ends
+     * "(For 6.8 Mbps the standard 8-symbol SFD)", which read one way
+     * makes the standard-8 adjustment (-5) the right one there. Against
+     * that: table 18 does carry a Decawave 8-symbol row (-6+1-5 = -10),
+     * untagged by bitrate, and both Decawave drivers program a Decawave
+     * SFD of length 8 at 6.8 Mbps (uwb-dw1000 DW_NS_SFD_LEN_6M8 = 8),
+     * so their own code reads the parenthetical as "the Decawave SFD is
+     * 8 symbols long at 6.8 Mbps", not as "DWSFD is ignored".
+     *
+     * The second reading is also the only one consistent with setting
+     * TNSSFD/RNSSFD alongside DWSFD below: were DWSFD ignored at
+     * 6.8 Mbps, those two would select the user-configured SFD of
+     * table 22, whose sequence bytes this driver never programs.
+     *
+     * So keep the Decawave adjustment, which is what the driver has
+     * always applied. Measuring RXPACC against RXPACC_NOSAT with and
+     * without DWSFD at 6.8 Mbps settles which SFD the chip really uses;
+     * until then, do not move a power estimate on a reading the manual
+     * does not make plainly.
+     */
     if (radio->proprietary.sfd) {
 	switch(usr_sfd_len) {
 	case  8: dw->rxpacc_adj = -10; break;
 	case 16: dw->rxpacc_adj = -18; break;
 	case 64: dw->rxpacc_adj = -82; break;
-	default: DW1000_ASSERT(0, "invalid register number");
+	default: DW1000_ASSERT(0, "unexpected proprietary SFD length");
 	}
     } else {
 #endif
@@ -781,6 +859,7 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
     //  reconfiguration.  This issue is not documented at the time of
     //  writing this code. It should be in next release of DW1000 User
     //  Manual (v2.09, from July 2016)."
+    // It is documented since UM 2.12, §5.3.1.2 (p. 52).
     // => Request "TX start" and "TRX off" at the same time
     _dw1000_reg_write8 (dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL,
 		       DW1000_FLG_SYS_CTRL_TXSTRT | DW1000_FLG_SYS_CTRL_TRXOFF);
@@ -1348,7 +1427,7 @@ int dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
     }
 #endif
     
-    // UM §4.1.13: SFD detection
+    // UM §4.1.3: SFD detection
     // Bitrate at 110Kb/s need RXM110K flag (this will set the SFD length)
     // In the standard, the SFD is 64 symbols long for 110Kb/s,
     // and 8 symbols for other bitrate (8500Kb/s, 6.8Mb/s)
@@ -1370,7 +1449,15 @@ int dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
 	((uint32_t)radio->prf      << DW1000_SFT_CHAN_CTRL_RXPRF   ) |
 #if DW1000_WITH_PROPRIETARY_SFD
 	// SFD
-	((uint32_t)radio->proprietary.sfd << DW1000_SFT_CHAN_CTRL_DWSFD) |
+	//   UM 2.15 §7.2.32 states that DWSFD takes precedence and that
+	//   TNSSFD/RNSSFD are then ignored, so setting DWSFD alone is
+	//   enough. Both Decawave drivers (deca_device.c dwt_configure(),
+	//   uwb-dw1000 dw1000_mac_config()) set the three together; do the
+	//   same, so that a reader comparing the drivers has one less
+	//   difference to account for.
+	((uint32_t)radio->proprietary.sfd << DW1000_SFT_CHAN_CTRL_DWSFD ) |
+	((uint32_t)radio->proprietary.sfd << DW1000_SFT_CHAN_CTRL_TNSSFD) |
+	((uint32_t)radio->proprietary.sfd << DW1000_SFT_CHAN_CTRL_RNSSFD) |
 #endif
 	// Preamble code (TX/RX)
 	((uint32_t)radio->tx_pcode << DW1000_SFT_CHAN_CTRL_TX_PCODE) |
@@ -1477,6 +1564,54 @@ void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
 }
 
 
+/**
+ * @internal
+ * @brief  Recover the receiver from a double buffered overrun
+ *
+ * @details UM §4.3.3/§4.3.5: a frame arrived while both buffers were
+ *          still held by the host, so the buffered data can no longer be
+ *          trusted. Drop everything the receiver holds, reset it, and
+ *          report it as a receive error so that the host re-arms the
+ *          receiver as it does for any other error.
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  status   status word to hand to the rx_error callback
+ */
+static
+void _dw1000_rx_overrun_recover(dw1000_t *dw, uint32_t status) {
+    const dw1000_config_t *cfg = dw->config;
+
+    // RXOVRR is deliberately absent from the bits cleared here: UM
+    // §7.2.17 makes it READ ONLY, so writing 1 to it does nothing.
+    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
+		         DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
+		         DW1000_MSK_SYS_STATUS_ALL_RX_TO);
+    dw1000_rx_reset(dw);
+
+    // UM §4.3.5: "The overrun condition and the RXOVRR status bit will
+    // be cleared as soon as the host issues the HRBPT command". That is
+    // the only thing that clears it, and the re-align inside
+    // _dw1000_txrx_off() will not do it: on overrun the IC has wrapped
+    // back onto the buffer the host still holds (§4.3.5), so ICRBP ==
+    // HSRBP and the conditional toggle issues nothing. Both buffers are
+    // being discarded here, so issue HRBPT unconditionally, then
+    // re-align, leaving the pointers matched whichever way the chip
+    // moved ICRBP. Without this the flag stays set and every later call
+    // re-enters this path, tearing the receiver down again each time
+    // the rx_error callback re-arms it.
+    // UM §7.2.15: only the last byte of SYS_CTRL, where HRBPT lives.
+    _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3,
+		       (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
+    dw1000_rx_sync_dblbuf(dw);
+
+    dw->wait4resp = 0;
+
+    if (cfg->cb.rx_error) {
+	cfg->cb.rx_error(dw, status);
+    }
+}
+
+
 bool dw1000_process_events(dw1000_t *dw) {
     const dw1000_config_t *cfg = dw->config;
 
@@ -1498,35 +1633,8 @@ bool dw1000_process_events(dw1000_t *dw) {
     //   pointers re-aligned) and report it as a receive error, so that
     //   the host re-arms the receiver as it does for any other error.
     if (cfg->dblbuff && (status & DW1000_FLG_SYS_STATUS_RXOVRR)) {
-	// RXOVRR is deliberately absent from the bits cleared here: UM
-	// §7.2.17 makes it READ ONLY, so writing 1 to it does nothing.
-	_dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
-			     DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
-			     DW1000_MSK_SYS_STATUS_ALL_RX_TO);
-	dw1000_rx_reset(dw);
-
-	// UM §4.3.5: "The overrun condition and the RXOVRR status bit will
-	// be cleared as soon as the host issues the HRBPT command". That is
-	// the only thing that clears it, and the re-align inside
-	// _dw1000_txrx_off() will not do it: on overrun the IC has wrapped
-	// back onto the buffer the host still holds (§4.3.5), so ICRBP ==
-	// HSRBP and the conditional toggle issues nothing. Both buffers are
-	// being discarded here, so issue HRBPT unconditionally, then
-	// re-align, leaving the pointers matched whichever way the chip
-	// moved ICRBP. Without this the flag stays set and every later call
-	// re-enters this branch, tearing the receiver down again each time
-	// the rx_error callback re-arms it.
-	// UM §7.2.15: only the last byte of SYS_CTRL, where HRBPT lives.
-	_dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3,
-			   (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
-	dw1000_rx_sync_dblbuf(dw);
-
-	dw->wait4resp = 0;
-	processed     = true;
-
-	if (cfg->cb.rx_error) {
-	    cfg->cb.rx_error(dw, status);
-	}
+	_dw1000_rx_overrun_recover(dw, status);
+	processed = true;
 
 	// Nothing of the receive side is left to handle below
 	status &= ~(DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
@@ -1558,15 +1666,20 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//   is toggled once the callback has consumed the frame, below.
 	//   The rx_ok callback must therefore NOT re-enable the receiver.
 	if (cfg->dblbuff) {
-	    //   One register the read-out needs is *not* in that set:
-	    //   DRX_RXPACC_NOSAT (0x27:2C) is absent from UM table 7, so
-	    //   there is a single live instance of it and the next frame
-	    //   overwrites it. Sample it here, while it still belongs to
-	    //   the frame being reported, and before the receiver is
-	    //   re-enabled below.
+	    //   Two registers the read-out needs are *not* in that set:
+	    //   DRX_RXPACC_NOSAT (0x27:2C) and LDE_THRESH (0x2E:0000) are
+	    //   both absent from UM table 7 (whose swinging set is four
+	    //   status bits and register files 0x10 to 0x15), so there is
+	    //   a single live instance of each and the next frame's LDE
+	    //   run overwrites them. Sample them here, while they still
+	    //   belong to the frame being reported, and before the
+	    //   receiver is re-enabled below.
 	    dw->rxpacc_nosat =
 		_dw1000_reg_read16(dw, DW1000_REG_DRX_CONF,
 				   DW1000_OFF_DRX_RXPACC_NOSAT);
+	    dw->lde_thresh =
+		_dw1000_reg_read16(dw, DW1000_REG_LDE_IF,
+				   DW1000_OFF_LDE_THRESH);
 
 	    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
 				DW1000_FLG_SYS_CTRL_RXENAB);
@@ -1625,11 +1738,28 @@ bool dw1000_process_events(dw1000_t *dw) {
 
         // Toggle the Host side Receive Buffer Pointer
         if (cfg->dblbuff) {
-	    // UM §7.2.15: System Control Register
-	    //  => Only accessing last byte of SYS_CTRL (where is HRBPT flag)
-	    //     Trigger buffer toggle by writting 1 to HRBPT
-	    _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3 ,
-			      (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
+	    // UM §4.3.3 (figure 14): RXOVRR is tested *after* the frame has
+	    // been read out and before the toggle, not only on entry. The
+	    // receiver was re-enabled above, so while the callback ran a
+	    // second frame could land in the other buffer and a third
+	    // overrun -- and HRBPT is the very thing that clears RXOVRR
+	    // (§4.3.5, §7.2.17), so toggling unconditionally would erase
+	    // the evidence and no later call would ever see it. Take the
+	    // overrun path instead of toggling: the receiver is left in
+	    // the "errored state which may persist" (§4.3.5) otherwise.
+	    const uint32_t ovrr =
+		_dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS,
+				   DW1000_OFF_NONE);
+	    if (ovrr & DW1000_FLG_SYS_STATUS_RXOVRR) {
+		_dw1000_rx_overrun_recover(dw, ovrr);
+		processed = true;
+	    } else {
+		// UM §7.2.15: System Control Register
+		//  => Only accessing last byte of SYS_CTRL (where is HRBPT
+		//     flag) Trigger buffer toggle by writting 1 to HRBPT
+		_dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3 ,
+				  (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
+	    }
         }
     }
 
@@ -1647,6 +1777,10 @@ bool dw1000_process_events(dw1000_t *dw) {
         _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
 			   DW1000_MSK_SYS_STATUS_ALL_TX);
 
+	// The frame is out: if a delayed send forced the TX clock on
+	// (Errata 1.4 §3.1), return it to automatic sequencing
+	_dw1000_tx_clock_release(dw);
+
 	// HOTFIX: UM §5.4: Transmit and automatically wait for response
 	//   "If the response that is received is a frame requesting an
 	//    acknowledgement frame, the DW1000 will transmit the ACK if
@@ -1660,7 +1794,18 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//  => Force returning to IDLE state (RX off),
 	//     if "Automatic Acknowledge Trigger" (AAT) and
 	//        "Wait for Response" (wait4resp)
-        if((status & DW1000_FLG_SYS_STATUS_AAT) && dw->wait4resp) {
+	//
+	//  UM §7.2.17 adds that AAT "should be ignored" when automatic
+	//  acknowledgement is not enabled: with frame filtering on, a
+	//  received frame carrying the ACK request bit latches AAT even
+	//  though no ACK is ever sent, and the hotfix in the RXFCG branch
+	//  above clears it only when that bit is clear. Without the
+	//  AUTOACK test below, a response sent with
+	//  DW1000_TX_RESPONSE_EXPECTED would then land here and the
+	//  TRXOFF plus receiver reset would tear down the very receiver
+	//  WAIT4RESP had just armed, losing the expected response.
+        if((dw->reg.sys_cfg & DW1000_FLG_SYS_CFG_AUTOACK) &&
+	   (status & DW1000_FLG_SYS_STATUS_AAT) && dw->wait4resp) {
 	    // Turn off receiver, returning to IDLE state
 	    dw1000_txrx_off(dw);
 	    // Reset in case a frame was already being received
@@ -1676,10 +1821,10 @@ bool dw1000_process_events(dw1000_t *dw) {
     
     // Handle frame reception/preamble detect timeout events
     if (status & DW1000_MSK_SYS_STATUS_ALL_RX_TO) {
-	// Clear RX timeout events
-	//   Only using 4 bytes out of 5 (See UM §7.2.17)
-        _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
-			   DW1000_MSK_SYS_STATUS_ALL_RX_TO); 
+	// No plain status write here: _dw1000_txrx_off() below clears a
+	// superset of these bits from inside the masked window UM §4.3.4
+	// (figure 15) requires. Clearing them twice only costs a spurious
+	// interrupt (Errata IRQ-1) and a wasted status read per event.
 
 	// Turn off receiver (return to IDLE state), dropping what the
 	// receiver raised -- the frame-ready flags the failed frame
@@ -1707,10 +1852,12 @@ bool dw1000_process_events(dw1000_t *dw) {
     
     // Handle RX errors events
     if (status & DW1000_MSK_SYS_STATUS_ALL_RX_ERR) {
-	// Clear RX error events
-	//   Only using 4 bytes out of 5 (See UM §7.2.17)
-        _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
-			   DW1000_MSK_SYS_STATUS_ALL_RX_ERR);
+	// No plain status write here: _dw1000_txrx_off() below clears a
+	// superset of these bits from inside the masked window UM §4.3.4
+	// (figure 15) requires. RXFCE is part of the double buffered
+	// swinging set, so clearing it unmasked glitches the interrupt
+	// line (Errata IRQ-1): one spurious interrupt and one wasted
+	// status read per CRC error.
 
 	// Turn off receiver (return to IDLE state), dropping what the
 	// receiver raised -- the frame-ready flags the failed frame
@@ -1783,6 +1930,10 @@ void _dw1000_txrx_off(dw1000_t *dw, uint32_t clear) {
     // Reset internal flags
     dw->wait4resp = 0;
 
+    // A delayed send may have been armed and is being cancelled here, so
+    // the TX clock it forced on (Errata 1.4 §3.1) has to be released too
+    _dw1000_tx_clock_release(dw);
+
     // Restore interrupt mask
     _dw1000_reg_write32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE, sys_mask); 
 }
@@ -1807,15 +1958,33 @@ void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay) {
 
 void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
 		     int tx_mode) {
-    DW1000_ASSERT(
+    /* The standard PHR carries a 7-bit length, so a frame longer than
+     * 127 bytes needs the proprietary long frame mode (PHR_MODE = 11,
+     * UM §7.2.10 p. 75 and §3.4 p. 27). TFLEN+TFLE is 10 bits wide
+     * either way: without long frames the extra three bits are written
+     * but cannot be carried on air, so the limit is a property of the
+     * PHR mode, not of the field width.
+     *
+     * Computed into a local rather than spelled inside the
+     * DW1000_ASSERT() argument list: C11 §6.10.3 ¶11 makes a
+     * preprocessor directive inside a macro argument list undefined
+     * behaviour, and cppcheck reacts to one by refusing to expand the
+     * macro and abandoning the rest of the file.
+     */
+    const size_t max_length =
 #if DW1000_WITH_PROPRIETARY_LONG_FRAME
-		  (dw->radio.proprietary.long_frames && (length <= 1023)) ||
+	dw->radio.proprietary.long_frames
+	? (DW1000_MSK_TX_FCTRL_TFLE_TFLEN >> DW1000_SFT_TX_FCTRL_TFLEN)
+	:
 #endif
-		  (length <= 127), "bad frame length");
+	  127;
+    DW1000_ASSERT(length <= max_length, "bad frame length");
 
     // TXBOFFS is a 10-bit field; a larger offset would corrupt the
     // neighbouring TX_FCTRL bits
-    DW1000_ASSERT(offset <= 1023, "bad buffer offset");
+    const size_t max_offset =
+	DW1000_MSK_TX_FCTRL_TXBOFFS    >> DW1000_SFT_TX_FCTRL_TXBOFFS;
+    DW1000_ASSERT(offset <= max_offset, "bad buffer offset");
 
     // The asserts above are compiled out on four of the five ports, so
     // both values are clamped as well before they are shifted into
@@ -1825,10 +1994,6 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
     // truncated frame clamping gives -- and the same silent-clamp
     // behaviour dw1000_tx_write_frame_data() already applies to the
     // buffer write this length describes.
-    const size_t max_length =
-	DW1000_MSK_TX_FCTRL_TFLE_TFLEN >> DW1000_SFT_TX_FCTRL_TFLEN;
-    const size_t max_offset =
-	DW1000_MSK_TX_FCTRL_TXBOFFS    >> DW1000_SFT_TX_FCTRL_TXBOFFS;
     if (length > max_length) length = max_length;
     if (offset > max_offset) offset = max_offset;
 
@@ -1876,6 +2041,15 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
 	sys_ctrl |= DW1000_FLG_SYS_CTRL_SFCST;
     }
 
+    // Errata 1.4 §3.1 (TX-1): a delayed send whose time falls in the
+    // band just after the TXPUTE window is silently dropped, with
+    // neither HPDWARN nor TXPUTE raised and no TX done event to follow.
+    // Forcing the TX clock on before TXDLYS|TXSTRT is the workaround the
+    // erratum gives; releasing it again is ours, on TXFRS, on the late
+    // path below, or in _dw1000_txrx_off(), whichever comes first.
+    if (tx_mode & DW1000_TX_DELAYED_START)
+	_dw1000_tx_clock_force(dw, true);
+
     // Write to SYS_CTRL register, which will trigger transmit
     _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL, sys_ctrl);
 
@@ -1906,6 +2080,10 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
 	_dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL,
 			   DW1000_FLG_SYS_CTRL_TRXOFF);
 	dw->wait4resp = 0;
+
+	// Nothing is pending anymore: let the TX clock be sequenced again
+	// (Errata 1.4 §3.1)
+	_dw1000_tx_clock_release(dw);
 
 	return -1;
     }
@@ -1980,8 +2158,15 @@ int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
 	// If delay has passed start RX immediately
 	// unless DW1000_RX_IDLE_ON_DELAY_ERROR is set in rx_mode
         if ((sys_status & (DW1000_FLG_SYS_STATUS_HPDWARN >> 24)) != 0)  {
-	    // Return to an off (idle) state
-            dw1000_txrx_off(dw); 
+	    // Return to an off (idle) state, dropping the receive groups
+	    // only: dw1000_txrx_off() also clears ALL_TX, and a TXFRS
+	    // raised since the last dw1000_process_events() would go with
+	    // it, so the tx_done callback would never fire. The TX and RX
+	    // error branches of the event loop restrict the clear set for
+	    // the same reason.
+	    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
+			         DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
+			         DW1000_MSK_SYS_STATUS_ALL_RX_TO);
 	    // Keep it off on error if requested
             if (rx_mode & DW1000_RX_IDLE_ON_DELAY_ERROR)
 		return -1;
@@ -2016,13 +2201,19 @@ void dw1000_rx_get_info(dw1000_t *dw, dw1000_rxinfo_t *rxinfo) {
     rxinfo->first_path =
 	_dw1000_reg_read16(dw, DW1000_REG_RX_TIME, DW1000_OFF_RX_TIME_FP_INDEX);
 
-    // Standard deviation of noise (UM §4.3)
+    // Standard deviation of noise (UM §7.2.20)
     rxinfo->std_noise =
 	_dw1000_reg_read16(dw, DW1000_REG_RX_FQUAL, DW1000_OFF_RX_FQUAL_STD_NOISE);
 
     // LDE threshold (UM §7.2.47.1)
-    rxinfo->max_noise =
-	_dw1000_reg_read16(dw, DW1000_REG_LDE_IF, DW1000_OFF_LDE_THRESH);
+    // Not part of the double buffered swinging set of UM table 7: in
+    // double buffered mode the receiver is re-enabled before this
+    // callback runs, so the live register may already hold the next
+    // frame's LDE result. Use the value sampled for this frame, as
+    // dw1000_rx_get_pacc_count() does for DRX_RXPACC_NOSAT.
+    rxinfo->max_noise = dw->config->dblbuff
+	? dw->lde_thresh
+	: _dw1000_reg_read16(dw, DW1000_REG_LDE_IF, DW1000_OFF_LDE_THRESH);
 }
 
 

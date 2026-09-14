@@ -83,7 +83,7 @@ _dw1000_iovec_write(struct iovec *iovec, int iovcnt,
     }
 }
 
-static inline void
+static inline bool
 _dw1000_tx_prepare_delayed_embed_timestamp(
 	dw1000_t *dw, struct iovec *iovec, int iovcnt,
 	size_t offset, uint32_t delay, int tx_mode)
@@ -100,8 +100,26 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
 		   == DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT        ),
 		  "invalid tx_mode for timestamp size");
 
+    /* The asserts above are compiled out on four of the five ports, so
+     * both fields are checked here as well, and before anything is
+     * written to the chip: an unused value used to leave `size` at 0 or
+     * `data` unfilled, and the frame went out without its timestamp --
+     * silently, since the caller's copy was left unfilled too.
+     */
+    size_t size;
+    switch(tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_SIZE_MASK) {
+    case DW1000_TX_DELAYED_EMBED_TIMESTAMP_40BIT: size = 5; break;
+    case DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT: size = 8; break;
+    default: return false;
+    }
+    switch(tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_ENDIAN_MASK) {
+    case DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN:
+    case DW1000_TX_DELAYED_EMBED_TIMESTAMP_BIG_ENDIAN:
+	break;
+    default: return false;
+    }
+
     // Variables
-    size_t   size    = 0;
     uint8_t  data[8] = { 0 };
     uint64_t time;
 
@@ -122,14 +140,6 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
     time &= (1ull << DW1000_TIME_CLOCK_BITS) - 1;
 
     // Build timestamp data
-    switch(tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_SIZE_MASK) {
-    case DW1000_TX_DELAYED_EMBED_TIMESTAMP_40BIT:
-	size = 5;
-	break;
-    case DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT:
-	size = 8;
-	break;
-    }
     switch(tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_ENDIAN_MASK) {
     case DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN:
 	for (size_t i = 0 ; i < size ; i++)
@@ -139,6 +149,7 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
 	for (size_t i = 0 ; i < size ; i++)
 	    data[i] = (time >> ((size - 1 - i) * 8)) & 0xff;
 	break;
+    default: return false; // unreachable, validated above
     }
     
     // Embed timestamp, in the chip's transmit buffer and in the caller's
@@ -147,6 +158,8 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
     // a self-check for the host), without waiting for that completion.
     dw1000_tx_write_frame_data(dw, data, size, offset);
     _dw1000_iovec_write(iovec, iovcnt, offset, data, size);
+
+    return true;
 }
 #endif
 
@@ -196,6 +209,15 @@ dw1000_tx_extended_vsendv(
 	return dw1000_tx_start(dw, tx_mode);
     }
 
+    // Embedding a timestamp only makes sense for a delayed send: the
+    // value embedded below is DX_TIME plus the antenna delay, and
+    // dw1000_tx_start() arms DX_TIME (TXDLYS alongside TXSTRT, UM §3.3
+    // p. 26) only when DW1000_TX_DELAYED_START is set. Without it the
+    // frame would leave immediately carrying a timestamp a delay into
+    // the future, and the late-send check would be skipped. The header
+    // states the pairing as a @pre; enforce it rather than trust it.
+    tx_mode |= DW1000_TX_DELAYED_START;
+
     // Default parameters
     int      rc          = 0;
     bool     last_try    = false;
@@ -234,8 +256,9 @@ dw1000_tx_extended_vsendv(
 	return -1;
 	
     // Prepare embedded timestamp and start transmit
-    _dw1000_tx_prepare_delayed_embed_timestamp(dw, iovec, iovcnt,
-					       offset, delay, tx_mode);
+    if (! _dw1000_tx_prepare_delayed_embed_timestamp(dw, iovec, iovcnt,
+						     offset, delay, tx_mode))
+	return -1;
     rc = dw1000_tx_start(dw, tx_mode);
     if ((rc < 0) && !last_try) {
 	delay    = retry_delay;

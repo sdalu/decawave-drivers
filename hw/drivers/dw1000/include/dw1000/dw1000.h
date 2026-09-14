@@ -474,13 +474,19 @@ struct dw1000 {
     /* */
     uint32_t wait4resp;
     uint32_t sleep_mode;
+    /* Set while this driver holds the TX clock forced on for a delayed
+     * send (Errata 1.4 §3.1, TX-1), so that it is returned to automatic
+     * sequencing exactly once. */
+    uint8_t  tx_clk_forced;
 
     int8_t   rxpacc_adj;
-    /* RXPACC_NOSAT sampled for the frame being reported. Only used in
-     * double buffered mode, where the live register cannot be trusted
-     * by the time the host reads the frame out (see
-     * dw1000_rx_get_pacc_count()). */
+    /* RXPACC_NOSAT and LDE_THRESH sampled for the frame being reported.
+     * Only used in double buffered mode: neither register belongs to the
+     * swinging set of UM table 7, so the live one may already describe
+     * the next frame by the time the host reads this one out (see
+     * dw1000_rx_get_pacc_count() and dw1000_rx_get_info()). */
     uint16_t rxpacc_nosat;
+    uint16_t lde_thresh;
     
     struct {
 	uint32_t sys_cfg;
@@ -866,6 +872,11 @@ int dw1000_initialise(dw1000_t *dw);
  * @note  The configuration is copied into @p dw, so @p radio does not
  *        need to outlive the call.
  *
+ * @pre   @p dw1000_initialise() has been called: this function builds on
+ *        the SYS_CFG shadow and on DIS_STXP that initialisation set up,
+ *        and it caches the TX_FCTRL base that @p dw1000_tx_fctrl()
+ *        needs.
+ *
  * @param dw        driver context
  * @param radio     radio configuration
  *
@@ -940,6 +951,75 @@ void dw1000_set_eui(dw1000_t *dw, uint64_t eui64)
 
 
 /**
+ * @brief Set the used PAN identifier.
+ *
+ * @note  This will be used by the Receive Frame Filtering function
+ *        (UM §7.2.5). PANADR is left at 0 by the chip reset, so with
+ *        frame filtering enabled and no PAN id set the DW1000 accepts
+ *        only frames addressed to PAN id 0.
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  pan_id   PAN identifier
+ */
+static inline
+void dw1000_set_pan_id(dw1000_t *dw, uint16_t pan_id)
+{
+    _dw1000_reg_write16(dw, DW1000_REG_PANADR,
+			DW1000_OFF_PANADR_PAN_ID, pan_id);
+}
+
+
+/**
+ * @brief Get the used PAN identifier.
+ *
+ * @param[in]  dw       driver context
+ *
+ * @return PAN identifier
+ */
+static inline
+uint16_t dw1000_get_pan_id(dw1000_t *dw)
+{
+    return _dw1000_reg_read16(dw, DW1000_REG_PANADR,
+			      DW1000_OFF_PANADR_PAN_ID);
+}
+
+
+/**
+ * @brief Set the used short (16-bit) address.
+ *
+ * @note  This will be used by the Receive Frame Filtering function
+ *        (UM §7.2.5). SHORT_ADDR is left at 0 by the chip reset, so with
+ *        frame filtering enabled and no short address set, unicast data
+ *        frames addressed to this node by its short address are rejected
+ *        (AFFREJ); only broadcast and EUI-addressed frames get through.
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  addr     short address
+ */
+static inline
+void dw1000_set_short_address(dw1000_t *dw, uint16_t addr)
+{
+    _dw1000_reg_write16(dw, DW1000_REG_PANADR,
+			DW1000_OFF_PANADR_SHORT_ADDR, addr);
+}
+
+
+/**
+ * @brief Get the used short (16-bit) address.
+ *
+ * @param[in]  dw       driver context
+ *
+ * @return short address
+ */
+static inline
+uint16_t dw1000_get_short_address(dw1000_t *dw)
+{
+    return _dw1000_reg_read16(dw, DW1000_REG_PANADR,
+			      DW1000_OFF_PANADR_SHORT_ADDR);
+}
+
+
+/**
  * @brief Get the used EUI64 address.
  *
  * @note  During DW1000 initialisation or upon waking up from sleep mode,
@@ -983,6 +1063,15 @@ dw1000_pending_interrupt(dw1000_t *dw)
 
 /**
  * @brief Set interrupt mask.
+ *
+ * @warning @p dw1000_process_events() only clears the status bits it
+ *          reports on: RXFCG and the receive groups, TXFRS and the
+ *          transmit group. Unmasking a bit it does not handle -- CPLOCK,
+ *          GPIOIRQ, TXBERR, RFPLL_LL, CLKPLL_LL, or an intermediate TX
+ *          or RX bit without its terminal bit -- leaves that bit set
+ *          once it is raised, and so leaves the IRQ line asserted for
+ *          good (UM §7.2.16). The mask @p dw1000_initialise() installs
+ *          never does this; a caller widening it is on its own.
  *
  * @param dw        driver context
  * @param bitmask   interrupt bitmask
@@ -1102,7 +1191,14 @@ void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay);
  *          the 2-byte CRC)
  *
  * @note In standard mode length can be up to 127 bytes, 
- *       in proprietary long-frame-mode length can be up to 1023 bytes
+ *       in proprietary long-frame-mode length can be up to 1023 bytes.
+ *       An out of range length is clamped (and asserted on, where the
+ *       port keeps asserts): the standard PHR cannot carry more than
+ *       127 (UM §7.2.10, §3.4).
+ *
+ * @pre   @p dw1000_configure() has been called: the preamble, PRF and
+ *        bitrate it cached in the TX_FCTRL base are written out again
+ *        by this function.
  *
  * @param dw        driver context
  * @param length    frame length
@@ -1241,6 +1337,9 @@ dw1000_rx_set_timeout_preamble(dw1000_t *dw, uint16_t timeout)
  *          delay before transmission and the transmission time of
  *          the whole frame.
  *
+ * @pre    The DW1000 is in IDLE state: UM §7.2.14 requires RX_FWTO to
+ *         be written only while the receiver is off.
+ *
  * @param [in] dw       driver context
  * @param [in] timeout  timeout in "UWB microsencond" units (between 0..65535),
  *                       a value of 0 disable the timeout
@@ -1268,6 +1367,10 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask);
 
 /**
  * @brief Start receiving
+ *
+ * @pre   With @p DW1000_RX_DELAYED_START, the reception time has been
+ *        programmed with @p dw1000_txrx_set_time() (DX_TIME, UM §3.3):
+ *        this function only arms RXDLYE, it does not set the time.
  *
  * @param dw        driver context
  * @param rx_mode   Receiving mode 
@@ -1349,6 +1452,12 @@ void dw1000_rx_read_frame_data(dw1000_t *dw,
  *
  * @details Retrieve information about signal quality 
  *          (first path, standard noise, ...)
+ *
+ * @note   In double buffered mode @p max_noise is the LDE_THRESH value
+ *         sampled by @p dw1000_process_events() for the frame being
+ *         reported, not a live read: LDE_THRESH is not part of the
+ *         double buffered swinging set, and the receiver has been
+ *         re-enabled by the time the rx_ok callback runs.
  *
  * @param [in]  dw      driver context
  * @param [out] rxinfo  information about frame reception
@@ -1470,6 +1579,13 @@ double dw1000_rx_get_clock_drift(dw1000_t *dw) {
     int32_t  offset;
     uint32_t interval;
     dw1000_rx_get_time_tracking(dw, &offset, &interval);
+    // RX_TTCKI reads 0 before the first frame has been demodulated, and
+    // a failed SPI read zeroes the buffer too (the OSAL contract). Both
+    // would give +/-inf or NaN, which the caller cannot tell from a
+    // reading; report no drift instead, as the power estimate does for
+    // the analogous case.
+    if (interval == 0)
+	return 0.0;
     return (double)offset / (double)interval;
 }
 

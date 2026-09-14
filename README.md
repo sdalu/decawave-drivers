@@ -143,7 +143,9 @@ Handling events
 ===============
 
 Register a callback for what you care about, then call
-`dw1000_process_events()` from the interrupt handler or from a thread:
+`dw1000_process_events()` from a thread woken by the interrupt handler,
+or from a polling loop. It performs SPI transfers, so it cannot run in
+the interrupt handler itself:
 
 ```text
         IRQ line, or a poll of dw1000_pending_interrupt()
