@@ -412,7 +412,6 @@ rsvc_call_extended(rsvc_t *rsvc, uint16_t type,
     rc = sem_destroy(&inprogress.sem);
     assert(rc == 0);
 
-    // Job's done
     return inprogress.status;
 }
 
@@ -421,15 +420,12 @@ rsvc_call_extended(rsvc_t *rsvc, uint16_t type,
 rsvc_t *
 rsvc_open(char *socket_path, char *nickname, int *err)
 {
-    
-    // Sanity check nickname
     if (strlen(nickname) > RSVC_NICKNAME_MAXLEN) {
 	RSVC_DEBUG("open: nickname too long");
 	RSVC_ERROR_SET(err, DATA_TOO_BIG);
 	return NULL;
     }
 
-    // Create instance
     rsvc_t *rsvc = calloc(1, sizeof(*rsvc));
     if (rsvc == NULL)
 	goto failed;
@@ -466,7 +462,6 @@ rsvc_open(char *socket_path, char *nickname, int *err)
 	goto failed;
     }
 
-    // Client socket
     if (((rsvc->fd = socket(AF_UNIX, SOCK_DGRAM, 0))    < 0) ||
 	(bind(rsvc->fd,    (struct sockaddr*)&rsvc->clt_addr,
 	                  sizeof(rsvc->clt_addr))       < 0) ||
@@ -484,14 +479,12 @@ rsvc_open(char *socket_path, char *nickname, int *err)
     
     /* Register internal management function and start thread
      */
-    // Initialise mutex
     if (pthread_mutex_init(&rsvc->mutex, NULL) != 0) {
 	RSVC_DEBUG("open: creating mutex failed");
 	RSVC_ERROR_SET(err, THREAD);
 	goto failed;
     }
 
-    // Start reception loop
     if (pthread_create(&rsvc->thread, NULL, rsvc_loop, rsvc) != 0) {
 	pthread_mutex_destroy(&rsvc->mutex);
 	RSVC_DEBUG("open: creating thread failed");
@@ -550,7 +543,6 @@ rsvc_close(rsvc_t *rsvc)
 	rsvc->running = 0;
     }
 
-    // Destroy socket
     if (rsvc->connected) {
 	unlink(rsvc->clt_addr.sun_path);
 	rsvc->connected = 0;

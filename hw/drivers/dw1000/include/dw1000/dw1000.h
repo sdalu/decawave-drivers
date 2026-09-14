@@ -21,9 +21,6 @@
 #include "dw1000/dw1000_bswap.h"
 #include "dw1000/dw1000_otp.h"
 #include "dw1000/dw1000_reg.h"
-/* Macros only, no declarations: so that a consumer of this header can
- * check the release it is compiling against (DW1000_VERSION_AT_LEAST)
- * without a second include, and log DW1000_VERSION_FULL. */
 #include "dw1000/dw1000_version.h"
 
 
@@ -238,15 +235,15 @@ typedef struct dw1000_rxinfo {
  */
 typedef struct dw1000_radio {
     /**
-     * @brief Channel number 
+     * @brief Channel number
      * @note  Possible channel values are: 1, 2, 3, 4, 5, 7
      */
-    uint8_t    channel; 
+    uint8_t    channel;
     /**
-     * @brief Pulse Repetition Frequency 
+     * @brief Pulse Repetition Frequency
      * @note  @p DW1000_PRF_16MHZ or @p DW1000_PRF_64MHZ
      */
-    uint8_t    prf; 
+    uint8_t    prf;
     /**
      * @brief Acquisition Chunk Size (Relates to RX preamble length)
      */
@@ -264,7 +261,7 @@ typedef struct dw1000_radio {
      */
     uint8_t    rx_pcode;
     /**
-     * @brief Bit rate @p DW1000_BITRATE_110KBPS, @p DW1000_BITRATE_850KBPS 
+     * @brief Bit rate @p DW1000_BITRATE_110KBPS, @p DW1000_BITRATE_850KBPS
      *        or @p DW1000_BITRATE_6800KBPS
      */
     uint8_t    bitrate;
@@ -274,7 +271,7 @@ typedef struct dw1000_radio {
      *        according to channel and prf setting.
      */
     uint8_t    tx_power;
-    
+
 #if DW1000_WITH_SFD_TIMEOUT
     /**
      * @brief SFD timeout value (in symbols).
@@ -282,7 +279,7 @@ typedef struct dw1000_radio {
      */
     uint16_t   sfd_timeout;
 #endif
-    
+
 #if DW1000_WITH_PROPRIETARY_SFD || DW1000_WITH_PROPRIETARY_LONG_FRAME
     struct {
 #if DW1000_WITH_PROPRIETARY_LONG_FRAME
@@ -463,14 +460,14 @@ struct dw1000 {
 	uint32_t chip;
 	uint32_t lot;
     } id;
-    
+
     uint8_t  xtrim;
     uint8_t  otp_rev;
     uint8_t  ref_vbat_33;
     uint8_t  ref_vbat_37;
     uint8_t  ref_temp_23;
     uint8_t  ref_temp_ant;
-    
+
     /* */
     uint32_t wait4resp;
     uint32_t sleep_mode;
@@ -487,7 +484,7 @@ struct dw1000 {
      * dw1000_rx_get_pacc_count() and dw1000_rx_get_info()). */
     uint16_t rxpacc_nosat;
     uint16_t lde_thresh;
-    
+
     struct {
 	uint32_t sys_cfg;
 	uint32_t tx_fctrl;
@@ -765,7 +762,7 @@ _dw1000_reg_read64(dw1000_t *dw, uint8_t reg, size_t offset)
  *
  * @param[in]  dw       driver context
  * @param[in]  address  address to read (11-bit) [0x0000..0x07FF]
- * @param[out] data     array of 32bit word   
+ * @param[out] data     array of 32bit word
  * @param[in]  length   length of data to read
  */
 void dw1000_otp_read(dw1000_t *dw,
@@ -805,7 +802,7 @@ dw1000_otp_get(dw1000_t *dw, uint16_t address)
  *
  * @param[in]  channel    Channel (1, 2, 3, 4, 5, or 7)
  * @param[in]  prf        PRF (@p DW1000_PRF_16MHZ or @p DW1000_PRF_64MHZ)
- * @param[out] power      Power at receiver input (dBm/MHz) 
+ * @param[out] power      Power at receiver input (dBm/MHz)
  * @param[out] separation Antenna separation in centimeters
  */
 bool dw1000_get_calibration(uint8_t channel, uint8_t prf,
@@ -829,13 +826,13 @@ void dw1000_init(dw1000_t *dw, const dw1000_config_t *cfg);
 /**
  * @brief Perform hard reset (if supported) of the DW1000
  *
- * @note Hard reset need to be supported by the hardware and 
+ * @note Hard reset need to be supported by the hardware and
  *       configured in the software
  *
- * @note After the hardreset a new initialisation of the DW1000 
+ * @note After the hardreset a new initialisation of the DW1000
  *       need to be performed by calling @p dw1000_initialise
  *
- * @details Perform a hard reset of the DW1000, 
+ * @details Perform a hard reset of the DW1000,
  *          if not supported this is a no-op
  *
  * @param[in]  dw       driver context
@@ -850,7 +847,7 @@ void dw1000_hardreset(dw1000_t *dw);
  *        the low speed.
  *
  * @param[in]  dw       driver context
- * 
+ *
  * @retval  0           DW1000 successfully initialized
  * @retval -1           Chip not identified as DW1000
  */
@@ -1190,7 +1187,7 @@ void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay);
  * @details The length, is the total length of the frame (including
  *          the 2-byte CRC)
  *
- * @note In standard mode length can be up to 127 bytes, 
+ * @note In standard mode length can be up to 127 bytes,
  *       in proprietary long-frame-mode length can be up to 1023 bytes.
  *       An out of range length is clamped (and asserted on, where the
  *       port keeps asserts): the standard PHR cannot carry more than
@@ -1210,7 +1207,7 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset, int tx_mode);
 /**
  * @brief Write data to the DW TX buffer
  *
- * @note  DW TX buffer is 1024 bytes (UM §7.2.11). 
+ * @note  DW TX buffer is 1024 bytes (UM §7.2.11).
  * @note  Data outside buffer will be silently discarded
  *
  * @param dw        driver context
@@ -1225,7 +1222,7 @@ void dw1000_tx_write_frame_data(dw1000_t *dw,
 /**
  * @brief Start transmitting a frame
  *
- * @note   Data and frame context should have already been set by 
+ * @note   Data and frame context should have already been set by
  *         @p dw1000_tx_data and @p dw1000_tx_fctrl
  *
  * @note   If using @p DW1000_TX_DELAYED_START, the transmission time
@@ -1373,7 +1370,7 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask);
  *        this function only arms RXDLYE, it does not set the time.
  *
  * @param dw        driver context
- * @param rx_mode   Receiving mode 
+ * @param rx_mode   Receiving mode
  *                   - @p DW1000_RX_IDLE_ON_DELAY_ERROR
  *                   - @p DW1000_RX_DELAYED_START
  * @retval  0        Reception started
@@ -1450,7 +1447,7 @@ void dw1000_rx_read_frame_data(dw1000_t *dw,
 /**
  * @brief Read reception information
  *
- * @details Retrieve information about signal quality 
+ * @details Retrieve information about signal quality
  *          (first path, standard noise, ...)
  *
  * @note   In double buffered mode @p max_noise is the LDE_THRESH value
@@ -1470,7 +1467,7 @@ void dw1000_rx_get_info(dw1000_t *dw, dw1000_rxinfo_t *rxinfo);
  *
  * @details The transmitter clock drift is calculated with
  *          <code>drift = offset/interval</code>.
- *          If positive the transmitter clock is running faster, 
+ *          If positive the transmitter clock is running faster,
  *          if negative the transmitter clock is running slower.
  *
  * @note    Interval value is dependant of the radio configuration (PRF value),
@@ -1513,7 +1510,7 @@ double dw1000_rx_power_correction(dw1000_t *dw, double p);
 
 
 /**
- * @brief Check the status of RX done 
+ * @brief Check the status of RX done
  *
  * @details Everything that specified that the reception is ended:
  *           good (RXFCG), received with errors, or timeout.
@@ -1569,7 +1566,7 @@ uint64_t dw1000_rx_get_rmarker_time(dw1000_t *dw) {
 /**
  * @brief Get (an estimation of) transmitter clock drift
  *
- * @details If positive the transmitter clock is running faster, 
+ * @details If positive the transmitter clock is running faster,
  *          if negative the transmitter clock is running slower.
  *
  * @param[in]  dw       driver context

@@ -34,11 +34,6 @@
 // antenna delay to compensate for changes in temperature. Typically
 // the reported range will vary by 2.15 mm / 0°C and by 5.35 cm / Vbatt.
 
-// UM §4.7.1 : Estimating the signal power in the first path
-// UM §4.7.2 : Estimating the receive signal power
-// UM §7.2.18: RX Frame Information Register
-
-
 // UM §2.3.2 : For delayed TX/RX the receiver stays in IDLE mode
 //             until transmission/reception time has been reached
 
@@ -51,11 +46,6 @@
  * @{
  */
 
-
-/*
- * For double buffering enabled, this code need to be check
- * for correctness
- */
 
 /*
  * UM §9.3  : Data rate, preamble length, PRF
@@ -323,7 +313,6 @@ static const uint16_t plen_symbol_size[] = {
 static inline
 void _dw1000_spi_header(uint8_t reg,  size_t offset, bool write,
 			uint8_t *hdr, size_t *hlen) {
-    // Sanity check
     DW1000_ASSERT(reg    <= 0x3F,    "invalid register number");
     DW1000_ASSERT(offset <= 0x7FFFu, "out of range offset");
 
@@ -984,7 +973,6 @@ void dw1000_rx_clear_status_dblbuf(dw1000_t *dw, uint32_t clear) {
 
 void _dw1000_reg_read(dw1000_t *dw,
     uint8_t reg, size_t offset, void* data, size_t length) {
-    // Sanity check
     DW1000_ASSERT(reg    <= 0x3F,               "invalid register number");
     DW1000_ASSERT(offset <= 0x7FFFu,            "out of range offset");
     DW1000_ASSERT(length <= (0x8000u - offset), "out of range length");
@@ -994,16 +982,12 @@ void _dw1000_reg_read(dw1000_t *dw,
     size_t hdrlen;
     _dw1000_spi_header(reg, offset, false, hdr, &hdrlen);
 
-    // Perform read
-    _dw1000_spi_recv(dw->config->spi,  // SPI handler
-		     hdr,  hdrlen,     // Send register request 
-		     data, length);    // Read data
+    _dw1000_spi_recv(dw->config->spi, hdr, hdrlen, data, length);
 }
 
 
 void _dw1000_reg_write(dw1000_t *dw,
     uint8_t reg, size_t offset, void* data, size_t length) {
-    // Sanity check
     DW1000_ASSERT(reg    <= 0x3F,               "invalid register number");
     DW1000_ASSERT(offset <= 0x7FFFu,            "out of range offset");
     DW1000_ASSERT(length <= (0x8000u - offset), "out of range length");
@@ -1013,10 +997,7 @@ void _dw1000_reg_write(dw1000_t *dw,
     size_t hdrlen;
     _dw1000_spi_header(reg, offset, true, hdr, &hdrlen);
 
-    // Perform write
-    _dw1000_spi_send(dw->config->spi,  // SPI handler
-		     hdr,  hdrlen,     // Send register request 
-		     data, length);    // Write data
+    _dw1000_spi_send(dw->config->spi, hdr, hdrlen, data, length);
 }
 
 
@@ -1025,7 +1006,6 @@ void _dw1000_reg_write(dw1000_t *dw,
 
 void dw1000_otp_read(dw1000_t *dw,
 		     uint16_t address, uint32_t *data, size_t length) {
-    // Sanity check
     DW1000_ASSERT(address <= 0x07FFu, "address is 11-bit encoded");
     DW1000_ASSERT(length  <= (0x0800u - address), "out of range");
 
@@ -1062,12 +1042,10 @@ void dw1000_otp_read(dw1000_t *dw,
 bool
 dw1000_get_calibration(uint8_t channel, uint8_t prf,
 		       uint8_t *power, uint16_t *separation) {
-    // Sanity check on channel
     if ((channel < 1) || (channel > 7) || (channel == 6)) {
 	return false;
     }
 
-    // Sanity check on PRF
     switch(prf) {
     case DW1000_PRF_16MHZ:
     case DW1000_PRF_64MHZ:
@@ -1089,7 +1067,6 @@ dw1000_get_calibration(uint8_t channel, uint8_t prf,
 	*separation = calib->separation;
     }
 
-    // Job's done
     return true;
 }
 
@@ -1103,7 +1080,6 @@ void dw1000_init(dw1000_t *dw, const dw1000_config_t *cfg) {
 }
 
 void dw1000_hardreset(dw1000_t *dw) {
-    // Sanity check
     if (dw->config->reset == DW1000_IOLINE_NONE)
 	return;
 
@@ -1305,7 +1281,6 @@ int dw1000_initialise(dw1000_t *dw) {
     if (cfg->cb.rx_ok     ) { sys_mask |= DW1000_FLG_SYS_MASK_MRXFCG;     }
     dw1000_interrupt(dw, sys_mask, true);
 
-    // Yeah!
     return 0;
 }
 
@@ -1494,7 +1469,6 @@ int dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
      */
     _dw1000_radio_tuning(dw);
 
-    // Job's done
     return 0;
 }
 
@@ -2128,9 +2102,8 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask) {
         sys_cfg &= ~DW1000_FLG_SYS_CFG_FFEN;
     }
 
-    // Apply configuration
     _dw1000_reg_write32(dw, DW1000_REG_SYS_CFG, DW1000_OFF_NONE, sys_cfg);
-    // And save it for internal usage
+    // Save it for internal usage
     dw->reg.sys_cfg = sys_cfg;
 }
 
@@ -2322,12 +2295,10 @@ double dw1000_rx_power_correction(dw1000_t *dw, double p) {
 	break;
     }
 
-    // Sanity check
     // XXX: is it better or worst to trim it?
     if (p > -60)
 	p = -60;
 
-    // Return corrected power
     return p;
 }
 

@@ -22,13 +22,11 @@ _dw1000_tx_prepare_data_sendv(
 {
     size_t length = 0;
 
-    // Write data to DW TX buffer and compute offset/length
     for ( ; iovcnt > 0 ; iovec++, iovcnt--) {
 	dw1000_tx_write_frame_data(dw, iovec->iov_base, iovec->iov_len, length);
 	length += iovec->iov_len;
     }
 
-    // Return total length
     return length;
 }
 
@@ -37,10 +35,8 @@ static inline size_t
 _dw1000_tx_prepare_data_send(
 	dw1000_t *dw, uint8_t *data, size_t length)
 {
-    // Write data to DW TX buffer
     dw1000_tx_write_frame_data(dw, data, length, 0);
 
-    // Return total length
     return length;
 }
 
@@ -119,7 +115,6 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
     default: return false;
     }
 
-    // Variables
     uint8_t  data[8] = { 0 };
     uint64_t time;
 

@@ -342,7 +342,6 @@ void e_reg_write(struct dw1000_emulation *e, int idx, size_t offset,
     size_t             reg_end    = offset + length;
     int                seg_idx    = 0;
 
-    //EMU_DEBUG("WRITE for 0x%02x offset=%d length=%d", idx, offset, length);
     // Find first segment containing the offset
     for (seg_idx = 0 ; reg->access[seg_idx].length ; seg_idx++) {
 	if (offset < reg_start + reg->access[seg_idx].length)
@@ -421,7 +420,6 @@ void e_reg_read(struct dw1000_emulation *e, int idx,  size_t offset,
     size_t             reg_end   = offset + length;
     int                seg_idx   = 0;
 
-    //EMU_DEBUG("READ for 0x%02x offset=%d length=%d", idx, offset, length);
     // Find first segment containing the offset
     for (seg_idx = 0 ; reg->access[seg_idx].length ; seg_idx++) {
 	if (offset < reg_start + reg->access[seg_idx].length)
@@ -578,17 +576,6 @@ void dw1000_emulation_reset(struct dw1000_emulation *e) {
 	(5 << DW1000_SFT_CHAN_CTRL_RX_CHAN) ;
     E_REG_IC_WRITE32_KEY(e, chan_ctrl, CHAN_CTRL);
 
-    
-    // DW1000_FLG_SYS_CFG_DIS_DRXB: double buffer
-    // DW1000_FLG_SYS_CFG_RXAUTR  : receiver auto-re-enable
-    // DW1000_FLG_SYS_CFG_DIS_STXP: smart power
-    // DW1000_FLG_SYS_CFG_HIRQ_POL: irq polarity
-    // DW1000_MSK_SYS_CFG_PHR_MODE: frame mode: standard/long
-    // DW1000_FLG_SYS_CFG_RXWTOE  : receive wait timeout
-    // DW1000_MSK_SYS_CFG_FF_ALL  : frame filtering
-
-
-
     uint32_t gpio_ctrl =
 	(DW1000_VAL_GPIO_0_GPIO << DW1000_SFT_GPIO_MSGP0) |
 	(DW1000_VAL_GPIO_1_GPIO << DW1000_SFT_GPIO_MSGP1) |
@@ -606,31 +593,6 @@ void dw1000_emulation_reset(struct dw1000_emulation *e) {
     DW1000_SET_FLG(sys_status, SYS_STATUS_CPLOCK);
     
     E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
-
-    // DW1000_OFF_LDE_RXANTD : antenna delay
-    // DW1000_OFF_LDE_THRESH : max noise
-    
-
- 
-
-
-
-
-    // DW1000_SFT_SYS_CTRL_HRBPT : double buffer
-    // DW1000_FLG_SYS_CTRL_TRXOFF : radio disabling
-    // DW1000_FLG_SYS_CTRL_WAIT4RESP : wait for response
-    // DW1000_FLG_SYS_CTRL_TXDLYS 
-    // DW1000_FLG_SYS_CTRL_SFCST : auto-FCS transmission
-    // DW1000_FLG_SYS_CTRL_RXENAB :
-    // DW1000_FLG_SYS_CTRL_RXDLYE
-    // DW1000_FLG_SYS_CTRL_TXSTRT
-    // Special : DW1000_FLG_SYS_CTRL_TXSTRT | DW1000_FLG_SYS_CTRL_TRXOFF
-
-
-    
-
-
-    
 }
 
 
@@ -758,10 +720,7 @@ int dw1000_emulation_send(struct dw1000_emulation *e) {
 
         return -1;
     }
-    //TXBERR
 
-    // Delayed send: TXPUTE HPDWARN 
-    
     return 0;
 }
 
@@ -825,9 +784,6 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
     struct dw1000_emulation *e = spi->emulation;
     
     _dw1000_spi_header_decode(hdr, hdrlen, &reg, &offset, &write);
-    //  EMU_DEBUG("SPI SEND for reg=0x%02x / offset=%d / write=%d",
-    //		reg, offset, write);
-
 
     bool send = false;
     bool recv = false;
@@ -877,8 +833,6 @@ void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
     struct dw1000_emulation *e = spi->emulation;
 
     _dw1000_spi_header_decode(hdr, hdrlen, &reg, &offset, &write);
-//  EMU_DEBUG("SPI RECV for reg=0x%02x / offset=%d / write=%d",
-//	        reg, offset, write);
 
     pthread_mutex_lock(&e->mutex);
     E_REG_HOST_READ_IDX(e, reg, offset, data, datalen );
@@ -897,16 +851,8 @@ void _dw1000_spi_high_speed(dw1000_spi_driver_t *spi) {
 }
 
 
-
-
-
-////////////////////////////
-
-
-
 void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, void *args) {
     struct dw1000_driver_iopkt *iopkt = data;
-  //uintptr_t drvid                   = iopkt->drvid;
     struct dw1000_emulation    *e     = args;
 
     /* The service type is what got us here, and the connection is reached
@@ -1089,9 +1035,6 @@ void e_raise_interrupt(struct dw1000_emulation *e) {
 	    e->line_cb(DW1000_IOLINE_IRQ, e->line_args);
     }
     e->irq = irqs;
-
-    //EMU_DEBUG("SYS STATUS 32 = 0x%08" PRIx32 " / SYS_MASK=0x%08" PRIx32,
-    // sys_status, sys_mask);
 }
 
 
