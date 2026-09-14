@@ -97,7 +97,7 @@ src)      portvar "$1" SOURCES ;;
 # recorded anywhere, so clean removes them all.
 objs)
     for p in `cmvar DW1000_OSAL_PORTS`; do
-	echo "`portvar "$p" SOURCES`" | sed 's/\.c$/.o/'
+	echo "`portvar "$p" SOURCES`" | tr ' ' '\n' | sed 's/\.c$/.o/'
     done | tr '\n' ' '
     echo
     ;;
