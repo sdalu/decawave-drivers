@@ -39,14 +39,14 @@
 #endif
 
 /**
- * @brief Milliseconds to ticks of the device clock (DW1000_TIME_CLOCK_HZ)
+ * @brief Microseconds to ticks of the device clock (DW1000_TIME_CLOCK_HZ)
  *
  * @note  Usable in preprocessor conditionals (no cast): the result is an
  *        unsigned long long, to be assigned to a uint32_t delay (fits
  *        below ~67 ms).
  */
-#define DW1000_TX_DELAYED_MS(ms)					\
-    ((DW1000_TIME_CLOCK_HZ * (ms)) / 1000)
+#define DW1000_TX_DELAYED_US(us)					\
+    ((DW1000_TIME_CLOCK_HZ * (us)) / 1000000)
 
 /**
  * @brief Value for default delay when embedding timestamp automatically
@@ -58,13 +58,16 @@
  *        system and dw1000 chip to prepare the frame: between the read of
  *        the system time and TXSTRT sit the DX_TIME write, the timestamp
  *        write and the SYS_CTRL write, plus the chip's transmit power-up.
- *        On a Linux host driving the chip over spidev, each transaction
- *        costs tens of microseconds and the thread may be preempted, so
- *        2 ms is the default; a bare-metal host can go well below 1 ms.
+ *        Measured on 2026-09-14 (spank's delayed-send estimator, a
+ *        maximum-size frame): 0.27 ms on an nRF52 at 8 or 16 MHz SPI,
+ *        0.16 ms on a Raspberry Pi 4 over spidev at 20 MHz. The default
+ *        of 400 us leaves 1.5x and 2.5x on top of those; the 2 ms it
+ *        replaces had been sized before anything was measured. A host
+ *        that needs more defines this before including the driver.
  * @note  Setting delay for TX, only consider a DW1000_CLOCK_MIN rounded time
  */
 #if !defined(DW1000_TX_DELAYED_DEFAULT_DELAY) || defined(__DOXYGEN__)
-#define DW1000_TX_DELAYED_DEFAULT_DELAY DW1000_TX_DELAYED_MS(2)
+#define DW1000_TX_DELAYED_DEFAULT_DELAY DW1000_TX_DELAYED_US(400)
 #endif
 
 /**
@@ -73,14 +76,19 @@
  * @details Value can be between 0 and 2^32, in DW1000_TIME_CLOCK_HZ steps.
  *          A value of 0 means disabled (no retry). The retry happens after
  *          the chip found the first attempt too late (HPDWARN), so it must
- *          be at least the initial delay; twice the initial delay is the
- *          default, so that overriding DW1000_TX_DELAYED_DEFAULT_DELAY
- *          alone keeps the two in proportion.
+ *          be at least the initial delay; one and a half times the initial
+ *          delay is the default (600 us), so that overriding
+ *          DW1000_TX_DELAYED_DEFAULT_DELAY alone keeps the two in
+ *          proportion. A first attempt refused by a scheduling blip does
+ *          not need its lead time doubled, and every extra microsecond of
+ *          lead time is clock drift the frame carries. The same factor is
+ *          applied at run time to a caller-supplied delay without a retry
+ *          delay of its own.
  * @note  Setting delay for TX, only consider a DW1000_CLOCK_MIN rounded time
  */
 #if !defined(DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY) || defined(__DOXYGEN__)
 #define DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY				\
-    (2 * DW1000_TX_DELAYED_DEFAULT_DELAY)
+    (DW1000_TX_DELAYED_DEFAULT_DELAY + DW1000_TX_DELAYED_DEFAULT_DELAY / 2)
 #endif
 
 /** @} */

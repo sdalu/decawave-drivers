@@ -205,8 +205,9 @@ Zephyr they are `CONFIG_DW1000_*` in `Kconfig` and under MyNewt they are
 
 Three more take a value rather than a flag:
 `DW1000_SFD_TIMEOUT_DEFAULT` (default `DW1000_SFD_TIMEOUT_MAX`),
-`DW1000_TX_DELAYED_DEFAULT_DELAY` (2 ms, in `DW1000_TIME_CLOCK_HZ` steps)
-and `DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY` (twice the delay).
+`DW1000_TX_DELAYED_DEFAULT_DELAY` (400 us, in `DW1000_TIME_CLOCK_HZ` steps;
+an nRF52 measured a need of 0.27 ms, a Raspberry Pi 4 over spidev 0.16 ms)
+and `DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY` (1.5 x the delay, 600 us).
 
 **These are not internal to the driver.** `DW1000_WITH_SFD_TIMEOUT` and
 `DW1000_WITH_PROPRIETARY_SFD` add fields to `dw1000_config_t`, and

@@ -211,14 +211,16 @@ dw1000_tx_extended_vsendv(
 	// (HPDWARN), so it must not be given *less* lead time than that
 	// attempt had. The #error in dw1000_send.h only relates the two
 	// compile time defaults; a caller raising the delay here would
-	// otherwise keep a retry sized for the default -- the 2ms default
-	// retrying a 10ms delay, which cannot help precisely on the slow
-	// hosts that raised it. Keep the documented proportion (twice the
-	// delay), saturating rather than wrapping, and keep a compile time
-	// default of 0 meaning "retries disabled".
+	// otherwise keep a retry sized for the default -- a 600us retry
+	// for a 10ms delay, which cannot help precisely on the slow hosts
+	// that raised it. Give the retry one and a half times the delay
+	// (a first attempt refused by a scheduling blip does not need the
+	// lead time doubled, and every extra microsecond of lead time is
+	// clock drift the frame carries), saturating rather than wrapping,
+	// and keep a compile time default of 0 meaning "retries disabled".
 	if (DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY != 0)
-	    retry_delay = (delay > (UINT32_MAX / 2))
-		        ? UINT32_MAX : (2 * delay);
+	    retry_delay = (delay > (UINT32_MAX - UINT32_MAX / 3))
+		        ? UINT32_MAX : (delay + delay / 2);
     }
     // An explicit retry delay is the caller's own choice and is honoured
     // as given.
