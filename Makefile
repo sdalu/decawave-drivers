@@ -142,7 +142,7 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-manifest		## compile the option matrix (~1 min), check the manifest
+check: check-options check-manifest check-emulation	## compile the option matrix (~1 min), check the manifest, and the emulation port
 
 # 256 compiles, tens of seconds in total, so the script reports progress
 # as it goes. CC, CFLAGS and WERROR reach it through the environment.
@@ -151,6 +151,22 @@ check-options:					## compile the core over every option combination
 
 check-manifest:					## check dw1000.cmake still describes the tree
 	@sh tests/check-manifest.sh
+
+# The emulation port has no vendor tree to wait for -- unlike unix,
+# chibios, mynewt, cf2 and zephyr, it needs nothing installed -- so
+# there is no reason for it to rot silently the way
+# DW1000_WITH_EXTENDED_SEND=0 once did. Compiled next to the option
+# matrix over port/null, with the same warnings `lib` builds with.
+# EMU_INC/EMU_SRC go through the manifest like OSAL_INC/OSAL_SRC do,
+# so this does not become a second place a port's paths are spelled
+# out (tests/check-manifest.sh fails the Makefile for that).
+EMU_INC   != $(MANIFEST) inc emulation
+EMU_SRC   != $(MANIFEST) src emulation
+
+check-emulation:				## compile the core against port/emulation
+	@$(CC) $(ALL_CFLAGS) -I$(INCDIR) -I$(EMU_INC) \
+	    -DDW1000_VERSION_GIT='"$(GITVER)"' $(CPPFLAGS) \
+	    -fsyntax-only $(SRC_CORE) $(EMU_SRC)
 
 # --- building ---------------------------------------------------------
 
@@ -293,5 +309,5 @@ clean:						## remove build products
 distclean: clean				## clean, plus the generated documentation
 	rm -rf doc/generated
 
-.PHONY: help portcheck check check-options check-manifest lib version \
-	version-full tag ports options sources doc clean distclean
+.PHONY: help portcheck check check-options check-manifest check-emulation \
+	lib version version-full tag ports options sources doc clean distclean

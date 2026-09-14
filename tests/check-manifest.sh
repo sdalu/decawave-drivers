@@ -111,7 +111,9 @@ for p in $ports; do
     fi
     [ -d "$top/$i" ]                || { echo "  port $p: no directory $i"; bad=1; }
     [ -f "$top/$i/dw1000/osal.h" ]  || { echo "  port $p: no <dw1000/osal.h> under $i"; bad=1; }
-    [ -f "$top/$s" ]                || { echo "  port $p: no file $s"; bad=1; }
+    for f in $s; do
+	[ -f "$top/$f" ]            || { echo "  port $p: no file $f"; bad=1; }
+    done
 done
 
 # --- nothing keeps its own copy ---------------------------------------

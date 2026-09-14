@@ -32,7 +32,7 @@
 /** Major version of the release */
 #define DW1000_VERSION_MAJOR 1
 /** Minor version of the release */
-#define DW1000_VERSION_MINOR 2
+#define DW1000_VERSION_MINOR 3
 /** Patch version of the release */
 #define DW1000_VERSION_PATCH 0
 

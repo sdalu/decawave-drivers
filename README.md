@@ -52,14 +52,15 @@ include path. Swapping hosts means swapping `port/`, not touching
 Supported hosts
 ===============
 
-| Host                      | OSAL          | Notes                    |
-| ------------------------- | ------------- | ------------------------ |
-| [Zephyr][2] 2 and later   | `port/zephyr` | also a Zephyr module     |
-| [Crazyflie][5] 2.x        | `port/cf2`    | FreeRTOS, deck SPI       |
-| Unix                      | `port/unix`   | via the [bitters][1] lib |
-| [ChibiOS][3]              | `port/chibios`| SPI API v1 or v2         |
-| [Apache MyNewt][4]        | `port/mynewt` | via `hal_spi_txrx()`     |
-| none                      | `port/null`   | no hardware; see below   |
+| Host                    | OSAL             | Notes                                                             |
+| ----------------------- | ---------------- | ----------------------------------------------------------------- |
+| [Zephyr][2] 2 and later | `port/zephyr`    | also a Zephyr module                                              |
+| [Crazyflie][5] 2.x      | `port/cf2`       | FreeRTOS, deck SPI                                                |
+| Unix                    | `port/unix`      | via the [bitters][1] lib                                          |
+| [ChibiOS][3]            | `port/chibios`   | SPI API v1 or v2                                                  |
+| [Apache MyNewt][4]      | `port/mynewt`    | via `hal_spi_txrx()`                                              |
+| Emulation               | `port/emulation` | no chip; see docs/emulation.md |
+| none                    | `port/null`      | no hardware; see below                                            |
 
 ChibiOS and MyNewt are built against their vendor headers but have not
 been exercised on hardware recently.
@@ -67,7 +68,11 @@ been exercised on hardware recently.
 `port/null` is not a host. It implements the whole port contract wired to
 nothing, so the core can be compiled where there is no DW1000 and no
 vendor tree -- which is what `make check` does. It is also the shortest
-thing to copy when writing a port of your own.
+thing to copy when writing a port of your own. `port/emulation` is not
+the same kind of stand-in: where `null` is wired to nothing and cannot
+run, `emulation` runs the driver against a model of the chip, and needs
+a medium server on the other end of its socket to do it -- see
+[`docs/emulation.md`](docs/emulation.md).
 
 
 Layout
@@ -90,6 +95,7 @@ decawave-drivers
 │   ├── chibios                    ChibiOS, SPI API v1 or v2
 │   ├── mynewt                     Apache MyNewt
 │   ├── cf2                        Crazyflie 2.x, on FreeRTOS
+│   ├── emulation                  register model, no chip, see docs/emulation.md
 │   └── null                       no hardware, for compile checks
 │
 ├── dw1000.cmake                   the file list, read by both of these

@@ -20,8 +20,8 @@
 #   DW1000_SOURCES_SEND      dw1000_tx_send() and the vectored variants
 #
 #   DW1000_OSAL_PORTS        the ports this tree ships
-#   DW1000_OSAL_<PORT>_INCLUDE_DIR   for PORT in CF2 CHIBIOS MYNEWT NULL
-#   DW1000_OSAL_<PORT>_SOURCES       UNIX ZEPHYR
+#   DW1000_OSAL_<PORT>_INCLUDE_DIR   for PORT in CF2 CHIBIOS EMULATION MYNEWT
+#   DW1000_OSAL_<PORT>_SOURCES       NULL UNIX ZEPHYR
 #
 # Pick exactly one OSAL: it is the port contract the core compiles
 # against, and its include directory must come before nothing else that
@@ -104,7 +104,7 @@ set(DW1000_SOURCES
 # the compiler's own runtime supplies it.
 set(DW1000_LIBS m)
 
-set(DW1000_OSAL_PORTS cf2 chibios mynewt null unix zephyr)
+set(DW1000_OSAL_PORTS cf2 chibios emulation mynewt null unix zephyr)
 
 set(DW1000_OSAL_CF2_INCLUDE_DIR
     ${CMAKE_CURRENT_LIST_DIR}/port/cf2/dw/osal/include)
@@ -115,6 +115,12 @@ set(DW1000_OSAL_CHIBIOS_INCLUDE_DIR
     ${CMAKE_CURRENT_LIST_DIR}/port/chibios/dw/osal/include)
 set(DW1000_OSAL_CHIBIOS_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/port/chibios/dw/osal/src/dw_osal.c)
+
+set(DW1000_OSAL_EMULATION_INCLUDE_DIR
+    ${CMAKE_CURRENT_LIST_DIR}/port/emulation/dw/osal/include)
+set(DW1000_OSAL_EMULATION_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/port/emulation/dw/osal/src/osal.c
+    ${CMAKE_CURRENT_LIST_DIR}/port/emulation/dw/osal/src/rsvc.c)
 
 set(DW1000_OSAL_MYNEWT_INCLUDE_DIR
     ${CMAKE_CURRENT_LIST_DIR}/port/mynewt/dw/osal/include)
