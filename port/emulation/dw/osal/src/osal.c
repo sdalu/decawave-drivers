@@ -119,7 +119,8 @@ struct dw1000_emulation {
     struct dw1000_driver_iopkt	tx_pkt;
     size_t			tx_pktlen;
     bool			tx_delayed;
-    uint64_t			tx_rawst;	/* RMARKER, from DX_TIME */
+    uint64_t			tx_rawst;	/* RMARKER, from DX_TIME  */
+    uint64_t			tx_start;	/* ... less Ton, 64 bits  */
     
     struct e_register   reg[DW1000_COUNT_REGISTERS];
 
@@ -185,6 +186,24 @@ static void e_irq_fire(struct dw1000_emulation *e);
 
 
 E_DEFINE_PASSTHROUGH(SYS_STATUS, 0xff, 0x1b, 0xff, 0xff, 0xff);
+
+/* SYS_STATUS is write-one-to-clear, except where it is not. UM 7.2.17
+ * calls five of its bits READ ONLY, each maintained by the chip and each
+ * cleared by the chip on its own terms:
+ *
+ *   IRQS    (0)  "cannot be cleared or overwritten"; it is the OR of the
+ *                masked status bits and nothing else.
+ *   HPDWARN (27) "will clear when the delayed TX/RX is cancelled or when
+ *                the delay remaining is no longer greater than half a
+ *                period of the system clock".
+ *   HSRBP   (30) reports which set the host is on; moved by the HRBPT
+ *   ICRBP   (31) command and by the receiver, not by writing the bit.
+ *   TXPUTE  (34) "will clear as soon as the DW1000 begins to send
+ *                preamble, (or if the DW1000 is returned to idle)".
+ *
+ * Byte 0 bit 0, byte 3 bits 3, 6 and 7, byte 4 bit 2.
+ */
+E_DEFINE_READONLY(SYS_STATUS, 0x01, 0x00, 0x00, 0xc8, 0x04);
 
 
 
@@ -457,9 +476,30 @@ static void e_dblbuf_toggle_host(struct dw1000_emulation *e) {
  * reference server applies no behaviour to RX_CONFIG anyway
  * (docs/emulation.md), so the model's state is the whole of it.
  */
-static bool e_rx_auto_reenable(struct dw1000_emulation *e) {
+static bool e_rx_auto_reenable(struct dw1000_emulation *e, bool good) {
     uint32_t sys_cfg = E_REG_IC_READ32_KEY(e, SYS_CFG);
-    return DW1000_GET_FLG(sys_cfg, SYS_CFG_RXAUTR);
+
+    if (!DW1000_GET_FLG(sys_cfg, SYS_CFG_RXAUTR))
+	return false;
+
+    /* UM 7.2.6, RXAUTR, whose two cases are not the same:
+     *
+     *   (a) Double-buffered mode: After a frame reception event or
+     *       failure (except a frame wait timeout), the receiver will
+     *       re-enable to receive another frame.
+     *   (b) Single-buffered mode: After a frame reception failure
+     *       (except a frame wait timeout), the receiver will re-enable
+     *       to re-attempt reception.
+     *
+     * So a *good* frame re-enables the receiver only when there is a
+     * second buffer for the next one to go into. Single buffered, the
+     * chip stops and waits for the host to read the one buffer out,
+     * which is the whole reason double buffering exists.
+     *
+     * The frame wait timeout is excluded in both, and needs no code
+     * here: a timeout returns to idle without asking.
+     */
+    return e->dblbuf ? true : !good;
 }
 
 /* A frame has been taken: the IC moves to the other set.
@@ -538,6 +578,97 @@ static char *e_state[] = {
 		    E_GET_STATE_STR(e), __func__);			\
 	(e)->state = E_STATE_##_state;					\
     } while(0)
+
+
+/*-- Airtime and timing constants --------------------------------------*/
+
+/* One preamble symbol, in device clock ticks.
+ *
+ * UM table 60: a preamble symbol is 496 chips at 16 MHz PRF and 508 at
+ * 64 MHz, the chip rate being 499.2 MHz. The device clock runs at 128
+ * times the chip rate, so a symbol is a whole number of ticks and the
+ * 993.59 ns and 1017.63 ns of the table are that number rounded for
+ * print.
+ */
+#define E_TICKS_PER_PSYM_16MHZ	(496 * 128)
+#define E_TICKS_PER_PSYM_64MHZ	(508 * 128)
+
+/* One RX_FWTO unit, in device clock ticks.
+ *
+ * UM 7.2.14: "the exact unit is 512 counts of the fundamental 499.2 MHz
+ * UWB clock, or 1.026 us". 512 chips times 128 ticks per chip.
+ */
+#define E_TICKS_PER_FWTO	(512 * 128)
+
+/* The transmitter power-up time.
+ *
+ * UM 3.3 puts it at "a few microseconds" and gives no number; it is what
+ * separates a delayed send that goes out cleanly from one that raises
+ * TXPUTE, its preamble truncated while the transmitter comes up. Five
+ * microseconds is this model's choice, not the manual's.
+ */
+#define E_TX_POWERUP_TICKS	((uint64_t)DW1000_USEC_TO_CLOCK(5))
+
+
+/*-- HPDWARN and TXPUTE ------------------------------------------------*/
+
+/* Both are conditions, not events, and the model must not latch them.
+ *
+ * UM 7.2.17 on HPDWARN: "READ ONLY. It will clear when the delayed TX/RX
+ * is cancelled or when the delay remaining is no longer greater than
+ * half a period of the system clock." And on TXPUTE: "READ ONLY. It will
+ * clear as soon as the DW1000 begins to send preamble, (or if the DW1000
+ * is returned to idle)."
+ *
+ * So neither is set once and left; each is recomputed from how far the
+ * armed operation still is from starting, which is what makes a
+ * cancelled operation clear HPDWARN by itself -- TRXOFF disarms, nothing
+ * is pending, the bit reads zero -- and what makes a marginal delay stop
+ * warning once the counter has caught up with it.
+ *
+ * That the deadline is carried at 64 bits is what makes this expressible:
+ * "more than half a period away" is a real distance here, where at 40
+ * bits it would be indistinguishable from "just behind us".
+ *
+ * Called before anything reads SYS_STATUS. The mutex must be held.
+ */
+static void e_status_derived(struct dw1000_emulation *e) {
+    uint64_t now      = e_clock_full();
+    uint64_t sys_stat = E_REG_IC_READ40_KEY(e, SYS_STATUS);
+    bool     hpdwarn  = false;
+    bool     txpute   = false;
+    int64_t  togo     = 0;
+    bool     pending  = false;
+
+    if (E_IS_STATE(e, TX_WAIT) && e->deadline[E_DEADLINE_TX].armed) {
+	togo    = (int64_t)(e->tx_start - now);
+	pending = true;
+    } else if (E_IS_STATE(e, RX_WAIT) && e->deadline[E_DEADLINE_RX].armed) {
+	togo    = (int64_t)(e->deadline[E_DEADLINE_RX].at - now);
+	pending = true;
+    }
+
+    if (pending) {
+	// "more than half a period of the system clock away"
+	hpdwarn = togo > (int64_t)(1ull << (DW1000_TIME_CLOCK_BITS - 1));
+
+	/* The transmitter is powering up: past the command, not yet at
+	 * the start of preamble, and with less than the power-up time to
+	 * go. The manual notes a host is unlikely ever to catch this,
+	 * the window being a few symbol times; it is just as narrow here.
+	 */
+	txpute = E_IS_STATE(e, TX_WAIT) && !hpdwarn &&
+	         (togo > 0) && ((uint64_t)togo < E_TX_POWERUP_TICKS);
+    }
+
+    if (hpdwarn) DW1000_SET_FLG(sys_stat, SYS_STATUS_HPDWARN);
+    else         DW1000_CLR_FLG(sys_stat, SYS_STATUS_HPDWARN);
+    if (txpute)  DW1000_SET_FLG(sys_stat, SYS_STATUS_TXPUTE);
+    else         DW1000_CLR_FLG(sys_stat, SYS_STATUS_TXPUTE);
+
+    E_REG_IC_WRITE40_KEY(e, sys_stat, SYS_STATUS);
+}
+
 
 
 
@@ -712,8 +843,15 @@ void e_reg_write(struct dw1000_emulation *e, int idx, size_t offset,
 
 	// COPY or CLEAR
 	if (!system && reg->access[seg_idx].mode.clear) {
-	    for (size_t i = 0 ; i < s_length ; i++)
-		reg_data_c[s_offset + i] &= ~data[i];
+	    for (size_t i = 0 ; i < s_length ; i++) {
+		/* Write-one-to-clear, minus the bits the chip owns: a
+		 * host write leaves those exactly as they were.
+		 */
+		uint8_t bits = data[i];
+		if (reg->readonly)
+		    bits &= ~reg->readonly[s_offset + i];
+		reg_data_c[s_offset + i] &= ~bits;
+	    }
 	} else {
 	    memcpy(&reg_data_c[s_offset], data, s_length);
 	}
@@ -870,6 +1008,7 @@ dw1000_emulation_create(rsvc_t *rsvc,
     
     
     e->reg[DW1000_REG_SYS_STATUS].passthrough = reg_p_SYS_STATUS;
+    e->reg[DW1000_REG_SYS_STATUS].readonly    = reg_ro_SYS_STATUS;
     
     dw1000_emulation_reset(e);
 
@@ -971,33 +1110,6 @@ void dw1000_emulation_reset(struct dw1000_emulation *e) {
 
 
 /*-- Receive timing ----------------------------------------------------*/
-
-/* One preamble symbol, in device clock ticks.
- *
- * UM table 60: a preamble symbol is 496 chips at 16 MHz PRF and 508 at
- * 64 MHz, the chip rate being 499.2 MHz. The device clock runs at 128
- * times the chip rate, so a symbol is a whole number of ticks and the
- * 993.59 ns and 1017.63 ns of the table are that number rounded for
- * print.
- */
-#define E_TICKS_PER_PSYM_16MHZ	(496 * 128)
-#define E_TICKS_PER_PSYM_64MHZ	(508 * 128)
-
-/* One RX_FWTO unit, in device clock ticks.
- *
- * UM 7.2.14: "the exact unit is 512 counts of the fundamental 499.2 MHz
- * UWB clock, or 1.026 us". 512 chips times 128 ticks per chip.
- */
-#define E_TICKS_PER_FWTO	(512 * 128)
-
-/* The transmitter power-up time.
- *
- * UM 3.3 puts it at "a few microseconds" and gives no number; it is what
- * separates a delayed send that goes out cleanly from one that raises
- * TXPUTE, its preamble truncated while the transmitter comes up. Five
- * microseconds is this model's choice, not the manual's.
- */
-#define E_TX_POWERUP_TICKS	((uint64_t)DW1000_USEC_TO_CLOCK(5))
 
 /* PAC size in preamble symbols, recovered from DRX_TUNE2.
  *
@@ -1149,24 +1261,17 @@ int dw1000_emulation_recv(struct dw1000_emulation *e) {
 	uint64_t dx  = E_REG_IC_READ40_KEY(e, DX_TIME) & ~0x1FFull;
 	uint64_t at  = e_clock_forward(now, dx);
 
-	if (e_clock_delta(now & E_CLOCK_MASK, dx) <= 0) {
-	    /* Late. UM 4.2: the counter is past the programmed time and
-	     * would have to run almost a whole period to reach it again.
-	     * HPDWARN says so. The chip does not cancel anything by
-	     * itself -- the host decides, and the driver does so by
-	     * issuing TRXOFF -- so the receiver is left off and no
-	     * deadline is armed.
-	     */
-	    uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
-	    DW1000_SET_FLG(sys_status, SYS_STATUS_HPDWARN);
-	    E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
-	    EMU_DEBUG("rx_start: delayed receive is already late"
-		      " (dx=0x%010" PRIx64 " now=0x%010" PRIx64 "): HPDWARN",
-		      dx, now & E_CLOCK_MASK);
-	    pthread_mutex_unlock(&e->mutex);
-	    return -1;
-	}
-
+	/* UM 4.2 and 7.2.17: a turn-on time already gone by is not an
+	 * error the chip acts on. It waits for the counter to come round
+	 * to it -- "almost a whole clock count period" -- and HPDWARN is
+	 * how the host is told, so that it can "take recovery measures"
+	 * if it wants to. Taking them is the host's move, not the
+	 * model's, and this driver's move is TRXOFF.
+	 *
+	 * So nothing is refused here and nothing is latched; the receive
+	 * is armed on whichever lap the counter reaches DX_TIME, and
+	 * e_status_derived() answers HPDWARN from the distance to it.
+	 */
 	E_SET_STATE(e, RX_WAIT);
 	e_deadline_arm(e, E_DEADLINE_RX, at, 0);
 	EMU_DEBUG("rx_start: delayed to 0x%010" PRIx64 " (in %" PRIu64
@@ -1397,42 +1502,36 @@ int dw1000_emulation_send(struct dw1000_emulation *e) {
     uint64_t dx    = E_REG_IC_READ40_KEY(e, DX_TIME) & ~0x1FFull;
     uint64_t ton   = e_tx_ton(e);
     uint64_t start = (dx - ton) & E_CLOCK_MASK;
-    int64_t  lead  = e_clock_delta(now & E_CLOCK_MASK, start);
 
     /* UM 3.3: "it is the internal start time mentioned above that is used
-     * when deciding whether to set the HPDWARN event ... As long as the
-     * preamble start time is the near future, the HPDWARN event flag will
-     * not be set." Near future is the readable half of the counter; past
-     * that, the chip would have to run almost a whole period to reach the
-     * time again, which is what the warning is for.
+     * when deciding whether to set the HPDWARN event", and UM 7.2.17
+     * makes HPDWARN a condition rather than an event -- so nothing is
+     * set here. e_status_derived() answers it from how far the start
+     * time still is, every time SYS_STATUS is read, and TRXOFF clears it
+     * by disarming.
      *
      * Neither flag cancels anything. UM 3.3 is explicit that a long delay
      * may be intended, that HPDWARN "can be ignored and the transmission
      * will begin at the allotted time", and that stopping it is the
      * host's move, by TRXOFF. So the send is armed either way and the
      * driver's own policy decides.
+     *
+     * The lap is chosen on the start time and not on the RMARKER. For a
+     * start time just behind us the chip waits almost a whole period for
+     * the counter to come round to it, and the RMARKER follows Ton after
+     * that -- which is a different lap from the one the RMARKER alone
+     * would have picked.
      */
-    if (lead <= 0) {
-	DW1000_SET_FLG(sys_status, SYS_STATUS_HPDWARN);
-	EMU_DEBUG("tx_start: delayed send is late, HPDWARN"
-		  " (start=0x%010" PRIx64 " now=0x%010" PRIx64 ")",
-		  start, now & E_CLOCK_MASK);
-    } else if ((uint64_t)lead < E_TX_POWERUP_TICKS) {
-	/* UM 3.3: early enough not to warrant HPDWARN, too late for the
-	 * transmitter to be up before the preamble starts. The frame
-	 * still goes, the RMARKER is still on time, the first symbols of
-	 * preamble are not.
-	 */
-	DW1000_SET_FLG(sys_status, SYS_STATUS_TXPUTE);
-	EMU_DEBUG("tx_start: delayed send leaves %" PRId64 " ticks to power"
-		  " up, TXPUTE", lead);
-    }
-
+    e->tx_start = e_clock_forward(now, start);
     e->tx_rawst = dx;
     E_REG_IC_WRITE40_KEY(e, sys_status, SYS_STATUS);
 
     E_SET_STATE(e, TX_WAIT);
-    e_deadline_arm(e, E_DEADLINE_TX, e_clock_forward(now, dx), 0);
+    e_deadline_arm(e, E_DEADLINE_TX, e->tx_start + ton, 0);
+
+    EMU_DEBUG("tx_start: delayed, preamble in %" PRId64 " ticks,"
+	      " RMARKER at 0x%010" PRIx64,
+	      (int64_t)(e->tx_start - now), dx);
 
     pthread_mutex_unlock(&e->mutex);
     return 0;
@@ -1592,6 +1691,13 @@ void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
     if (reg == DW1000_REG_SYS_TIME)
 	E_REG_IC_WRITE40_KEY(e, dw1000_emulation_clock(), SYS_TIME);
 
+    /* Same reasoning for HPDWARN and TXPUTE: they are conditions the
+     * chip evaluates, not events it remembers, so they are worked out at
+     * the moment the host looks.
+     */
+    if (reg == DW1000_REG_SYS_STATUS)
+	e_status_derived(e);
+
     E_REG_HOST_READ_IDX(e, reg, offset, data, datalen );
     pthread_mutex_unlock(&e->mutex);
 }
@@ -1687,7 +1793,7 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	     * RXAUTR) the receiver will begin looking for preamble
 	     * again".
 	     */
-	    if (e_rx_auto_reenable(e)) {
+	    if (e_rx_auto_reenable(e, false)) {
 		e_rx_arm_timeouts(e, e_clock_full());
 	    } else {
 		E_SET_STATE(e, IDLE);
@@ -1767,7 +1873,7 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	 * countdown with it. Otherwise the chip goes idle and waits for
 	 * the host.
 	 */
-	if (e_rx_auto_reenable(e)) {
+	if (e_rx_auto_reenable(e, crc_ok)) {
 	    e_rx_arm_timeouts(e, e_clock_full());
 	} else {
 	    E_SET_STATE(e, IDLE);
@@ -1778,6 +1884,19 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	
     case DW1000_RSVC_TX_DONE: {
 	EMU_DEBUG("RSVC INT <TX_DONE> (ts=0x%010lx)", iopkt->tx_done.timestamp);
+
+	/* Only if a transmission is actually in progress. A TRXOFF while
+	 * the frame was on its way to the server aborts it, and the chip
+	 * then raises no TXFRS and calls nothing back; without this check
+	 * the late reply would report a frame the host has cancelled, and
+	 * would drag whatever state the host has since reached -- a fresh
+	 * receive, say -- back to IDLE behind its back.
+	 */
+	if (! E_IS_STATE(e, TX)) {
+	    EMU_WARNING("transmit completion ignored (state=%s)",
+			E_GET_STATE_STR(e));
+	    goto done;
+	}
 
 	uint64_t antd = E_REG_IC_READ16_KEY(e, TX_ANTD);
 	uint64_t raw;
@@ -1829,6 +1948,17 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	    DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_WAIT4RESP);
 	    E_REG_IC_WRITE32_KEY(e, sys_ctrl, SYS_CTRL);
 	    E_SET_STATE(e, RX);
+
+	    /* This is a receiver turn-on like any other, so the timeouts
+	     * start counting here too: UM 7.2.14 says the frame wait
+	     * timeout starts "each time the receiver is enabled", and
+	     * without this a host that armed RX_FWTO and sent with
+	     * WAIT4RESP would wait for a reply that never times out.
+	     *
+	     * W4R_TIM, the programmable turnaround delay of ACK_RESP_T,
+	     * is not modelled: the receiver comes on immediately.
+	     */
+	    e_rx_arm_timeouts(e, e_clock_full());
 	} else {
 	    E_SET_STATE(e, IDLE);
 	}
@@ -1857,15 +1987,36 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
  * held; nothing here leaves the model.
  */
 static bool e_irq_update(struct dw1000_emulation *e) {
-    // Re-compute interruption flag IRQS
-    uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
+    // HPDWARN and TXPUTE are conditions; settle them before reading.
+    e_status_derived(e);
+
+    /* Re-compute IRQS.
+     *
+     * From the HOST's set, not the IC's. UM 7.2.17 defines IRQS over the
+     * status bits as the host sees them -- "whenever a status bit ... is
+     * activated and the corresponding bit in [SYS_MASK] is enabled" --
+     * and four of those bits are per-buffer. Taking them from the IC's
+     * set means that with both buffers full, the second frame's RXFCG
+     * sits in the set the host is on while the IC has already swung back
+     * to the other, so IRQS reads zero and the edge never comes: the
+     * frame is stranded until a third one arrives. That is also why the
+     * whole mask/clear/unmask/HRBPT dance of UM 4.3.3 exists -- the line
+     * follows the bits the host can see.
+     */
+    uint32_t sys_status = E_REG_HOST_READ32_KEY(e, SYS_STATUS);
     uint32_t sys_mask   = E_REG_IC_READ32_KEY(e, SYS_MASK);
     bool     irqs       = (sys_status & sys_mask) != 0;
 
-    // Update sys_status
-    if (irqs) { DW1000_SET_FLG(sys_status, SYS_STATUS_IRQS); }
-    else      { DW1000_CLR_FLG(sys_status, SYS_STATUS_IRQS); }
-    E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
+    /* Written back as byte 0 alone. The whole word came from the host's
+     * set and this is IC-side write, so writing it all back would push
+     * that set's per-buffer bits into the other one. Byte 0 is entirely
+     * passthrough (it holds no per-buffer bit), so one write reaches
+     * both sets and disturbs nothing.
+     */
+    uint8_t byte0 = (uint8_t)sys_status;
+    if (irqs) { byte0 |=  (uint8_t)DW1000_FLG_SYS_STATUS_IRQS; }
+    else      { byte0 &= ~(uint8_t)DW1000_FLG_SYS_STATUS_IRQS; }
+    E_REG_IC_WRITE_KEY(e, &byte0, 1, SYS_STATUS);
 
     // The line is level-sensitive on the chip; what a host sees is the
     // edge, so only the low-to-high transition is reported.

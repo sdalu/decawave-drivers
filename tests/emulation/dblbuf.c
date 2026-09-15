@@ -569,13 +569,21 @@ step_single_buffered(dw1000_t *dw, struct stub *s)
     if (sys_status(dw) & DW1000_FLG_SYS_STATUS_RXOVRR)
 	return "single buffered, but an overrun was reported";
 
-    /* The one buffer holds the last frame of the burst: each frame
-     * overwrote the one before it.
+    /* The buffer holds the FIRST frame of the burst, not the last.
+     *
+     * UM 7.2.6 gives RXAUTR two different meanings: double buffered it
+     * re-enables "after a frame reception event or failure", single
+     * buffered only "after a frame reception failure". So a good frame
+     * stops the receiver here, and the second frame of the burst arrives
+     * with nothing listening and is dropped. A model that re-enabled on
+     * a good frame in single-buffered mode would leave frame 2 in the
+     * buffer, and that is what this used to assert.
      */
     id = buffered_frame_id(dw);
-    if (id != (int)(first + 1))
-	return REASON("the single buffer holds frame %d, want %u",
-		      id, first + 1);
+    if (id != (int)first)
+	return REASON("the single buffer holds frame %d, want %u"
+		      " (a good frame must not re-enable the receiver when"
+		      " single buffered)", id, first);
 
     clear_rx_status(dw);
     return NULL;

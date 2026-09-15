@@ -78,6 +78,16 @@ static inline int64_t e_clock_delta(uint64_t a, uint64_t b) {
 #define E_DEFINE_PASSTHROUGH(type, ...)					\
     static uint8_t reg_p_##type[] = { __VA_ARGS__ }
 
+/* Bits the host may not write, byte by byte, 1 meaning read only.
+ *
+ * A register's access mode is per segment, which is enough for every
+ * register but SYS_STATUS: that one is write-one-to-clear as a whole and
+ * yet holds a handful of bits the manual calls READ ONLY, which the chip
+ * maintains and a host write must not disturb. UM 7.2.17 names them.
+ */
+#define E_DEFINE_READONLY(type, ...)					\
+    static uint8_t reg_ro_##type[] = { __VA_ARGS__ }
+
 
 #define E_DEFINE_REGISTER_SINGLE(type)			\
     uint8_t reg_##type[DW1000_LEN_##type]
@@ -110,6 +120,7 @@ struct e_register {
     struct e_access *access;
     uint8_t         *data[2];
     uint8_t         *passthrough;
+    uint8_t         *readonly;
 };
 
 #define _E_GET_OVERRIDE_3(_1, _2, _3, NAME, ...) NAME

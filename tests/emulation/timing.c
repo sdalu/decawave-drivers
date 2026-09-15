@@ -429,29 +429,6 @@ tx_get_rawst(dw1000_t *dw)
     return dw1000_le64_to_cpu(raw);
 }
 
-/* Clear HPDWARN and TXPUTE.
- *
- * The test has to do this because the driver never does. Both are
- * write-1-to-clear status bits (UM 7.2.17), neither appears in any of
- * the DW1000_MSK_SYS_STATUS_ALL_* clear sets, and the two places that
- * look at them -- dw1000_tx_start() and dw1000_rx_start() on their
- * delayed paths -- only read. So the first delayed operation that is
- * late leaves HPDWARN set for good, and every later delayed send or
- * receive on that chip reads the stale bit and reports itself late.
- *
- * The model reproduces that faithfully, which is how this was noticed;
- * the driver side of it is a separate matter and is not fixed here.
- */
-static void
-clear_hpdwarn(dw1000_t *dw)
-{
-    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
-			DW1000_FLG_SYS_STATUS_HPDWARN);
-    /* TXPUTE is bit 34, so it is reached at the fifth byte. */
-    _dw1000_reg_write8(dw, DW1000_REG_SYS_STATUS, 4,
-		       1 << (DW1000_SFT_SYS_STATUS_TXPUTE - 32));
-}
-
 /* Signed distance on the 40-bit clock, as the model computes it. */
 static int64_t
 delta(uint64_t a, uint64_t b)
@@ -554,14 +531,31 @@ step_tx_delayed(dw1000_t *dw, struct stub *s)
 		      " delay 0x%010" PRIx64, stamp, want_raw + antd);
 
     /* And it really was held: the medium saw the request no earlier than
-     * the programmed time, give or take the thread getting scheduled.
+     * the programmed time.
+     *
+     * Only the lower bound is asserted, and it is the one that says
+     * something about the model -- a model that ignored DX_TIME and sent
+     * at once would trip it by 5 ms. There is no upper bound, because
+     * there is nothing honest to put in it: how long after the deadline
+     * the frame actually reaches the medium is how long the host took to
+     * schedule the model's deadline thread and push a datagram, which is
+     * a property of the machine and its load, not of the register model.
+     * An earlier version of this step allowed 2 ms and failed about one
+     * run in twenty on a loaded box, measuring the scheduler and calling
+     * it a defect.
+     *
+     * What would have been caught by an upper bound -- a deadline armed
+     * on the wrong lap of the 40-bit counter, which is 17.2 s out -- is
+     * already caught by wait_irq() above timing out, and the exact
+     * TX_RAWST check is what proves the model computed the right moment
+     * whatever the scheduler then did with it.
+     *
+     * The half-millisecond of slack is for the ordering of two clock
+     * reads on different threads, not for lateness.
      */
     if (delta(want_raw, seen) < -(int64_t)USEC(500))
-	return REASON("the medium saw the frame %" PRId64 " ticks before"
+	return REASON("the medium saw the frame %" PRId64 " ticks BEFORE"
 		      " the programmed time", delta(seen, want_raw));
-    if (delta(want_raw, seen) > (int64_t)MSEC(2))
-	return REASON("the medium saw the frame %" PRId64 " ticks after"
-		      " the programmed time", delta(want_raw, seen));
 
     return NULL;
 }
@@ -601,17 +595,37 @@ step_tx_delayed_late(dw1000_t *dw, struct stub *s)
     if (after != before)
 	return "the cancelled frame was transmitted anyway";
 
-    /* HPDWARN is write-1-to-clear and the driver never writes it, so it
-     * is still set here -- check that, since a model that quietly
-     * cleared it would hide the driver behaviour described at
-     * clear_hpdwarn() above.
+    /* UM 7.2.17: HPDWARN "is READ ONLY. It will clear when the delayed
+     * TX/RX is cancelled". The driver's answer to the warning was a
+     * TRXOFF, which is that cancellation, so the bit must now be gone --
+     * without the host writing anything, because writing it does
+     * nothing. A model that latched it would leave it set here.
      */
     if ((_dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE) &
-	 DW1000_FLG_SYS_STATUS_HPDWARN) == 0)
-	return "HPDWARN did not survive the cancelled send";
+	 DW1000_FLG_SYS_STATUS_HPDWARN) != 0)
+	return "HPDWARN survived the TRXOFF that cancelled the send";
 
-    clear_hpdwarn(dw);
+    /* And the bit being read only is not a detail: try writing 1 to it,
+     * the way a host would clear an ordinary status bit, and check that
+     * nothing happens -- here by confirming the next delayed send still
+     * works. This is the consequence that matters. A model that latched
+     * HPDWARN would refuse every delayed operation from here on, which
+     * is a node that has silently lost delayed send for the rest of the
+     * run after one late response.
+     */
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
+			DW1000_FLG_SYS_STATUS_HPDWARN);
+
     return NULL;
+}
+
+/* The step above left a node that has seen one late send. A good delayed
+ * send must still work: this is what fails when HPDWARN is latched.
+ */
+static const char *
+step_tx_delayed_after_late(dw1000_t *dw, struct stub *s)
+{
+    return step_tx_delayed(dw, s);
 }
 
 /* The frame wait timeout: receiver on, nothing delivered, RXRFTO. */
@@ -732,7 +746,6 @@ step_rx_delayed_late(dw1000_t *dw, struct stub *s)
 	return "a delayed receive programmed in the past was accepted";
 
     dw1000_txrx_off(dw);
-    clear_hpdwarn(dw);
     return NULL;
 }
 
@@ -755,7 +768,12 @@ step_rx_delayed(dw1000_t *dw, struct stub *s)
     dw1000_rx_set_timeout(dw, 0);
     dw1000_rx_set_timeout_preamble(dw, 0);
 
-    dx = (dw1000_get_system_time(dw) + MSEC(20)) & ((1ull << DW1000_TIME_CLOCK_BITS) - 1);
+    /* 60 ms, not 20: the step checks the receiver is still off 5 ms in,
+     * and a loaded machine can take several milliseconds to get back to
+     * this thread after the usleep. The margin is for the test's own
+     * scheduling, not the model's.
+     */
+    dx = (dw1000_get_system_time(dw) + MSEC(60)) & ((1ull << DW1000_TIME_CLOCK_BITS) - 1);
     dw1000_txrx_set_time(dw, dx);
 
     rc = dw1000_rx_start(dw, DW1000_RX_DELAYED_START |
@@ -771,7 +789,7 @@ step_rx_delayed(dw1000_t *dw, struct stub *s)
     if (during != before)
 	return "the receiver turned on before its programmed time";
 
-    usleep(40000);
+    usleep(120000);
     pthread_mutex_lock(&s->lock);
     after = s->rxcfg_count;
     pthread_mutex_unlock(&s->lock);
@@ -934,6 +952,7 @@ main(void)
     step("sys_time runs",        step_sys_time(&dw, &stub));
     step("tx delayed",           step_tx_delayed(&dw, &stub));
     step("tx delayed, late",     step_tx_delayed_late(&dw, &stub));
+    step("tx delayed after late",step_tx_delayed_after_late(&dw, &stub));
     step("rx frame wait timeout",step_rx_frame_wait_timeout(&dw, &stub));
     step("rx preamble timeout",  step_rx_preamble_timeout(&dw, &stub));
     step("rx frame beats timeout", step_rx_frame_beats_timeout(&dw, &stub));
