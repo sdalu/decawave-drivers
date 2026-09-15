@@ -623,7 +623,8 @@
 #define DW1000_VAL_PMSC_CTRL0_TXCLKS_OFF         0x3
 
 #define DW1000_FLG_PMSC_CTRL0_FACE         (1 <<  6)
-/* Reserved in the UM, and unnamed: see _dw1000_clocks() */
+/* LDECLK alone is reserved in the UM, and unnamed: see _dw1000_clocks().
+   The bits below it are documented. */
 #define DW1000_FLG_PMSC_CTRL0_LDECLK       (1 <<  8)
 #define DW1000_FLG_PMSC_CTRL0_ADCCE        (1 << 10)
 #define DW1000_FLG_PMSC_CTRL0_AMCE         (1 << 15)

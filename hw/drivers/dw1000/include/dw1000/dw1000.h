@@ -181,17 +181,17 @@
 #define DW1000_TX_POWER_AUTO	0
 
 /**
- * @brief Define the transmit power up to 33.5dB in 0.5db unit.
- * @note  UM §7.2.31.1: the gain control range is 33.5dB (7 coarse steps
- *        of 3dB plus 32 fine steps of 0.5dB), ie 67 half-dB steps.
- *        Values above 67 are clamped to 67 (33.5dB); the argument must
- *        stay below 128 or the uint8_t encoding wraps.
+ * @brief Define the transmit power up to 30.5dB in 0.5db unit.
+ * @note  UM 2.18 §7.2.31.1: the gain control range is 30.5dB (7 coarse
+ *        steps of 2.5dB plus 32 fine steps of 0.5dB), ie 61 half-dB
+ *        steps. Values above 61 are clamped to 61 (30.5dB); the argument
+ *        must stay below 128 or the uint8_t encoding wraps.
  */
 #define DW1000_TX_POWER_05DB(v)					\
     ((v) | DW1000_TX_POWER_FLG_MANUAL)
 /**
- * @brief Define the transmit power up to 33.5dB in 0.5db step.
- * @note  Values above 33.5 are clamped to 33.5dB; the argument must stay
+ * @brief Define the transmit power up to 30.5dB in 0.5db step.
+ * @note  Values above 30.5 are clamped to 30.5dB; the argument must stay
  *        below 64 or the uint8_t encoding wraps.
  */
 #define DW1000_TX_POWER(v)					\
@@ -258,7 +258,7 @@ typedef struct dw1000_radio {
      */
     uint8_t    bitrate;
     /**
-     * @brief Transmit power (max 33.5dB in 0.5db step).
+     * @brief Transmit power (max 30.5dB in 0.5db step).
      *        If not set, will default to maximal allowed regulation value
      *        according to channel and prf setting.
      */
@@ -313,7 +313,7 @@ typedef struct dw1000_config {
      * pointer once the callback returns. Two obligations follow for the
      * rx_ok callback: it must NOT re-enable the receiver itself, and it
      * must read everything it needs from the frame (RX_BUFFER, RX_TIME,
-     * RX_FQUAL, RX_TTCKI, RX_TTCKO) BEFORE returning -- once the pointer
+     * RX_FQUAL, RX_TTCKI, RX_TTCKO) BEFORE returning. Once the pointer
      * has been toggled those registers show the other buffer, and a
      * host that defers the read-out to a later step gets the previous
      * frame's data with the current frame's length. A receiver overrun
@@ -434,55 +434,41 @@ typedef struct dw1000_config {
  * @brief DW1000 driver context
  */
 struct dw1000 {
-    const dw1000_config_t *config;
-
-    /* The radio configuration, held by value: dw1000_configure() copies
-     * the caller's struct in, so the caller's own does not have to
-     * outlive the call. Several entry points read it long afterwards
-     * (dw1000_rx_get_power_estimate(), dw1000_rx_power_correction(), and
-     * with long frames dw1000_rx_get_frame_info() on every received
-     * frame), so holding the caller's pointer made the natural spelling
-     * -- a local struct in a setup function -- a use after return.
-     * Zeroed by dw1000_init() until a configure succeeds, which the PRF
-     * of 0 (DW1000_PRF_4MHZ, not a usable value) makes detectable. */
-    struct dw1000_radio radio;
+    const dw1000_config_t *config; // Borrowed: must outlive the driver
+    struct dw1000_radio radio;     // Copied: caller keeps nothing alive
+                                   //  prf == 0 until one has succeeded
 
     struct {
-	uint32_t device;
-	uint32_t chip;
-	uint32_t lot;
+	uint32_t device;    // DEV_ID, checked against DW1000_ID_DEVICE
+	uint32_t chip;      // OTP 0x006, assigned at production test
+	uint32_t lot;       // OTP 0x007, foundry lot
     } id;
 
-    uint8_t  xtrim;
-    uint8_t  otp_rev;
-    uint8_t  ref_vbat_33;
-    uint8_t  ref_vbat_37;
-    uint8_t  ref_temp_23;
-    uint8_t  ref_temp_ant;
+    uint8_t  xtrim;         // XTAL trim: OTP, config override, else 0x10
+    uint8_t  otp_rev;       // OTP revision (OTP 0x01E, high byte)
+    uint8_t  ref_vbat_33;   // SAR reading at 3.3V        (OTP 0x008)
+    uint8_t  ref_vbat_37;   // SAR reading at 3.7V        (OTP 0x008)
+    uint8_t  ref_temp_23;   // SAR reading at 23C         (OTP 0x009)
+    uint8_t  ref_temp_ant;  // SAR at antenna calibration (OTP 0x009)
 
-    /* */
-    uint32_t wait4resp;
-    uint32_t sleep_mode;
-    /* Set while this driver holds the TX clock forced on for a delayed
-     * send (Errata 1.4 §3.1, TX-1), so that it is returned to automatic
-     * sequencing exactly once. */
-    uint8_t  tx_clk_forced;
+    uint32_t wait4resp;     // WAIT4RESP armed, cleared on RXFCG
+    uint32_t sleep_mode;    // Accumulated, never written: no sleep path
+    uint8_t  tx_clk_forced; // TX clock forced on (errata 1.4 3.1, TX-1)
+    uint32_t tx_ton;        // Preamble+SFD airtime, ticks (APS022 5.4)
+    uint32_t tx_delay;      // Whole delayed-send lead, tx_ton included,
+    uint32_t tx_retry_delay; // and that of its retry; 0 until the host
+                            //  sets dw1000_tx_set_default_delay()
 
-    int8_t   rxpacc_adj;
-    /* RXPACC_NOSAT and LDE_THRESH sampled for the frame being reported.
-     * Only used in double buffered mode: neither register belongs to the
-     * swinging set of UM table 7, so the live one may already describe
-     * the next frame by the time the host reads this one out (see
-     * dw1000_rx_get_pacc_count() and dw1000_rx_get_info()). */
-    uint16_t rxpacc_nosat;
-    uint16_t lde_thresh;
+    int8_t   rxpacc_adj;    // RXPACC SFD correction (UM table 18)
+    uint16_t rxpacc_nosat;  // Sampled for the frame being reported:
+    uint16_t lde_thresh;    // neither is in the swinging set, UM table 7
 
     struct {
-	uint32_t sys_cfg;
-	uint32_t tx_fctrl;
+	uint32_t sys_cfg;   // Shadow of SYS_CFG,  UM 7.2.6
+	uint32_t tx_fctrl;  // Shadow of TX_FCTRL, UM 7.2.10
     } reg;
 
-    uint32_t tx_power;
+    uint32_t tx_power;      // Encoded TX_POWER word (UM 7.2.31)
 };
 
 
@@ -809,6 +795,11 @@ bool dw1000_get_calibration(uint8_t channel, uint8_t prf,
 /**
  * @brief Initialize the DW1000 driver
  *
+ * @note  @p cfg is held by pointer, not copied, and is read for as long
+ *        as the driver is used: the callbacks on every event, and
+ *        @p dblbuff on every received frame. It must outlive @p dw.
+ *        Contrast @p dw1000_configure(), which copies.
+ *
  * @param dw        driver context
  * @param cfg       driver configuration
  */
@@ -854,12 +845,20 @@ int dw1000_initialise(dw1000_t *dw);
  *        out of range value would be an out of range read.
  *
  * @warning On failure the chip is left untouched and @p dw keeps the
- *          configuration it already had -- which on a first call is
- *          none at all. Transmitting or receiving after a failed
+ *          configuration it already had (which on a first call is
+ *          none at all). Transmitting or receiving after a failed
  *          configure is a programming error.
  *
- * @note  The configuration is copied into @p dw, so @p radio does not
- *        need to outlive the call.
+ * @note  The configuration is copied into @p dw. Calling code keeps no
+ *        version of it alive: build one on the stack, pass it, let it
+ *        go; it needs neither @p static nor a lifetime beyond the
+ *        call. That is why it is copied rather than borrowed, the
+ *        driver reading it long afterwards
+ *        (@p dw1000_rx_get_power_estimate(),
+ *        @p dw1000_rx_power_correction(), and with long frames
+ *        @p dw1000_rx_get_frame_info() on every received frame), which
+ *        would make the natural spelling (a local in a setup function)
+ *        a use after return.
  *
  * @pre   @p dw1000_initialise() has been called: this function builds on
  *        the SYS_CFG shadow and on DIS_STXP that initialisation set up,
@@ -1055,9 +1054,9 @@ dw1000_pending_interrupt(dw1000_t *dw)
  *
  * @warning @p dw1000_process_events() only clears the status bits it
  *          reports on: RXFCG and the receive groups, TXFRS and the
- *          transmit group. Unmasking a bit it does not handle -- CPLOCK,
+ *          transmit group. Unmasking a bit it does not handle (CPLOCK,
  *          GPIOIRQ, TXBERR, RFPLL_LL, CLKPLL_LL, or an intermediate TX
- *          or RX bit without its terminal bit -- leaves that bit set
+ *          or RX bit without its terminal bit) leaves that bit set
  *          once it is raised, and so leaves the IRQ line asserted for
  *          good (UM §7.2.16). The mask @p dw1000_initialise() installs
  *          never does this; a caller widening it is on its own.
@@ -1101,6 +1100,20 @@ bool dw1000_process_events(dw1000_t *dw);
  * @note  The device time unit is 1 / (499.2e6 * 128) second
  * @note  The device assignable time unit is 512 (about 8ns),
  *        which means that the 9 lower bits of the given time are ignored.
+ *
+ * @note  For a delayed *send* this is the RMARKER, the end of the SFD,
+ *        not the moment transmission starts. The chip has to be sending
+ *        preamble @p dw1000_tx_get_preamble_airtime() before it (about
+ *        138 us at a 128 symbol preamble, 4.2 ms at 4096) so a time
+ *        less than that ahead of the present cannot be met however
+ *        quickly the host follows with @p dw1000_tx_start(). Leave room
+ *        for the host's own latency on top: the register writes between
+ *        this call and TXSTRT, and the chip's transmit power-up.
+ *        @p dw1000_tx_extended_sendv() sizes and checks all of that on
+ *        the caller's behalf; a caller driving TXSTRT itself owns it.
+ * @note  A delayed *receive* has no such floor (nothing is on the air
+ *        before the receiver turns on) only the host latency up to
+ *        @p dw1000_rx_start().
  *
  * @param dw        driver context
  * @param time      time for delayed send or received time
@@ -1219,6 +1232,10 @@ void dw1000_tx_write_frame_data(dw1000_t *dw,
  *
  * @note   If using @p DW1000_TX_DELAYED_START, the transmission time
  *         should have been previously set using @p dw1000_txrx_set_time
+ * @note   This does not check that the programmed time is far enough ahead:
+ *         doing so would cost a SYS_TIME read on the critical path.
+ *         @p dw1000_txrx_set_time() says what "far enough" means; a time
+ *         that is not comes back as HPDWARN, and returns -1.
  *
  * @param dw         driver context
  * @param tx_mode    a set of the following flags are supported:
@@ -1285,6 +1302,34 @@ dw1000_tx_clear_status_done(dw1000_t *dw)
 
 
 /**
+ * @brief Get the airtime preceding the RMARKER (Ton)
+ *
+ * @details The preamble and SFD of a frame are transmitted before the
+ *          RMARKER, which is what a delayed send programs through
+ *          @p dw1000_txrx_set_time(). The chip must therefore already be
+ *          transmitting this much earlier than the programmed time
+ *          (APS022 §5.4), so a delayed send commanded with a shorter
+ *          lead than this cannot be honoured, whatever the host does.
+ *
+ * @note   Depends only on the preamble length, the SFD length and the
+ *         PRF, so it changes with @p dw1000_configure() and not from
+ *         frame to frame. Reads 0 before the first configuration.
+ * @note   About 138 us at a 128 symbol preamble, 1.05 ms at 1024 and
+ *         4.2 ms at 4096: a lead chosen without it is only safe for
+ *         short preambles.
+ *
+ * @param[in]  dw        driver context
+ *
+ * @return airtime of the preamble and SFD, in @p DW1000_TIME_CLOCK_HZ
+ *         ticks, as a lead time to compare or add to a delay
+ */
+static inline uint32_t dw1000_tx_get_preamble_airtime(dw1000_t *dw)
+{
+    return dw->tx_ton;
+}
+
+
+/**
  * @brief Get frame transmission time
  *
  * @param[in]  dw        driver context
@@ -1307,6 +1352,16 @@ static inline uint64_t dw1000_tx_get_rmarker_time(dw1000_t *dw)
 
 /**
  * @brief Set timeout value for preamble detection
+ *
+ * @note  This is not a hard deadline. UM 2.18 §7.2.40.9: "during the PTO
+ *        timeout period occasionally in certain circumstances preamble
+ *        may be detected and not confirmed. In this case the PTO
+ *        countdown will be suspended (delaying the timeout) for a
+ *        minimum of 1 PAC + 32 symbol times, but perhaps longer if
+ *        preamble detections continue." The manual therefore advises
+ *        backing it with the SFD timeout (@p dw1000_radio_t::sfd_timeout,
+ *        set at configuration) and the frame wait timeout
+ *        (@p dw1000_rx_set_timeout()), both of which do bound the wait.
  *
  * @param[in] dw        driver context
  * @param[in] timeout   timeout (0..65535) is expressed in PAC-size unit,

@@ -48,63 +48,10 @@
 #define DW1000_TX_DELAYED_US(us)					\
     ((DW1000_TIME_CLOCK_HZ * (us)) / 1000000)
 
-/**
- * @brief Value for default delay when embedding timestamp automatically
- *
- * @details Value can be between 0 and 2^32, in DW1000_TIME_CLOCK_HZ steps
- *          (2^32 ticks is ~67 ms). A value of 0 means disabled: the send
- *          fails unless the caller passes a delay (DW1000_TX_DELAYED_DELAY).
- * @note  The value should be selected to allow enough time for the
- *        system and dw1000 chip to prepare the frame: between the read of
- *        the system time and TXSTRT sit the DX_TIME write, the timestamp
- *        write and the SYS_CTRL write, plus the chip's transmit power-up.
- *        Measured on 2026-09-14 (spank's delayed-send estimator, a
- *        maximum-size frame): 0.27 ms on an nRF52 at 8 or 16 MHz SPI,
- *        0.16 ms on a Raspberry Pi 4 over spidev at 20 MHz. The default
- *        of 400 us leaves 1.5x and 2.5x on top of those; the 2 ms it
- *        replaces had been sized before anything was measured. A host
- *        that needs more defines this before including the driver.
- * @note  Setting delay for TX, only consider a DW1000_CLOCK_MIN rounded time
- */
-#if !defined(DW1000_TX_DELAYED_DEFAULT_DELAY) || defined(__DOXYGEN__)
-#define DW1000_TX_DELAYED_DEFAULT_DELAY DW1000_TX_DELAYED_US(400)
-#endif
-
-/**
- * @brief Value for default delay when retrying to embed timestamp automatically
- *
- * @details Value can be between 0 and 2^32, in DW1000_TIME_CLOCK_HZ steps.
- *          A value of 0 means disabled (no retry). The retry happens after
- *          the chip found the first attempt too late (HPDWARN), so it must
- *          be at least the initial delay; one and a half times the initial
- *          delay is the default (600 us), so that overriding
- *          DW1000_TX_DELAYED_DEFAULT_DELAY alone keeps the two in
- *          proportion. A first attempt refused by a scheduling blip does
- *          not need its lead time doubled, and every extra microsecond of
- *          lead time is clock drift the frame carries. The same factor is
- *          applied at run time to a caller-supplied delay without a retry
- *          delay of its own.
- * @note  Setting delay for TX, only consider a DW1000_CLOCK_MIN rounded time
- */
-#if !defined(DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY) || defined(__DOXYGEN__)
-#define DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY				\
-    (DW1000_TX_DELAYED_DEFAULT_DELAY + DW1000_TX_DELAYED_DEFAULT_DELAY / 2)
-#endif
-
 /** @} */
 
 
 
-/*===========================================================================*/
-/* Sanity check                                                              */
-/*===========================================================================*/
-
-/* A retry follows a "too late" (HPDWARN) and must leave more time than
- * the attempt that was late, unless retries are disabled (0). */
-#if (DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY != 0) &&			\
-    (DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY < DW1000_TX_DELAYED_DEFAULT_DELAY)
-#error "Retry delay can't be lower than initial delay"
-#endif
 
 
 
@@ -117,10 +64,15 @@
 
 /**
  * @brief Specify an additional parameter for transmit delay
+ * @note  The value is the lead to the RMARKER, used exactly as given,
+ *        as the default set by @p dw1000_tx_set_default_delay() also is.
+ *        It must therefore exceed @p dw1000_tx_get_preamble_airtime() on
+ *        its own, or the send is refused with -1.
  */
 #define DW1000_TX_DELAYED_DELAY					0x2000
 /**
  * @brief Specify an additional parameter for tramist delay when retrying
+ * @note  Used exactly as given, as @p DW1000_TX_DELAYED_DELAY is.
  */
 #define DW1000_TX_DELAYED_RETRY_DELAY				0x4000
 
@@ -167,6 +119,65 @@
 /*===========================================================================*/
 
 /**
+ * @brief Set the default leads used by a delayed send
+ *
+ * @details @p dw1000_tx_extended_sendv() uses these whenever the caller
+ *          passes no @p DW1000_TX_DELAYED_DELAY of its own, and uses
+ *          them exactly as it uses that one: as the lead to the
+ *          programmed RMARKER, with nothing added. A lead means the same
+ *          thing here as it does per call.
+ *
+ * @note  Both are 0 until this is called, and 0 means "no default":
+ *        @p dw1000_tx_extended_sendv() then refuses any send that does
+ *        not carry its own @p DW1000_TX_DELAYED_DELAY. There is no build
+ *        time default to fall back on; the lead is a property of the
+ *        host, so the host states it.
+ * @note  What to pass: two terms, both the caller's to add up.
+ *        @p dw1000_tx_get_preamble_airtime() is the airtime of the
+ *        preamble and SFD, which the chip must have on the air before
+ *        the programmed RMARKER (APS022 §5.4), about 138 us at a 128
+ *        symbol preamble but 4.2 ms at 4096. On top of it goes the
+ *        host's own latency: between the read of the system time and
+ *        TXSTRT sit the DX_TIME write, the timestamp write and the
+ *        SYS_CTRL write, plus the chip's transmit power-up. Measured on
+ *        2026-09-14 (spank's delayed-send estimator, a maximum-size
+ *        frame): 0.27 ms on an nRF52 at 8 or 16 MHz SPI, 0.16 ms on a
+ *        Raspberry Pi 4 over spidev at 20 MHz.
+ * @note  The airtime term is only known once @p dw1000_configure() has
+ *        run, and it changes with the preamble: call this after the
+ *        radio is configured, and again if it is reconfigured. A lead
+ *        left over from a shorter preamble is refused, so the mistake
+ *        shows up as -1 rather than as a lost frame.
+ * @note  @p retry follows an attempt the chip called too late, so it must
+ *        not be given less lead than that attempt had; one and a half
+ *        times @p initial is a reasonable choice, and is the factor
+ *        applied at run time to a caller-supplied delay that carries no
+ *        retry of its own. A first attempt refused by a scheduling blip
+ *        does not need its lead doubled, and every extra microsecond of
+ *        lead is clock drift the frame carries.
+ * @note  Only a @p DW1000_CLOCK_MIN rounded time is honoured.
+ *
+ * @param dw       driver context
+ * @param initial  whole lead for the first attempt, airtime included.
+ *                 0 leaves no default
+ * @param retry    the same for the retry, not below @p initial. 0
+ *                 disables the retry
+ *
+ * @retval  0   accepted
+ * @retval -1   @p retry is shorter than @p initial, and neither is 0
+ */
+static inline int
+dw1000_tx_set_default_delay(dw1000_t *dw, uint32_t initial, uint32_t retry)
+{
+    if ((initial != 0) && (retry != 0) && (retry < initial))
+	return -1;
+    dw->tx_delay       = initial;
+    dw->tx_retry_delay = retry;
+    return 0;
+}
+
+
+/**
  * @brief Send a frame
  *
  * @pre    The DW1000 is in IDLE state.
@@ -190,7 +201,12 @@
  *
  * @retval  0        Transmission started
  * @retval -1        It was not possible to start transmission.
- *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
+ *                   (Can happen when @p DW1000_TX_DELAYED_START is set:
+ *                   the chip reported the time as already past, or the
+ *                   requested lead was at or below the preamble and
+ *                   SFD airtime, reported by
+ *                   @p dw1000_tx_get_preamble_airtime(), which no host
+ *                   could meet)
  */
 int dw1000_tx_send(dw1000_t *dw,
 		   uint8_t *data, size_t length, int tx_mode);
@@ -260,6 +276,17 @@ int dw1000_tx_sendv(dw1000_t *dw,
  *         @a delay (@p uint32_t) and @a retry_delay (@p uint32_t).
  *         Theses delay are highly system specific and should be choosen
  *         carrefully otherwise sending frame will fails.
+ *
+ * @note   The two forms mean the same thing: a lead to the programmed
+ *         RMARKER, used as given. @a delay passed with
+ *         @p DW1000_TX_DELAYED_DELAY applies to that send alone, the
+ *         pair held by @p dw1000_tx_set_default_delay() to every send
+ *         that carries none. Either way the caller owns the whole lead,
+ *         the preamble and SFD airtime
+ *         (@p dw1000_tx_get_preamble_airtime()) included, and a lead
+ *         that cannot be honoured is refused with -1 rather than handed
+ *         to the chip. With no default set and no @a delay passed, the
+ *         send is refused.
  *
  *
  * @param dw        driver context

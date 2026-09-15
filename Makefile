@@ -269,12 +269,10 @@ options:					## print the compile-time options and their defaults
 	    DW1000_WITH_SFD_TIMEOUT_DEFAULT          0 \
 	    DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011 1
 	@echo ''
-	@echo 'Three take a value rather than a flag:'
+	@echo 'One takes a value rather than a flag:'
 	@echo ''
 	@printf '  %-42s %s\n' \
-	    DW1000_SFD_TIMEOUT_DEFAULT              'DW1000_SFD_TIMEOUT_MAX' \
-	    DW1000_TX_DELAYED_DEFAULT_DELAY         '400 us, in clock steps' \
-	    DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY   '1.5 x the delay, 600 us'
+	    DW1000_SFD_TIMEOUT_DEFAULT              'DW1000_SFD_TIMEOUT_MAX'
 	@echo ''
 	@echo 'They must be defined identically for the driver and for every'
 	@echo 'translation unit that includes <dw1000/dw1000.h>.'

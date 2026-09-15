@@ -48,23 +48,6 @@ config DW1000_HOTFIX_AAT_IEEE802_15_4_2011
           for IEEE802.15.4-2011 compliant frames).
 	default y
 
-config DW1000_TX_DELAYED_DEFAULT_DELAY
-        int "Default lead time of a delayed send"
- 	help
-	  How far ahead a delayed send (embedded timestamp) is scheduled
-	  when the caller gives no delay, in DW1000_TIME_CLOCK_HZ steps
-	  (1 to 2^32). 0 keeps the driver's own default, 400 us.
-	default 0
-
-config DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY
-        int "Default lead time of the retry after a late delayed send"
- 	help
-	  Lead time given to the retry that follows a delayed send the chip
-	  reported as too late, in DW1000_TIME_CLOCK_HZ steps (1 to 2^32),
-	  not below the delay. 0 keeps the driver's own default, one and a
-	  half times the delay (600 us).
-	default 0
-
 endif
 
 endmenu

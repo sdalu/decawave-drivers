@@ -64,19 +64,6 @@
 #define DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011	0
 #endif
 
-/* Delayed-send defaults: a Kconfig value of 0 leaves the driver's own
- * (2 ms, and twice that for the retry; see dw1000_send.h) */
-#if CONFIG_DW1000_TX_DELAYED_DEFAULT_DELAY != 0
-#define DW1000_TX_DELAYED_DEFAULT_DELAY			\
-    CONFIG_DW1000_TX_DELAYED_DEFAULT_DELAY
-#endif
-
-#if CONFIG_DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY != 0
-#define DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY		\
-    CONFIG_DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY
-#endif
-
-
 /*----------------------------------------------------------------------*/
 /* Debug / Assert                                                       */
 /*----------------------------------------------------------------------*/

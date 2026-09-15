@@ -210,11 +210,26 @@ Zephyr they are `CONFIG_DW1000_*` in `Kconfig` and under MyNewt they are
 | `DW1000_WITH_SFD_TIMEOUT_DEFAULT`          | 0 | a fixed SFD timeout, not a computed one |
 | `DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011` | 1 | work around a spurious AAT on receive |
 
-Three more take a value rather than a flag:
-`DW1000_SFD_TIMEOUT_DEFAULT` (default `DW1000_SFD_TIMEOUT_MAX`),
-`DW1000_TX_DELAYED_DEFAULT_DELAY` (400 us, in `DW1000_TIME_CLOCK_HZ` steps;
-an nRF52 measured a need of 0.27 ms, a Raspberry Pi 4 over spidev 0.16 ms)
-and `DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY` (1.5 x the delay, 600 us).
+One more takes a value rather than a flag:
+`DW1000_SFD_TIMEOUT_DEFAULT` (default `DW1000_SFD_TIMEOUT_MAX`).
+
+The lead time of a delayed send is deliberately not among them either,
+and it used to be. It has two parts, and no single build-time number can
+carry both. One part is the airtime of the preamble and SFD: what a
+delayed send programs is the RMARKER, the *end* of the SFD, so the chip
+has to be transmitting well before it (about 138 us at a 128 symbol
+preamble but 1.05 ms at 1024 and 4.2 ms at 4096). That depends on the
+radio configuration, so the driver computes it, at `dw1000_configure()`,
+and `dw1000_tx_get_preamble_airtime()` reports it.
+The second part is the host's own latency between reading the system
+time and writing TXSTRT, which only the host knows. Both parts are the
+caller's to add up: a lead always means the lead to the RMARKER and is
+programmed as given, whether it is the default set once through
+`dw1000_tx_set_default_delay()` or a `DW1000_TX_DELAYED_DELAY` passed
+with one send. Until a default is set there is none, and every delayed
+send has to carry its own. A lead below the airtime is refused with -1,
+so a default left over from a shorter preamble shows up at the next send
+rather than as a lost frame.
 
 Transmit power is deliberately not among them: it is part of
 `dw1000_radio_t`, and `DW1000_TX_POWER(dB)` names it outright, so a board

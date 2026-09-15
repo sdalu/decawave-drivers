@@ -139,6 +139,19 @@ static const uint8_t pcode_64mhz_dps[] = {
 #endif
 
 
+// Preamble symbol duration, in device clock ticks
+//----------------------------------------------------------------------
+
+// UM table 60: the preamble symbol lasts 993.59ns at 16MHz PRF and
+// 1017.63ns at 64MHz. Held in picoseconds so the conversion to ticks of
+// DW1000_TIME_CLOCK_HZ stays integer; it truncates, which is the safe
+// direction for a lead time the caller adds a margin to anyway.
+#define _DW1000_PSYM_TICKS(ps)						\
+    ((uint32_t)(((uint64_t)(ps) * DW1000_TIME_CLOCK_HZ) / 1000000000000ull))
+#define DW1000_TICKS_PER_PSYM_16MHZ _DW1000_PSYM_TICKS( 993590)
+#define DW1000_TICKS_PER_PSYM_64MHZ _DW1000_PSYM_TICKS(1017630)
+
+
 // Internal calibration tables
 //----------------------------------------------------------------------
 
@@ -243,12 +256,13 @@ static const uint16_t lde_repc_tunning[] = {
     0x35C2, 0x47AE, 0x3AE0, 0x3850, 0x30A2, 0x3850
 };
 
-/* The computed SFD timeout is the only user of the two tables below, and
- * of the checks that the enum values still index them the way the tables
- * are laid out. With DW1000_WITH_SFD_TIMEOUT_DEFAULT there is nothing to
- * compute, so leave them out rather than carry two unused tables -- and
- * two -Wunused-const-variable warnings -- into every image built that
- * way. */
+/* The computed SFD timeout is the only user of the PAC table below, and
+ * of the check that the enum values still index it the way it is laid
+ * out. With DW1000_WITH_SFD_TIMEOUT_DEFAULT there is nothing to compute,
+ * so leave it out rather than carry an unused table, and a
+ * -Wunused-const-variable warning, into every image built that way.
+ * The preamble table that follows it is needed either way, the transmit
+ * airtime being computed from it unconditionally. */
 #if !DW1000_WITH_SFD_TIMEOUT_DEFAULT
 
 // PAC symbol size
@@ -259,6 +273,8 @@ static const uint16_t lde_repc_tunning[] = {
 static const uint8_t pac_symbol_size[] = {
     8, 16, 32, 64
 };
+
+#endif // !DW1000_WITH_SFD_TIMEOUT_DEFAULT
 
 // PLEN symbol size
 #if                               (DW1000_PLEN_64     != 0x1)  ||	\
@@ -289,8 +305,6 @@ static const uint16_t plen_symbol_size[] = {
      512, // 0xD
 #endif
 };
-
-#endif // !DW1000_WITH_SFD_TIMEOUT_DEFAULT
 
 
 
@@ -599,17 +613,23 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
      *      by default, and doesn't support changing it for now
      */
     if (radio->tx_power & DW1000_TX_POWER_FLG_MANUAL) {
-	// UM §7.2.31.1: "The gain control range is 33.5 dB consisting of 32
-	// fine (mixer gain) control steps of 0.5 dB and 7 coarse (DA gain)
-	// steps of 3 dB", ie 67 half-dB steps: 18 dB coarse + 15.5 dB fine.
+	// UM 2.18 §7.2.31.1: "The gain control range is 30.5 dB consisting
+	// of 32 fine (mixer gain) control steps of 0.5 dB and 7 coarse (DA
+	// gain) steps of 2.5 dB", ie 61 half-dB steps: 15 dB coarse
+	// + 15.5 dB fine.
+	//  NOTE: 2.12 read 33.5 dB and 3 dB coarse steps, which is what this
+	//        computed until UM 2.18 corrected it. A node calibrated
+	//        against the old mapping is off by 0.5 dB per coarse step.
 	uint8_t power_05db = radio->tx_power & DW1000_TX_POWER_MSK_MANUAL;
-	if (power_05db > 67) power_05db = 67;
-	// UM §7.2.31.4: power = coarse (DA, 3dB = 6 x 0.5dB steps)
+	if (power_05db > 61) power_05db = 61;
+	// UM §7.2.31.4: power = coarse (DA, 2.5dB = 5 x 0.5dB steps)
 	//                     + fine (mixer, 0.5dB steps, 0..31)
 	// Coarse field is (6 - coarse) and is 3-bit encoded (110..000)
-	uint8_t coarse = power_05db / 6;
+	//  Coarse is taken first, as UM §7.2.31.1 asks for the best
+	//  spectral shape, with the remainder left to the fine steps.
+	uint8_t coarse = power_05db / 5;
 	if (coarse > 6) coarse = 6;
-	uint8_t fine   = power_05db - coarse * 6;
+	uint8_t fine   = power_05db - coarse * 5;
 	uint8_t power  = ((6 - coarse) << 5) | (fine);
 	dw->tx_power = (power << 16) | (power << 8);
     } else {
@@ -648,6 +668,23 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
     //  (Using prf_tunning)
     const uint32_t drx_tune2 = pi->drx_tune2[radio->rx_pac];
 
+    // Preamble and SFD lengths, in symbols. Used by the SFD timeout just
+    // below, and by the transmit airtime cached at the end of this
+    // function; computed unconditionally so that both have them whatever
+    // DW1000_WITH_SFD_TIMEOUT* select.
+    //
+    // UM §4.1.3: SFD detection
+    //  In the standard, the SFD is 64 symbols long for 110Kb/s,
+    //  and 8 symbols for other bitrate (8500Kb/s, 6.8Mb/s)
+    const uint16_t plen_symbols = plen_symbol_size[radio->tx_plen];
+    const uint16_t sfd_symbols  =
+#if DW1000_WITH_PROPRIETARY_SFD
+	radio->proprietary.sfd
+	? bitrate_tunning[radio->bitrate].proprietary_sfd.usr_sfd_len
+	:
+#endif
+	  ((radio->bitrate == DW1000_BITRATE_110KBPS) ? 64 : 8);
+
     // UM §7.2.40.7: DRX_SFDTOC
     // Timeout value of 0 is forbidden, so guess the optimal timeout
     // SFD timeout is in symbol unit.
@@ -656,10 +693,6 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
     //  + Preamble length
     //  + SFD length (SFD = Start of Frame Delimiter)
     //  - PAC size   (PAC = Preamble Acquisition Chunk)
-    //
-    // UM §4.1.3: SFD detection
-    //  In the standard, the SFD is 64 symbols long for 110Kb/s,
-    //  and 8 symbols for other bitrate (8500Kb/s, 6.8Mb/s)
     const uint16_t drx_sfdtoc =
 #if DW1000_WITH_SFD_TIMEOUT
 	radio->sfd_timeout ? radio->sfd_timeout
@@ -668,15 +701,7 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
 #if DW1000_WITH_SFD_TIMEOUT_DEFAULT
         DW1000_SFD_TIMEOUT_DEFAULT
 #else
-	(1 + plen_symbol_size[radio->tx_plen]
-	   + (
-#if DW1000_WITH_PROPRIETARY_SFD
-	      radio->proprietary.sfd
-	      ? bitrate_tunning[radio->bitrate].proprietary_sfd.usr_sfd_len
-	      :
-#endif
-	        ((radio->bitrate == DW1000_BITRATE_110KBPS) ? 64 : 8))
-  	   - pac_symbol_size[radio->rx_pac])
+	(1 + plen_symbols + sfd_symbols - pac_symbol_size[radio->rx_pac])
 #endif
 	;
     
@@ -757,6 +782,24 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
 #if DW1000_WITH_PROPRIETARY_SFD
     }
 #endif
+
+    /* Transmit airtime of the preamble and SFD (Ton)
+     *
+     * APS022 §5.4 and its figure 5: for a delayed send the programmed
+     * time, which is the RMARKER, has to be later than the moment the
+     * TXSTRT command is issued *plus* Ton, because the RMARKER marks the
+     * end of the SFD and the chip must already be transmitting preamble
+     * by then. Cached here in device clock ticks so that
+     * dw1000_tx_extended_vsendv() can size its default delay and refuse
+     * a lead that cannot be met.
+     *
+     * At 4096+64 symbols and 65024 ticks a symbol this is about 2.7e8
+     * ticks, comfortably inside a uint32_t (~4.3e9, ie ~67 ms).
+     */
+    dw->tx_ton = (uint32_t)(plen_symbols + sfd_symbols)
+	       * ((radio->prf == DW1000_PRF_64MHZ)
+		  ? DW1000_TICKS_PER_PSYM_64MHZ
+		  : DW1000_TICKS_PER_PSYM_16MHZ);
 
     
     /* Apply configurations

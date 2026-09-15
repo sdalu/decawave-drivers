@@ -214,11 +214,21 @@ dw1000_tx_extended_vsendv(
     tx_mode |= DW1000_TX_DELAYED_START;
 
     // Default parameters
+    //
+    // A lead is the lead to the programmed RMARKER, whoever supplies it
+    // and whichever way: the pair dw1000_tx_set_default_delay() holds is
+    // used exactly as a caller-supplied DW1000_TX_DELAYED_DELAY is,
+    // nothing added. Both therefore have to cover the preamble and SFD
+    // airtime themselves, which dw1000_tx_get_preamble_airtime()
+    // reports, as well as the host's own latency.
+    //
+    // 0 means the host never set one: the send then has to carry its own
+    // delay, or be refused below.
     int      rc          = 0;
     bool     last_try    = false;
     size_t   offset      = 0;
-    uint32_t delay       = DW1000_TX_DELAYED_DEFAULT_DELAY;
-    uint32_t retry_delay = DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY;
+    uint32_t delay       = dw->tx_delay;
+    uint32_t retry_delay = dw->tx_retry_delay;
     
     // Retrieve variadic arguments
     offset = va_arg(ap, size_t);
@@ -226,16 +236,16 @@ dw1000_tx_extended_vsendv(
 	delay       = va_arg(ap, uint32_t);
 	// The retry follows an attempt the chip reported as too late
 	// (HPDWARN), so it must not be given *less* lead time than that
-	// attempt had. The #error in dw1000_send.h only relates the two
-	// compile time defaults; a caller raising the delay here would
-	// otherwise keep a retry sized for the default -- a 600us retry
-	// for a 10ms delay, which cannot help precisely on the slow hosts
+	// attempt had. dw1000_tx_set_default_delay() checks that for the
+	// pair it holds; a caller raising the delay here would otherwise
+	// keep a retry sized for that pair: a 600us retry for a 10ms
+	// delay, which cannot help precisely on the slow hosts
 	// that raised it. Give the retry one and a half times the delay
 	// (a first attempt refused by a scheduling blip does not need the
 	// lead time doubled, and every extra microsecond of lead time is
 	// clock drift the frame carries), saturating rather than wrapping,
-	// and keep a compile time default of 0 meaning "retries disabled".
-	if (DW1000_TX_DELAYED_DEFAULT_RETRY_DELAY != 0)
+	// and keep a configured retry of 0 meaning "retries disabled".
+	if (dw->tx_retry_delay != 0)
 	    retry_delay = (delay > (UINT32_MAX - UINT32_MAX / 3))
 		        ? UINT32_MAX : (delay + delay / 2);
     }
@@ -246,8 +256,21 @@ dw1000_tx_extended_vsendv(
     }
 
  retry:
-    // Check if zero-delay
-    if (delay == 0)
+    // Check the lead time is one the chip can honour.
+    //
+    // Zero means "no delay configured". A lead shorter than the preamble
+    // and SFD airtime cannot be met either: the RMARKER the caller is
+    // programming marks the *end* of the SFD, so the chip has to be
+    // transmitting dw->tx_ton earlier than that (APS022 §5.4, figure 5).
+    // Refuse here rather than leave it to the chip, which would report it
+    // as HPDWARN one layer down; diagnosable, but only after the frame
+    // and its timestamp have been written for nothing.
+    //
+    // Every lead reaches this the same way, so the test guards them all:
+    // the pair set by dw1000_tx_set_default_delay() as much as one the
+    // caller passed. A host that reconfigured the radio to a longer
+    // preamble without revisiting its default finds out here.
+    if ((delay == 0) || (delay <= dw->tx_ton))
 	return -1;
 	
     // Prepare embedded timestamp and start transmit
