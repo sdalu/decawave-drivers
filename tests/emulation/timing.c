@@ -889,6 +889,85 @@ step_rx_delayed(dw1000_t *dw, struct stub *s)
 }
 
 
+/* WAIT4RESP: the chip turns its own receiver on at the end of a
+ * transmission, and the receive timeout counts from that moment.
+ *
+ * This is the path a two-way ranging exchange rests on, and the reason
+ * it matters is latency: with WAIT4RESP the receiver is listening at the
+ * end of the sender's own frame, with no software in between. A
+ * responder that answers in under a millisecond will be missed by a host
+ * that re-arms the receiver from its transmit-complete callback, and
+ * heard by one that set WAIT4RESP -- so a model that quietly required
+ * the software path would let an exchange pass in emulation that fails
+ * on a fast link, or fail one that works.
+ *
+ * Two claims, and the second is the one that was missing: the receiver
+ * comes on without dw1000_rx_start() being called, and the frame wait
+ * timeout starts at that turn-on (UM 7.2.14, "each time the receiver is
+ * enabled").
+ */
+static const char *
+step_wait4resp(dw1000_t *dw, struct stub *s)
+{
+    unsigned rxcfg_before;
+    uint64_t started;
+    int64_t  elapsed;
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;                 /* nobody answers */
+    rxcfg_before = s->rxcfg_count;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    dw1000_rx_set_timeout_preamble(dw, 0);
+    dw1000_rx_set_timeout(dw, 19500);           /* ~20 ms */
+
+    started = dw1000_get_system_time(dw);
+
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_RESPONSE_EXPECTED) != 0)
+	return "dw1000_tx_send refused a send with a response expected";
+
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS))
+	return "no interrupt for the transmission";
+    if (!evt.tx_done)
+	return "the tx_done callback was not called";
+
+    /* The receiver is on now, and nothing asked it to be: no RX_CONFIG
+     * was sent, because this turn-on happens inside the model on the
+     * reader thread and there is no request it could make there.
+     */
+    pthread_mutex_lock(&s->lock);
+    if (s->rxcfg_count != rxcfg_before) {
+	pthread_mutex_unlock(&s->lock);
+	return "the model asked the medium to start receiving; a WAIT4RESP"
+	       " turn-on must not send RX_CONFIG";
+    }
+    pthread_mutex_unlock(&s->lock);
+
+    /* Nobody answers, so the frame wait timeout must end it -- which it
+     * can only do if the turn-on armed it. Before this was fixed the
+     * host waited for ever here.
+     */
+    evt_reset();
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS))
+	return "no interrupt for the frame wait timeout after WAIT4RESP;"
+	       " the turn-on did not start the timeout";
+    if (!evt.rx_timeout)
+	return "the rx_timeout callback was not called";
+    if (!(evt.rx_timeout_status & DW1000_FLG_SYS_STATUS_RXRFTO))
+	return REASON("RXRFTO not in the status (0x%08" PRIx32 ")",
+		      evt.rx_timeout_status);
+
+    elapsed = delta(started, dw1000_get_system_time(dw));
+    if (elapsed < (int64_t)MSEC(18))
+	return REASON("the timeout came %" PRId64 " ticks after the send,"
+		      " and 19500 units of 65536 ticks is 20 ms", elapsed);
+
+    dw1000_rx_set_timeout(dw, 0);
+    return NULL;
+}
+
 /* Create and tear down a model over and over.
  *
  * Every other step here creates one model and destroys it at exit, so
@@ -1163,6 +1242,7 @@ main(void)
     step("rx frame beats timeout", step_rx_frame_beats_timeout(&dw, &stub));
     step("rx delayed",           step_rx_delayed(&dw, &stub));
     step("rx delayed, late",     step_rx_delayed_late(&dw, &stub));
+    step("wait4resp auto-rx",    step_wait4resp(&dw, &stub));
     step("create/destroy cycles",step_lifecycle(&dw, &stub));
 
     dw1000_txrx_off(&dw);
