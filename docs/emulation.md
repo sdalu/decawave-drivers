@@ -219,41 +219,135 @@ flags it as needing improvement without saying what a correct value
 would look like.
 
 
-## What the register model does not do
+## What the model does, and what it does not
 
-Taken from the comments in the source, not inferred:
+### The clock
 
-- The double-buffer swing set: the file's own header comment is
-  `TODO: correctly implement swing-set for double buffer use.`
-- On every received frame, `SYS_STATUS.RXPTO`, `RXSFDTO` and `RXRFTO`
-  are unconditionally cleared, each commented `// Not emulated`.
-- Also on receive: `AFFREJ`, `AAT`, `RXOVRR`, `RXRSCS` and `RXPREJ`
-  are commented `// Not handled: AFFREJ AAT RXOVRR RXRSCS RXPREJ`.
-- `RX_TTCKI` and `RX_TTCKO` are written as fixed constants
-  (`0x1000` and `0`, respectively), each commented
-  `// Fake value, need improvement`.
-- `RX_FINFO`'s `RXPACC`, `RXPSR`, `RXBR` and `RXNSPL` fields are
-  commented `// Not supported`.
-- `RX_TIME.RX_RAWST` is a "fake one" on the right clock grid, not a
-  true raw timestamp -- see Timestamp convention above.
-- Delayed send: `dw1000_emulation_send()` ends with the comment
-  `// Delayed send: TXPUTE HPDWARN` and no code behind it.
-- The `WAKEUP` IO line is unimplemented: `_dw1000_ioline_set()`
-  calls `EMU_FATAL("unimplemented: wakeup line not implemented")`, so
-  driving it aborts the process.
-- Ten registers are attached only as placeholders
-  (`E_REG_ATTACH(e, ..., TODO)`), storage exists but nothing gives
-  them behaviour: `EUI`, `PANADR`, `SYS_TIME`, `SYS_STATE`,
-  `DX_TIME`, `RX_FWTO`, `RX_SNIFF`, `ACK_RESP_T`, `ACC_MEM`, `DIAG`.
-- Several more are attached and readable/writable as plain storage,
-  but their content drives nothing in the model, each marked
-  `// ignored` at the attach site: `CHAN_CTRL`, `USR_SFD`,
-  `AGC_CTRL`, `EXT_SYNC`, `RF_CONF`, `FS_CTRL`, `AON`, `PMSC` --
-  plus `DRX_CONF` ("ignored except `DW1000_OFF_DRX_RXPACC_NOSAT`")
-  and `OTP_IF` ("ignored except...", unfinished in the source
-  comment itself). `TX_FCTRL`, `TX_ANTD` and `TX_POWER` carry an
-  inline `// todo` at their attach line.
+The model keeps a device clock, and a medium server sharing the host
+must keep the same one or the two halves cannot be compared. It is
+`CLOCK_REALTIME` scaled to `DW1000_TIME_CLOCK_HZ` and truncated to 40
+bits -- in C,
 
+```c
+uint64_t ticks = ((uint64_t)ts.tv_sec * DW1000_TIME_CLOCK_HZ)
+               + ((uint64_t)ts.tv_nsec * 638976ull) / 10000ull;
+return ticks & ((1ull << 40) - 1);
+```
+
+and in the reference server's Ruby, `(Time.now.to_r * DW1000_HZ).to_i &
+DW1000_MASK`, which is the same number. `dw1000_emulation_clock()`
+exports it, so a medium in the same process (as the tests are) can call
+it rather than reimplement it.
+
+`SYS_TIME` reads that clock, sampled on each host read. The reference
+server applies a per-node clock *drift* that it is told about by its
+controller and the node never learns, so a node configured with a
+non-zero drift has a `SYS_TIME` running at a slightly different rate
+from the timestamps it is handed. Nothing in the protocol carries that
+figure to the node.
+
+### Delayed send and receive
+
+`DX_TIME` works, for both `TXDLYS` and `RXDLYE`, with `HPDWARN` and
+`TXPUTE` decided the way UM §3.3 describes -- on the internal
+transmitter start time, which is the programmed time less the preamble
+and SFD airtime, and not on the programmed time itself. Neither flag
+cancels anything; the manual is explicit that a long delay may be
+intended, and stopping it is the host's move by `TRXOFF`.
+
+A delayed send's own timestamps are exact. UM §3.3 makes the RMARKER
+the programmed time by construction, so `TX_TIME.TX_RAWST` is `DX_TIME`
+with its low nine bits cleared and `TX_STAMP` is that plus `TX_ANTD`;
+the model writes both itself and discards the server's stamp.
+
+**The other nodes' view is not exact.** The server works out every
+receiving node's arrival time from the instant the `TX` request reached
+it, and that instant carries however long the sending node's deadline
+thread took to wake up and get the datagram out -- tens of
+microseconds, which is metres. A node's own registers are corrected for
+this and its peers' are not, so a two-way ranging run over delayed
+sends will not close as tightly here as on hardware. Closing it needs
+the node to tell the server the RMARKER it programmed, and no message
+in this protocol has a field for it. That is the one extension worth
+making, and it has not been made: it would change the contract this
+page defines, and the reference server would have to change with it.
+
+### Receive timeouts
+
+`RXRFTO` and `RXPTO` both work, counting from the moment the receiver
+turns on -- which for a delayed receive is when the counter reaches
+`DX_TIME`, per UM §7.2.40.9. `RX_FWTO`'s unit is exactly 65536 device
+ticks (512 counts of the 499.2 MHz clock, UM §7.2.14) and `DRX_PRETOC`
+is `(value + 1)` PACs, the PAC size recovered by matching `DRX_TUNE2`
+against the eight tuning words the manual documents.
+
+`RXSFDTO` is **not** modelled, and cannot be. UM §7.2.40.7 starts that
+counter at preamble detection and ends it at SFD detection, and this
+model has neither: a frame arrives whole from the medium server or does
+not arrive. For the same reason `DRX_PRETOC`'s countdown here is never
+suspended by an unconfirmed preamble detection, which UM §7.2.40.9 says
+real hardware does for at least 1 PAC + 32 symbols.
+
+### The double receive buffer
+
+The swinging set of UM table 7 works: `HSRBP` and `ICRBP`, the `HRBPT`
+command, per-buffer `LDEDONE`/`RXDFR`/`RXFCG`/`RXFCE`, a good CRC
+moving the IC pointer and a bad one not, and `RXOVRR` when a frame
+arrives with both buffers still held by the host. `DIS_DRXB` selects it
+and `RXAUTR` (UM §5.3.2) re-enables the receiver between frames.
+
+Nothing is sent to the medium server when the receiver comes back
+through `RXAUTR`. A server that treats `RX_CONFIG` as "the receiver is
+now on" will therefore think a node has stopped listening after its
+first frame; the reference server applies no behaviour to `RX_CONFIG`,
+which is why this is sound here. A host re-enabling the receiver
+explicitly does send one, even if the receiver was already on.
+
+### Still not modelled
+
+- **Frame filtering.** `FFEN` and the `FF*` bits are stored and
+  ignored, so `AFFREJ` is never raised and no frame is ever rejected.
+  `EUI` and `PANADR` have no storage at all. UM §5.2.2 makes filtering
+  interact with the timeouts ("any frames rejected will stop the
+  reception ... timeout will not trigger") and with the double buffer
+  (a filtered frame does not move `ICRBP`), so this is the largest
+  single gap left.
+- **Automatic acknowledgement**: `AUTOACK`, `AAT`, `ACK_RESP_T`.
+- **Sleep and wake**: the `WAKEUP` IO line still aborts the process,
+  and `AON` is storage only.
+- `RX_TTCKI` and `RX_TTCKO` are still the constants `0x1000` and `0`.
+- `RX_FINFO`'s `RXPACC`, `RXPSR`, `RXBR` and `RXNSPL`, and all of
+  `RX_FQUAL`: there is no signal model behind them, so a receive power
+  estimate computed from this port is meaningless rather than merely
+  imprecise.
+- `RX_TIME.RX_RAWST` is still derived by adding the receive antenna
+  delay to `RX_STAMP` and rounding to the 512-tick grid -- on the grid,
+  but not how hardware derives a first-path timestamp.
+- Registers attached as placeholders, with storage but no behaviour:
+  `EUI`, `PANADR`, `SYS_STATE`, `RX_SNIFF`, `ACK_RESP_T`, `ACC_MEM`,
+  `DIAG` (so none of the `EVC_*` event counters count).
+- Registers stored and read back but driving nothing: `CHAN_CTRL`
+  (except `RXPRF`, which sizes a preamble symbol), `USR_SFD`,
+  `AGC_CTRL`, `EXT_SYNC`, `RF_CONF`, `FS_CTRL`, `AON`, `PMSC`,
+  `TX_POWER`, `OTP_IF`, and `DRX_CONF` except `DRX_PRETOC`,
+  `DRX_TUNE2` and `RXPACC_NOSAT`.
+- Errata 1.4 is not modelled at all: neither the TX-1 silent window,
+  nor the RX-1 corruption of the second buffer's 129th octet, nor the
+  IRQ-1 glitch.
+
+### Threads
+
+Three threads reach the model: the host's, through the SPI and IO line
+calls; the rsvc reader's, delivering frames; and the model's own
+deadline thread, which is what meets a programmed time. All three take
+the model's mutex for register access, and **none of them holds it
+across the line callback**. A node's callback may therefore call the
+driver without deadlocking -- though it still should not, since
+`dw1000_process_events()` belongs on the node's own thread.
+
+Because the model owns a thread, it has to be stopped rather than
+dropped: `dw1000_emulation_destroy()` joins it. Call it before closing
+the rsvc connection, and never from the line callback.
 
 ## Using it from a node
 
@@ -275,11 +369,12 @@ DW0_spi            .emulation = emulation;
 
 `_dw1000_ioline_set/clear()` and `_dw1000_spi_send/recv()` read that
 field to find which model instance a call is for. `line_cb` is
-called with `DW1000_IOLINE_IRQ` whenever the model's
-`e_raise_interrupt()` sees `SYS_STATUS.IRQS` transition low to high
--- it stands in for a real IRQ line's edge, and a node is expected to
-schedule its interrupt processing from there rather than do it on the
-callback's own stack.
+called with `DW1000_IOLINE_IRQ` whenever the model sees
+`SYS_STATUS.IRQS` transition low to high -- it stands in for a real IRQ
+line's edge, and a node is expected to schedule its interrupt
+processing from there rather than do it on the callback's own stack.
+It may arrive on the rsvc reader's thread or on the model's own
+deadline thread; see Threads above.
 
 Before any of this, a node typically opens the connection with
 `rsvc_open()` (which performs the `RSVC_OPEN` call itself) and then
@@ -294,10 +389,17 @@ size_t   seedlen = sizeof(seed);
 rsvc_o(rsvc, RSVC_SEED_GET, &seed, &seedlen);
 ```
 
-`tests/emulation/smoke.c` is the whole of both halves in one program: a
-medium that binds the socket, answers every request and loops a node's
-own frame back at it, and a node that runs the driver against it --
-transmit, receive, a damaged FCS, a ranging frame. It is the shortest
-worked example of the protocol above, and the smallest one that runs:
-`sh tests/check-emulation.sh` builds and runs it, needing nothing
+`tests/emulation/` holds three programs, each both halves in one:
+
+- `smoke.c` -- a medium that answers every request and loops a node's
+  own frame back at it, and a node that runs the driver against it:
+  transmit, receive, a damaged FCS, a ranging frame. The shortest
+  worked example of the protocol above.
+- `timing.c` -- a medium that stamps with `dw1000_emulation_clock()`
+  and holds its frames until asked, for `SYS_TIME`, delayed send and
+  receive, and the two receive timeouts.
+- `dblbuf.c` -- a medium that sends a burst of numbered frames on one
+  `RX_CONFIG`, for the swinging set and the overrun.
+
+`sh tests/check-emulation.sh` builds and runs all three, needing nothing
 installed and no server started.

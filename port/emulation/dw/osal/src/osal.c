@@ -9,17 +9,33 @@
  * The DW1000 register model.
  *
  * A SPI transfer from the driver is decoded here into a register access,
- * and the few registers that mean something -- SYS_CTRL, SYS_STATUS,
- * SYS_MASK, the TX and RX buffers and their timestamps -- are given the
- * behaviour the chip has: writing TXSTRT sends a frame to the medium
- * server, an incoming frame fills RX_BUFFER and sets the RX status bits,
- * and any status bit that the mask lets through raises the IRQ line.
+ * and the registers that mean something -- SYS_CTRL, SYS_CFG,
+ * SYS_STATUS, SYS_MASK, the TX and RX buffers and their timestamps --
+ * are given the behaviour the chip has: writing TXSTRT sends a frame to
+ * the medium server, an incoming frame fills RX_BUFFER and sets the RX
+ * status bits, and any status bit that the mask lets through raises the
+ * IRQ line.
+ *
+ * The model also keeps time, which is what the rest of it is built on:
+ * SYS_TIME free-runs off the host clock, a delayed send or receive waits
+ * for the moment programmed into DX_TIME, and the receive timeouts of
+ * RX_FWTO and DRX_PRETOC expire on their own. That needs a thread, which
+ * is the one thing here a bare register array would not have had.
+ *
+ * Three threads reach this file, and they are not interchangeable:
+ *
+ *  - the host's, through the SPI and IO line calls;
+ *  - the rsvc reader's, delivering frames from the medium server;
+ *  - the model's own deadline thread.
+ *
+ * Every one of them takes e->mutex for the registers, and none of them
+ * holds it across the line callback -- that call lands in code this port
+ * does not own, and a node is entitled to reach for the driver from it.
+ *
+ * What the model does not do is in docs/emulation.md, which is also the
+ * contract with the medium server.
  *
  * Originally written as a spank OSAL port; it has no dependency on spank.
- */
-
-/* TODO:
- *  - correctly implement swing-set for double buffer use.
  */
 
 
@@ -815,7 +831,7 @@ dw1000_emulation_create(rsvc_t *rsvc,
     E_REG_ATTACH(e, DX_TIME,     SINGLE); // delayed send and receive
     E_REG_ATTACH(e, RX_FWTO,     SINGLE); // frame wait timeout
     E_REG_ATTACH(e, DEV_ID,      SINGLE);
-    E_REG_ATTACH(e, SYS_CFG,     SINGLE); 
+    E_REG_ATTACH(e, SYS_CFG,     SINGLE); // DIS_DRXB, RXWTOE, RXAUTR
     E_REG_ATTACH(e, TX_FCTRL,    SINGLE); // todo
     E_REG_ATTACH(e, TX_BUFFER,   SINGLE);
     E_REG_ATTACH(e, SYS_CTRL,    SINGLE);
@@ -835,12 +851,12 @@ dw1000_emulation_create(rsvc_t *rsvc,
     E_REG_ATTACH(e, AGC_CTRL,    SINGLE); // ignored
     E_REG_ATTACH(e, EXT_SYNC,    SINGLE); // ignored
     E_REG_ATTACH(e, GPIO_CTRL,   SINGLE);
-    E_REG_ATTACH(e, DRX_CONF,    SINGLE); // ignored except DW1000_OFF_DRX_RXPACC_NOSAT
+    E_REG_ATTACH(e, DRX_CONF,    SINGLE); // RXPACC_NOSAT, DRX_PRETOC, DRX_TUNE2
     E_REG_ATTACH(e, RF_CONF,     SINGLE); // ignored
     E_REG_ATTACH(e, TX_CAL,      SINGLE); // #define DW1000_OFF_TC_SARC : SAR_LTEMP / SAR_LVBAT
     E_REG_ATTACH(e, FS_CTRL,     SINGLE); // ignored
     E_REG_ATTACH(e, AON,         SINGLE); // ignored
-    E_REG_ATTACH(e, OTP_IF,      SINGLE); // ignored except...
+    E_REG_ATTACH(e, OTP_IF,      SINGLE); // ignored
     E_REG_ATTACH(e, LDE_IF,      SINGLE);
     E_REG_ATTACH(e, PMSC,        SINGLE); // ignored
 
