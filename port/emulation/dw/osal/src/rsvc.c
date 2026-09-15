@@ -402,10 +402,16 @@ rsvc_call_extended(rsvc_t *rsvc, uint16_t type,
 
     /* Process reply
      */
-    // Remove in-progress from list
-    RSVC_LOCK(rsvc);
-    TAILQ_REMOVE(&rsvc->inprogress, &inprogress, entries);
-    RSVC_UNLOCK(rsvc);
+    /* Not removed from the list here: rsvc_loop() already took it out
+     * when it matched the reply, and it had to -- leaving it in would
+     * let a second datagram with the same id match a waiter that has
+     * gone. Removing it a second time writes through the entry's stale
+     * links, which on a list of one is very nearly harmless and on a
+     * list of two corrupts it. That only shows up once two requests can
+     * be outstanding at once, which is now ordinary: the model's
+     * deadline thread issues a TX or an RX_CONFIG of its own while the
+     * host thread is in a call.
+     */
 
     // Properly destroy semaphore
     //  (before stack allocated data is removed)
