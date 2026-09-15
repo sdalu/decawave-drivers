@@ -253,7 +253,19 @@ figure to the node.
 transmitter start time, which is the programmed time less the preamble
 and SFD airtime, and not on the programmed time itself. Neither flag
 cancels anything; the manual is explicit that a long delay may be
-intended, and stopping it is the host's move by `TRXOFF`.
+intended, and stopping it is the host's move by `TRXOFF`. A programmed
+time already gone by is not refused either: the model waits for the
+counter to come round to it, almost a whole period, exactly as the chip
+does.
+
+Both flags are **read-only and derived**, not latched (UM §7.2.17).
+`HPDWARN` reads set while an armed delayed operation is still more than
+half a clock period from starting, and clears by itself when the
+operation is cancelled or when the counter catches up; `TXPUTE` reads
+set only inside the few microseconds of transmitter power-up, which the
+manual notes a host is unlikely ever to catch. Writing 1 to either does
+nothing, here as on the chip. A model that latched them would refuse
+every delayed operation after the first late one.
 
 A delayed send's own timestamps are exact. UM §3.3 makes the RMARKER
 the programmed time by construction, so `TX_TIME.TX_RAWST` is `DX_TIME`
@@ -294,7 +306,12 @@ The swinging set of UM table 7 works: `HSRBP` and `ICRBP`, the `HRBPT`
 command, per-buffer `LDEDONE`/`RXDFR`/`RXFCG`/`RXFCE`, a good CRC
 moving the IC pointer and a bad one not, and `RXOVRR` when a frame
 arrives with both buffers still held by the host. `DIS_DRXB` selects it
-and `RXAUTR` (UM §5.3.2) re-enables the receiver between frames.
+and `RXAUTR` re-enables the receiver between frames -- with the two
+meanings UM §7.2.6 gives it, which are not the same: double buffered it
+re-enables after "a frame reception event or failure", single buffered
+only after "a frame reception failure". So a *good* frame stops a
+single-buffered receiver and does not stop a double-buffered one. A
+frame wait timeout never re-enables, in either mode.
 
 Nothing is sent to the medium server when the receiver comes back
 through `RXAUTR`. A server that treats `RX_CONFIG` as "the receiver is
@@ -334,20 +351,60 @@ explicitly does send one, even if the receiver was already on.
 - Errata 1.4 is not modelled at all: neither the TX-1 silent window,
   nor the RX-1 corruption of the second buffer's 129th octet, nor the
   IRQ-1 glitch.
+- **Overrun corruption.** UM §4.3.5 says an overrun corrupts the frames
+  already received -- `RX_FINFO`, `RX_TIME` and `RX_FQUAL` -- and that
+  they must be discarded. Here the two buffered frames survive an
+  overrun intact, so a host that reads them anyway gets away with it.
+- `SYS_TIME`'s low 9 bits read as zero on the chip (UM §7.2.8); here
+  they carry the full resolution of the host clock.
+- `W4R_TIM`, the programmable turnaround delay of `ACK_RESP_T`: a
+  `WAIT4RESP` receiver comes on immediately rather than after it. The
+  receive timeouts do start at that turn-on, as they should.
 
 ### Threads
 
 Three threads reach the model: the host's, through the SPI and IO line
-calls; the rsvc reader's, delivering frames; and the model's own
-deadline thread, which is what meets a programmed time. All three take
-the model's mutex for register access, and **none of them holds it
-across the line callback**. A node's callback may therefore call the
-driver without deadlocking -- though it still should not, since
-`dw1000_process_events()` belongs on the node's own thread.
+calls; the rsvc reader's, delivering frames from the server; and the
+model's own deadline thread, which is what meets a programmed time. All
+three take the model's mutex for register access, and none of them
+holds it across the line callback.
 
-Because the model owns a thread, it has to be stopped rather than
-dropped: `dw1000_emulation_destroy()` joins it. Call it before closing
-the rsvc connection, and never from the line callback.
+**The line callback must not call the driver.** Not "should not" -- it
+hangs. The callback runs on the rsvc reader thread, and a driver call
+that enables the receiver or starts a transmit reaches `rsvc_i()`, which
+blocks waiting for a reply datagram. The only thread that reads
+datagrams and matches replies is the rsvc reader: the thread now sitting
+inside the callback. Nothing can wake it.
+`dw1000_process_events()` takes that path in double-buffered mode, so
+this is the ordinary case and not a corner of it. Signal a condition
+variable from the callback and call the driver from the node's own
+thread, as all three tests do.
+
+An earlier revision of this page said the opposite, on the strength of a
+change that removed a *different* deadlock: the callback used to run
+while the model held its own mutex, and no longer does. Removing one of
+two independent reasons for a prohibition does not lift it.
+
+**A slow medium server stalls every deadline.** One thread serves them
+all, and when it delivers a delayed send it blocks in `rsvc_i()` until
+the server replies. A server that takes a millisecond to answer a `TX`
+delays every timeout and every other programmed time by that much. Reply
+promptly and do the work afterwards.
+
+Because the model owns a thread, shutting down has an order, and none of
+it commutes -- the model's thread calls the connection and the
+connection's thread calls the model:
+
+1. `dw1000_emulation_stop(e)` -- joins the model's deadline thread;
+   after it, the model makes no further calls on the connection.
+2. `rsvc_close(rsvc)` -- joins the reader; after it, no frame can arrive
+   in the model.
+3. `dw1000_emulation_destroy(e)` -- frees it.
+
+Step 1 is done for you if you skip it, which is safe only when nothing
+is arriving. Step 2 is not, and destroying the model with the connection
+still open leaves the reader able to deliver a frame into freed memory.
+None of the three may be called from the line callback.
 
 ## Using it from a node
 

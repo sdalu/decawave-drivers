@@ -20,11 +20,13 @@
  * It also holds its frames: nothing is delivered unless a step says so,
  * because a timeout is a thing that happens when no frame arrives.
  *
- * The two rules smoke.c states about any medium hold here too, and one
- * has changed in the model's favour: the line callback no longer runs
- * inside the model's mutex, so calling the driver from it would no
- * longer deadlock. It still must not -- dw1000_process_events() belongs
- * on the node's own thread -- and this test keeps to that.
+ * Both rules smoke.c states about any medium hold here too. The first
+ * of them is worth restating, because this file once claimed it had
+ * relaxed and it had not: the line callback still must not call the
+ * driver. It no longer runs inside the model's mutex, which was one
+ * reason; the other stands, and is the one smoke.c gives -- the callback
+ * runs on the rsvc reader thread, and a driver call from it waits for a
+ * reply that only that thread could have delivered.
  *
  * The whole run is under alarm(60): the steps here deliberately wait for
  * timeouts, so it needs more room than the smoke test's alarm(20).

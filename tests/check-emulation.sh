@@ -6,10 +6,11 @@
 # compile, and that is what this does: build the core, the port and each
 # test into a temporary directory, and run it.
 #
-# Two tests, each saying in its own header comment what it covers:
+# Three tests, each saying in its own header comment what it covers:
 #   smoke   a frame out and a frame back, the four callbacks, a bad FCS
 #   timing  the parts that need a clock -- SYS_TIME, delayed send and
-#           receive, RXRFTO and RXPTO
+#           receive, RXRFTO and RXPTO -- and the create/destroy cycle
+#   dblbuf  the double receive buffer: the swinging set, HRBPT, overrun
 #
 # Here: one summary line per test, and the test's own lines kept when
 # something failed. Run by `make check`.
