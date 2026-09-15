@@ -17,6 +17,33 @@
 
 
 /*----------------------------------------------------------------------*/
+/* The device clock                                                     */
+/*----------------------------------------------------------------------*/
+
+/* A device timestamp is 40 bits, and every register field that holds one
+ * is 40 bits wide. Arithmetic on device time is done in uint64_t and
+ * brought back through this mask, so that a delay crossing the wrap is
+ * the same subtraction as one that does not.
+ */
+#define E_CLOCK_MASK		((uint64_t)((1ull << DW1000_TIME_CLOCK_BITS) - 1))
+
+/* Signed distance from @p a to @p b on the 40-bit clock, in ticks:
+ * positive if b is ahead of a. The chip compares a programmed time with
+ * the running counter, and that counter wraps every ~17.2 seconds, so
+ * "is this deadline in the past" is a question about the shorter arc
+ * between the two points and not about which number is larger. Half the
+ * range each way, which is the best any such comparison can do and is
+ * what the chip's own half-period warning is named after.
+ */
+static inline int64_t e_clock_delta(uint64_t a, uint64_t b) {
+    uint64_t d = (b - a) & E_CLOCK_MASK;
+    return (d & (1ull << (DW1000_TIME_CLOCK_BITS - 1)))
+	? (int64_t)d - (int64_t)(1ull << DW1000_TIME_CLOCK_BITS)
+	: (int64_t)d;
+}
+
+
+/*----------------------------------------------------------------------*/
 /* Min/Max                                                              */
 /*----------------------------------------------------------------------*/
 

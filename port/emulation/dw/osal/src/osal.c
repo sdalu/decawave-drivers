@@ -31,6 +31,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <pthread.h>
+#include <time.h>
 #include <sys/queue.h>
 
 #include "dw1000/osal.h"
@@ -43,6 +44,25 @@
 #include "emulation.h"
 
 
+/* What a deadline, once reached, makes the model do. One slot each, so
+ * that arming a second receive timeout replaces the first rather than
+ * queueing behind it -- which is what the chip does, the timeouts being
+ * counters and not a list.
+ */
+#define E_DEADLINE_TX		0	/* a delayed send comes due     */
+#define E_DEADLINE_RX		1	/* a delayed receive turns on   */
+#define E_DEADLINE_RXTO		2	/* a receive timeout expires    */
+#define E_DEADLINE_COUNT	3
+
+struct e_deadline {
+    bool	armed;
+    uint64_t	at;		/* device time, 64 bits (see
+				 * e_clock_forward): which lap of the
+				 * 40-bit counter is meant, not just
+				 * where in it */
+    uint64_t	arg;		/* E_DEADLINE_RXTO: the status flag */
+};
+
 struct dw1000_emulation {
     pthread_mutex_t	mutex;
     rsvc_t 		*rsvc;
@@ -51,6 +71,27 @@ struct dw1000_emulation {
     int 		state;
     int 		swing_set;
     bool                irq;
+
+    /* The deadline thread. The chip meets a programmed time by counting
+     * its own clock; the model has no tick to count, so it sleeps until
+     * the host clock says the moment has come. One thread serves every
+     * deadline: at most one send and one receive are ever outstanding.
+     */
+    pthread_t		timer;
+    pthread_cond_t	timer_cond;
+    bool		timer_running;
+    bool		timer_stop;
+    struct e_deadline	deadline[E_DEADLINE_COUNT];
+
+    /* A delayed send, held between the TXDLYS command and the moment it
+     * goes out. The frame is taken from TX_BUFFER when the command is
+     * issued rather than when it is sent, which is what the host is told
+     * to expect: it may not touch the buffer while a send is pending.
+     */
+    struct dw1000_driver_iopkt	tx_pkt;
+    size_t			tx_pktlen;
+    bool			tx_delayed;
+    uint64_t			tx_rawst;	/* RMARKER, from DX_TIME */
     
     struct e_register   reg[DW1000_COUNT_REGISTERS];
 
@@ -280,6 +321,68 @@ e_crc16_ccitt(const uint8_t *src, size_t len)
 }
 
 
+/*-- The clock ---------------------------------------------------------*/
+
+/* Device time from the host clock.
+ *
+ * DW1000_TIME_CLOCK_HZ is 63 897 600 000, so the seconds term overflows
+ * 64 bits long before the epoch reaches 2026. That is deliberate and
+ * harmless: unsigned multiplication wraps modulo 2^64, 2^40 divides
+ * 2^64, so masking the wrapped product to 40 bits gives exactly the same
+ * answer as reducing the true product. The Ruby server computes
+ * `(Time.now.to_r * DW1000_HZ).to_i & MASK` in arbitrary precision and
+ * lands on the same number.
+ *
+ * The sub-second term is folded differently only to keep it in range:
+ * DW1000_TIME_CLOCK_HZ / 10^9 is 638976/10^4 exactly, and nanoseconds
+ * times 638976 cannot overflow. Truncating there matches the server's
+ * floor, since the seconds term is a whole number of ticks.
+ */
+static uint64_t e_clock_full(void) {
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
+	EMU_FATAL("clock_gettime(CLOCK_REALTIME) failed");
+
+    return ((uint64_t)ts.tv_sec * DW1000_TIME_CLOCK_HZ)
+	 + ((uint64_t)ts.tv_nsec * 638976ull) / 10000ull;
+}
+
+uint64_t dw1000_emulation_clock(void) {
+    return e_clock_full() & E_CLOCK_MASK;
+}
+
+/* The next moment at which the 40-bit counter will read @p at, as a
+ * 64-bit tick count.
+ *
+ * A programmed time is 40 bits, so on its own it says nothing about
+ * which of the counter's 17.2-second laps is meant -- and the chip
+ * answers that the same way every time: the next one. UM 3.3 makes the
+ * consequence explicit, that a host which programs a time just gone by
+ * "has to complete almost a whole clock count period before the start
+ * time is reached", and that this is what HPDWARN exists to warn about.
+ *
+ * Deadlines are therefore carried at 64 bits, where that lap is not in
+ * doubt. The wider counter has itself wrapped since the epoch, which
+ * costs nothing: differences are exact modulo 2^64, so any interval
+ * shorter than about three years subtracts correctly.
+ */
+static uint64_t e_clock_forward(uint64_t now_full, uint64_t at) {
+    return now_full + (((at & E_CLOCK_MASK) - (now_full & E_CLOCK_MASK))
+		       & E_CLOCK_MASK);
+}
+
+
+/*-- Deadlines ---------------------------------------------------------*/
+
+/* Arm, disarm, and wait. Every one of these needs the model's mutex held
+ * by the caller; the thread itself drops it only to run an action.
+ */
+static void e_deadline_arm(struct dw1000_emulation *e, int which,
+			   uint64_t at, uint64_t arg);
+static void e_deadline_disarm(struct dw1000_emulation *e, int which);
+static void e_deadline_disarm_all(struct dw1000_emulation *e);
+
 #define E_STATE_OFF		0
 #define E_STATE_WAKEUP		1
 #define E_STATE_INIT		2
@@ -289,6 +392,8 @@ e_crc16_ccitt(const uint8_t *src, size_t len)
 #define E_STATE_TX		6
 #define E_STATE_RX		7
 #define E_STATE_SNOOZE		8
+#define E_STATE_TX_WAIT		9	/* TXDLYS armed, DX_TIME not reached */
+#define E_STATE_RX_WAIT		10	/* RXDLYE armed, DX_TIME not reached */
 
 static char *e_state[] = {
     [E_STATE_OFF      ] = "OFF",
@@ -299,7 +404,9 @@ static char *e_state[] = {
     [E_STATE_DEEPSLEEP] = "DEEPSLEEP",
     [E_STATE_TX       ] = "TX",
     [E_STATE_RX	      ] = "RX",
-    [E_STATE_SNOOZE   ] = "SNOOZE"
+    [E_STATE_SNOOZE   ] = "SNOOZE",
+    [E_STATE_TX_WAIT  ] = "TX_WAIT",
+    [E_STATE_RX_WAIT  ] = "RX_WAIT"
 };
     
 
@@ -321,6 +428,115 @@ static char *e_state[] = {
 
 
 
+
+
+/*-- The deadline thread -----------------------------------------------*/
+
+/* What a deadline does when it comes due. Called with the model's mutex
+ * released, because two of the three end up in a blocking socket call.
+ */
+static void e_deadline_fire_tx  (struct dw1000_emulation *e);
+static void e_deadline_fire_rx  (struct dw1000_emulation *e);
+static void e_deadline_fire_rxto(struct dw1000_emulation *e, uint64_t flag);
+
+/* Arm a deadline. The mutex must be held. Re-arming a slot replaces what
+ * was there: the chip's timeouts are counters, not a queue.
+ */
+static void e_deadline_arm(struct dw1000_emulation *e, int which,
+			   uint64_t at, uint64_t arg) {
+    DW1000_ASSERT(which >= 0 && which < E_DEADLINE_COUNT,
+		  "deadline index in range");
+    e->deadline[which].armed = true;
+    e->deadline[which].at    = at;
+    e->deadline[which].arg   = arg;
+    pthread_cond_signal(&e->timer_cond);
+}
+
+static void e_deadline_disarm(struct dw1000_emulation *e, int which) {
+    DW1000_ASSERT(which >= 0 && which < E_DEADLINE_COUNT,
+		  "deadline index in range");
+    e->deadline[which].armed = false;
+}
+
+static void e_deadline_disarm_all(struct dw1000_emulation *e) {
+    for (int i = 0 ; i < E_DEADLINE_COUNT ; i++)
+	e->deadline[i].armed = false;
+}
+
+/* The earliest armed deadline, or -1. "Earliest" is on the 40-bit clock,
+ * so it is the smallest non-negative distance from now and not the
+ * smallest number.
+ */
+static int e_deadline_next(struct dw1000_emulation *e, uint64_t now_full) {
+    int     best  = -1;
+    int64_t bestd = 0;
+
+    for (int i = 0 ; i < E_DEADLINE_COUNT ; i++) {
+	if (!e->deadline[i].armed)
+	    continue;
+	int64_t d = (int64_t)(e->deadline[i].at - now_full);
+	if (best < 0 || d < bestd) {
+	    best  = i;
+	    bestd = d;
+	}
+    }
+    return best;
+}
+
+/* The thread. It owns nothing: it waits for the earliest armed deadline,
+ * disarms it, and runs its action with the mutex dropped.
+ */
+static void *e_timer_thread(void *args) {
+    struct dw1000_emulation *e = args;
+
+    pthread_mutex_lock(&e->mutex);
+    while (!e->timer_stop) {
+	uint64_t now  = e_clock_full();
+	int      next = e_deadline_next(e, now);
+
+	if (next < 0) {
+	    // Nothing armed: sleep until something is, or until shutdown.
+	    pthread_cond_wait(&e->timer_cond, &e->mutex);
+	    continue;
+	}
+
+	int64_t ticks = (int64_t)(e->deadline[next].at - now);
+	if (ticks > 0) {
+	    /* Not yet. Sleep on the same clock the deadline is expressed
+	     * in -- CLOCK_REALTIME, which is what dw1000_emulation_clock()
+	     * samples -- so that a step of the host clock moves both.
+	     */
+	    struct timespec until;
+	    clock_gettime(CLOCK_REALTIME, &until);
+	    uint64_t ns = (uint64_t)((ticks * 10000ull) / 638976ull);
+	    until.tv_sec  += (time_t)(ns / 1000000000ull);
+	    until.tv_nsec += (long)  (ns % 1000000000ull);
+	    if (until.tv_nsec >= 1000000000L) {
+		until.tv_nsec -= 1000000000L;
+		until.tv_sec  += 1;
+	    }
+	    pthread_cond_timedwait(&e->timer_cond, &e->mutex, &until);
+	    // Re-derive everything: the slot may have been disarmed.
+	    continue;
+	}
+
+	// Due. Take it out of the way before running it.
+	uint64_t arg = e->deadline[next].arg;
+	e_deadline_disarm(e, next);
+
+	pthread_mutex_unlock(&e->mutex);
+	switch (next) {
+	case E_DEADLINE_TX:   e_deadline_fire_tx  (e);      break;
+	case E_DEADLINE_RX:   e_deadline_fire_rx  (e);      break;
+	case E_DEADLINE_RXTO: e_deadline_fire_rxto(e, arg); break;
+	default:              EMU_FATAL("unknown deadline %d", next);
+	}
+	pthread_mutex_lock(&e->mutex);
+    }
+    pthread_mutex_unlock(&e->mutex);
+
+    return NULL;
+}
 
 
 void
@@ -489,7 +705,8 @@ dw1000_emulation_create(rsvc_t *rsvc,
 	EMU_FATAL("out of memory allocating the emulation");
 
     pthread_mutex_init(&e->mutex, NULL);
-    
+    pthread_cond_init(&e->timer_cond, NULL);
+
     e->rsvc      = rsvc;
     e->line_cb   = line_cb;
     e->line_args = line_args;
@@ -498,6 +715,9 @@ dw1000_emulation_create(rsvc_t *rsvc,
 
     E_SET_STATE(e, OFF);
     
+    E_REG_ATTACH(e, SYS_TIME,    SINGLE); // refreshed on every read
+    E_REG_ATTACH(e, DX_TIME,     SINGLE); // delayed send and receive
+    E_REG_ATTACH(e, RX_FWTO,     SINGLE); // frame wait timeout
     E_REG_ATTACH(e, DEV_ID,      SINGLE);
     E_REG_ATTACH(e, SYS_CFG,     SINGLE); 
     E_REG_ATTACH(e, TX_FCTRL,    SINGLE); // todo
@@ -530,10 +750,7 @@ dw1000_emulation_create(rsvc_t *rsvc,
 
     E_REG_ATTACH(e, EUI,         TODO);
     E_REG_ATTACH(e, PANADR,      TODO);
-    E_REG_ATTACH(e, SYS_TIME,    TODO);
     E_REG_ATTACH(e, SYS_STATE,   TODO);
-    E_REG_ATTACH(e, DX_TIME,     TODO);
-    E_REG_ATTACH(e, RX_FWTO,     TODO);
     E_REG_ATTACH(e, RX_SNIFF,    TODO);
     E_REG_ATTACH(e, ACK_RESP_T,  TODO);
     E_REG_ATTACH(e, ACC_MEM,     TODO);
@@ -548,7 +765,35 @@ dw1000_emulation_create(rsvc_t *rsvc,
 	EMU_FATAL("failed to register RSVC callback");
     }
 
+    /* Last, so that nothing the thread can reach is still being built.
+     * It idles on the condition variable until a deadline is armed.
+     */
+    if (pthread_create(&e->timer, NULL, e_timer_thread, e) != 0)
+	EMU_FATAL("failed to start the deadline thread");
+    e->timer_running = true;
+
     return e;
+}
+
+void dw1000_emulation_destroy(struct dw1000_emulation *e) {
+    if (e == NULL)
+	return;
+
+    if (e->timer_running) {
+	pthread_mutex_lock(&e->mutex);
+	e_deadline_disarm_all(e);
+	e->timer_stop = true;
+	pthread_cond_signal(&e->timer_cond);
+	pthread_mutex_unlock(&e->mutex);
+	pthread_join(e->timer, NULL);
+	e->timer_running = false;
+    }
+
+    rsvc_unregister(e->rsvc, RSVC_UWB_IO);
+
+    pthread_cond_destroy(&e->timer_cond);
+    pthread_mutex_destroy(&e->mutex);
+    free(e);
 }
 
 void dw1000_emulation_reset(struct dw1000_emulation *e) {
@@ -605,13 +850,160 @@ void dw1000_emulation_reset(struct dw1000_emulation *e) {
 }
 
 
+/*-- Receive timing ----------------------------------------------------*/
+
+/* One preamble symbol, in device clock ticks.
+ *
+ * UM table 60: a preamble symbol is 496 chips at 16 MHz PRF and 508 at
+ * 64 MHz, the chip rate being 499.2 MHz. The device clock runs at 128
+ * times the chip rate, so a symbol is a whole number of ticks and the
+ * 993.59 ns and 1017.63 ns of the table are that number rounded for
+ * print.
+ */
+#define E_TICKS_PER_PSYM_16MHZ	(496 * 128)
+#define E_TICKS_PER_PSYM_64MHZ	(508 * 128)
+
+/* One RX_FWTO unit, in device clock ticks.
+ *
+ * UM 7.2.14: "the exact unit is 512 counts of the fundamental 499.2 MHz
+ * UWB clock, or 1.026 us". 512 chips times 128 ticks per chip.
+ */
+#define E_TICKS_PER_FWTO	(512 * 128)
+
+/* The transmitter power-up time.
+ *
+ * UM 3.3 puts it at "a few microseconds" and gives no number; it is what
+ * separates a delayed send that goes out cleanly from one that raises
+ * TXPUTE, its preamble truncated while the transmitter comes up. Five
+ * microseconds is this model's choice, not the manual's.
+ */
+#define E_TX_POWERUP_TICKS	((uint64_t)DW1000_USEC_TO_CLOCK(5))
+
+/* PAC size in preamble symbols, recovered from DRX_TUNE2.
+ *
+ * UM 7.2.40.9 programs DRX_PRETOC in units of PAC size, and UM 7.2.40.5
+ * is where the PAC size is actually set -- as one of eight opaque tuning
+ * words, four per PRF. The model has to go the other way, so it matches
+ * the word it was given against the same eight values; a host that wrote
+ * something else gets the 8-symbol default and a warning, which is all
+ * that can honestly be said about an undocumented value.
+ */
+static unsigned e_pac_symbols(uint32_t drx_tune2) {
+    static const struct { uint32_t tune2; unsigned pac; } known[] = {
+	{ 0x311A002D,  8 }, { 0x331A0052, 16 },	  // 16 MHz PRF
+	{ 0x351A009A, 32 }, { 0x371A011D, 64 },
+	{ 0x313B006B,  8 }, { 0x333B00BE, 16 },	  // 64 MHz PRF
+	{ 0x353B015E, 32 }, { 0x373B0296, 64 },
+    };
+    for (size_t i = 0 ; i < sizeof(known)/sizeof(known[0]) ; i++)
+	if (known[i].tune2 == drx_tune2)
+	    return known[i].pac;
+
+    EMU_WARNING("DRX_TUNE2 = 0x%08" PRIx32 " is not one of the eight"
+		" documented tuning words; assuming a PAC of 8 symbols",
+		drx_tune2);
+    return 8;
+}
+
+/* Ticks per preamble symbol for the configured PRF (CHAN_CTRL.RXPRF).
+ */
+static uint64_t e_ticks_per_psym(struct dw1000_emulation *e) {
+    uint32_t chan_ctrl = E_REG_IC_READ32_KEY(e, CHAN_CTRL);
+    return (DW1000_GET_VAL(chan_ctrl, CHAN_CTRL_RXPRF) == DW1000_PRF_64MHZ)
+	 ? E_TICKS_PER_PSYM_64MHZ : E_TICKS_PER_PSYM_16MHZ;
+}
+
+/* Arm the receive timeout that will expire first, counting from @p from.
+ *
+ * Two of the chip's three receive timeouts can fire in this model:
+ *
+ *  - RXPTO, the preamble detection timeout (DRX_PRETOC), which UM
+ *    7.2.40.9 starts "as soon as the receiver is enabled to hunt for
+ *    preamble" and whose period is (DRX_PRETOC + 1) PACs;
+ *  - RXRFTO, the frame wait timeout (RX_FWTO), which UM 7.2.14 starts at
+ *    the same moment when RXWTOE is set.
+ *
+ * RXSFDTO cannot: UM 7.2.40.7 starts it at preamble detection, and this
+ * model has no preamble -- a frame either arrives whole from the medium
+ * server or does not arrive. Not arming it is the honest reading; see
+ * docs/emulation.md.
+ *
+ * Whichever of the two is nearer is the one that will be reached, and
+ * both stop the reception, so a single slot holds them. The mutex must
+ * be held.
+ */
+static void e_rx_arm_timeouts(struct dw1000_emulation *e, uint64_t from_full) {
+    uint32_t sys_cfg  = E_REG_IC_READ32_KEY(e, SYS_CFG);
+    uint16_t pretoc   = E_REG_IC_READ16_KEY(e, DRX_CONF, DRX_PRETOC);
+    uint16_t fwto     = E_REG_IC_READ16_KEY(e, RX_FWTO);
+
+    bool     have     = false;
+    uint64_t at       = 0;
+    uint64_t flag     = 0;
+
+    // Preamble detection timeout: a programmed zero disables it.
+    if (pretoc != 0) {
+	uint32_t tune2 = E_REG_IC_READ32_KEY(e, DRX_CONF, DRX_TUNE2);
+	uint64_t span  = (uint64_t)(pretoc + 1u)
+	               * e_pac_symbols(tune2)
+	               * e_ticks_per_psym(e);
+	at    = from_full + span;
+	flag  = DW1000_FLG_SYS_STATUS_RXPTO;
+	have  = true;
+    }
+
+    // Frame wait timeout: only when RXWTOE says so.
+    if (DW1000_GET_FLG(sys_cfg, SYS_CFG_RXWTOE) && (fwto != 0)) {
+	uint64_t span = (uint64_t)fwto * E_TICKS_PER_FWTO;
+	uint64_t cand = from_full + span;
+	if (!have || (int64_t)(cand - at) < 0) {
+	    at   = cand;
+	    flag = DW1000_FLG_SYS_STATUS_RXRFTO;
+	}
+	have = true;
+    }
+
+    if (have) {
+	EMU_DEBUG("rx: arming %s in %" PRIu64 " ticks",
+		  (flag == DW1000_FLG_SYS_STATUS_RXPTO) ? "RXPTO" : "RXRFTO",
+		  at - from_full);
+	e_deadline_arm(e, E_DEADLINE_RXTO, at, flag);
+    } else {
+	e_deadline_disarm(e, E_DEADLINE_RXTO);
+    }
+}
+
+
+/*-- Receiver enable ---------------------------------------------------*/
+
+/* Put the receiver on the air and tell the medium server. The mutex must
+ * NOT be held; the caller has already moved the state.
+ */
+static int e_rx_engage(struct dw1000_emulation *e) {
+    EMU_DEBUG("rx_start: requesting rx start (sending RX_CONFIG packet)");
+    struct dw1000_driver_iopkt iopkt = {
+	 .drvid           = (uintptr_t) e,
+	 .type            = DW1000_RSVC_RX_CONFIG,
+	 .rx_config.flags = 0,
+    };
+    size_t pktlen = DW1000_DRIVER_PKTLEN_RX_CONFIG();
+
+    if (rsvc_i(e->rsvc, RSVC_UWB_IO, &iopkt, pktlen) < 0) {
+	EMU_FATAL("rx_start: sending RX_CONFIG failed");
+    }
+    EMU_DEBUG("rx_start: done");
+    return 0;
+}
+
 int dw1000_emulation_recv(struct dw1000_emulation *e) {
     EMU_DEBUG("rx_start: enter (state=%s)", E_GET_STATE_STR(e));
     pthread_mutex_lock(&e->mutex);
 
     // Auto-clear RX enable flag as command taken into account
     uint32_t sys_ctrl  = E_REG_IC_READ32_KEY(e, SYS_CTRL);
+    bool     delayed   = DW1000_GET_FLG(sys_ctrl, SYS_CTRL_RXDLYE);
     DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_RXENAB);
+    DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_RXDLYE);
     E_REG_IC_WRITE32_KEY(e, sys_ctrl, SYS_CTRL);
 
     // Sanity check
@@ -620,25 +1012,156 @@ int dw1000_emulation_recv(struct dw1000_emulation *e) {
     DW1000_ASSERT(! DW1000_GET_FLG(sys_ctrl, SYS_CTRL_TXSTRT),
 		  "receiver enabled with no transmit pending");
 
+    if (delayed) {
+	/* UM 4.2: the chip stays idle until SYS_TIME reaches DX_TIME and
+	 * only then turns the receiver on, which is also the moment the
+	 * receive timeouts start counting (UM 7.2.40.9).
+	 */
+	uint64_t now = e_clock_full();
+	uint64_t dx  = E_REG_IC_READ40_KEY(e, DX_TIME) & ~0x1FFull;
+	uint64_t at  = e_clock_forward(now, dx);
+
+	if (e_clock_delta(now & E_CLOCK_MASK, dx) <= 0) {
+	    /* Late. UM 4.2: the counter is past the programmed time and
+	     * would have to run almost a whole period to reach it again.
+	     * HPDWARN says so. The chip does not cancel anything by
+	     * itself -- the host decides, and the driver does so by
+	     * issuing TRXOFF -- so the receiver is left off and no
+	     * deadline is armed.
+	     */
+	    uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
+	    DW1000_SET_FLG(sys_status, SYS_STATUS_HPDWARN);
+	    E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
+	    EMU_DEBUG("rx_start: delayed receive is already late"
+		      " (dx=0x%010" PRIx64 " now=0x%010" PRIx64 "): HPDWARN",
+		      dx, now & E_CLOCK_MASK);
+	    pthread_mutex_unlock(&e->mutex);
+	    return -1;
+	}
+
+	E_SET_STATE(e, RX_WAIT);
+	e_deadline_arm(e, E_DEADLINE_RX, at, 0);
+	EMU_DEBUG("rx_start: delayed to 0x%010" PRIx64 " (in %" PRIu64
+		  " ticks)", dx, at - now);
+	pthread_mutex_unlock(&e->mutex);
+	return 0;
+    }
+
     // Mark as RX state
     E_SET_STATE(e, RX);
+    e_rx_arm_timeouts(e, e_clock_full());
 
-    EMU_DEBUG("rx_start: requesting rx start (sending RX_CONFIG packet)");
-    struct dw1000_driver_iopkt iopkt = {
-	 .drvid           = (uintptr_t) e,
-	 .type            = DW1000_RSVC_RX_CONFIG,
-	 .rx_config.flags = 0,
-    };
-    size_t pktlen = DW1000_DRIVER_PKTLEN_RX_CONFIG();
-    
     pthread_mutex_unlock(&e->mutex);
 
-    if (rsvc_i(e->rsvc, RSVC_UWB_IO, &iopkt, pktlen) < 0) {
-	EMU_FATAL("rx_start: sending RX_CONFIG failed");
-    }
-    EMU_DEBUG("rx_start: done");
+    return e_rx_engage(e);
+}
 
+/* A delayed receive has come due. */
+static void e_deadline_fire_rx(struct dw1000_emulation *e) {
+    pthread_mutex_lock(&e->mutex);
+    if (!E_IS_STATE(e, RX_WAIT)) {
+	// Cancelled between the deadline expiring and this running.
+	pthread_mutex_unlock(&e->mutex);
+	return;
+    }
+    E_SET_STATE(e, RX);
+    e_rx_arm_timeouts(e, e_clock_full());
+    pthread_mutex_unlock(&e->mutex);
+
+    e_rx_engage(e);
+}
+
+/* A receive timeout has expired: raise its bit and stop receiving.
+ *
+ * UM 7.2.14: the timeout "disables the receiver", and the receiver will
+ * not re-enable by itself afterwards whatever the double buffer and
+ * auto-re-enable settings say.
+ */
+static void e_deadline_fire_rxto(struct dw1000_emulation *e, uint64_t flag) {
+    bool edge;
+
+    pthread_mutex_lock(&e->mutex);
+    if (!E_IS_STATE(e, RX)) {
+	pthread_mutex_unlock(&e->mutex);
+	return;
+    }
+
+    uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
+    sys_status |= (uint32_t)flag;
+    E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
+
+    EMU_DEBUG("rx: timeout reached (%s)",
+	      (flag == DW1000_FLG_SYS_STATUS_RXPTO) ? "RXPTO" : "RXRFTO");
+
+    E_SET_STATE(e, IDLE);
+    edge = e_irq_update(e);
+    pthread_mutex_unlock(&e->mutex);
+
+    if (edge) e_irq_fire(e);
+}
+
+
+/*-- Transmit ----------------------------------------------------------*/
+
+/* Airtime of the preamble and the SFD, in device clock ticks: what the
+ * chip has to already be transmitting before the RMARKER.
+ *
+ * APS022 5.4 calls it Ton, and UM 3.3 says the chip derives its internal
+ * transmitter start time for a delayed send by subtracting exactly this
+ * from the programmed time. Read out of TX_FCTRL rather than taken from
+ * the driver, which is the point of a register model.
+ *
+ * The SFD is the standard one, 64 symbols at 110 kbps and 8 otherwise
+ * (UM 4.1.3). A host that has selected the proprietary SFD through
+ * CHAN_CTRL.DWSFD gets a Ton short by up to 56 symbols here, which moves
+ * the TXPUTE boundary and nothing else.
+ */
+static uint64_t e_tx_ton(struct dw1000_emulation *e) {
+    static const uint16_t plen_symbols[16] = {
+	   0,   64, 1024, 4096,    0,  128, 1536,    0,
+	   0,  256, 2048,    0,    0,  512,    0,    0,
+    };
+
+    uint32_t tx_fctrl = E_REG_IC_READ32_KEY(e, TX_FCTRL);
+    unsigned plen     = (tx_fctrl >> DW1000_SFT_TX_FCTRL_TXPSR) & 0xF;
+    unsigned bitrate  = (tx_fctrl >> DW1000_SFT_TX_FCTRL_TXBR ) & 0x3;
+    unsigned prf      = (tx_fctrl >> DW1000_SFT_TX_FCTRL_TXPRF) & 0x3;
+
+    uint64_t symbols  = plen_symbols[plen]
+	              + ((bitrate == DW1000_BITRATE_110KBPS) ? 64 : 8);
+
+    return symbols * ((prf == DW1000_PRF_64MHZ) ? E_TICKS_PER_PSYM_64MHZ
+		                                : E_TICKS_PER_PSYM_16MHZ);
+}
+
+/* Hand the held frame to the medium server and move to TX. The mutex
+ * must NOT be held.
+ */
+static int e_tx_engage(struct dw1000_emulation *e) {
+    pthread_mutex_lock(&e->mutex);
+    E_SET_STATE(e, TX);
+    struct dw1000_driver_iopkt pkt = e->tx_pkt;
+    size_t                     len = e->tx_pktlen;
+    pthread_mutex_unlock(&e->mutex);
+
+    if (rsvc_i(e->rsvc, RSVC_UWB_IO, &pkt, len) < 0) {
+	EMU_DEBUG("tx_start: sending packet failed");
+	return -1;
+    }
     return 0;
+}
+
+/* A delayed send has come due. */
+static void e_deadline_fire_tx(struct dw1000_emulation *e) {
+    pthread_mutex_lock(&e->mutex);
+    if (!E_IS_STATE(e, TX_WAIT)) {
+	// TRXOFF got here first.
+	pthread_mutex_unlock(&e->mutex);
+	return;
+    }
+    pthread_mutex_unlock(&e->mutex);
+
+    e_tx_engage(e);
 }
 
 
@@ -647,10 +1170,14 @@ int dw1000_emulation_send(struct dw1000_emulation *e) {
 
     uint32_t tx_fctrl   = E_REG_IC_READ32_KEY(e, TX_FCTRL);
     uint32_t sys_ctrl   = E_REG_IC_READ32_KEY(e, SYS_CTRL);
-    uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
+    /* 40 bits, not 32: TXPUTE is bit 34, in the fifth byte, and the
+     * 32-bit accessors would drop it on the way back out.
+     */
+    uint64_t sys_status = E_REG_IC_READ40_KEY(e, SYS_STATUS);
     int      len        = DW1000_GET_VAL(tx_fctrl, TX_FCTRL_TFLE_TFLEN);
     int      offset     = DW1000_GET_VAL(tx_fctrl, TX_FCTRL_TXBOFFS   );
     int      ranging    = DW1000_GET_FLG(tx_fctrl, TX_FCTRL_TR        );
+    bool     delayed    = DW1000_GET_FLG(sys_ctrl, SYS_CTRL_TXDLYS    );
     /* WAIT4RESP is not read here: it is acted upon when the server
      * reports the frame sent (DW1000_RSVC_TX_DONE).
      */
@@ -661,7 +1188,7 @@ int dw1000_emulation_send(struct dw1000_emulation *e) {
     DW1000_ASSERT(! DW1000_GET_FLG(sys_ctrl, SYS_CTRL_RXENAB),
 		  "transmit started with the receiver off");
 
-    
+
     uint8_t flags = 0;
     if (ranging) flags |= DW1000_RSVC_FLG_RANGING;
 
@@ -675,70 +1202,113 @@ int dw1000_emulation_send(struct dw1000_emulation *e) {
     DW1000_CLR_FLG(sys_status, SYS_STATUS_TXPRS);
     DW1000_CLR_FLG(sys_status, SYS_STATUS_TXPHS);
     DW1000_CLR_FLG(sys_status, SYS_STATUS_TXFRS);
-    E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
 
-    // Sys Ctrl     
+    // Sys Ctrl
     // - Suppress auto-FCS transmission
     bool sfcst = DW1000_GET_FLG(sys_ctrl, SYS_CTRL_SFCST);
     DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_SFCST);
     DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_TXSTRT);
+    DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_TXDLYS);
     E_REG_IC_WRITE32_KEY(e, sys_ctrl, SYS_CTRL);
-    
-    struct dw1000_driver_iopkt iopkt = {
-	 .drvid            = (uintptr_t) e,
-	 .type             = DW1000_RSVC_TX,
-	 .tx.flags         = flags,
-	 .tx.antenna_delay = E_REG_IC_READ16_KEY(e, TX_ANTD)
-    };
+
+    /* Build the frame now, not when it goes out. The chip reads TX_BUFFER
+     * as it transmits, but a host is told not to touch the buffer while a
+     * send is pending, so taking a copy here differs from the chip only
+     * for a host that has already broken that rule.
+     */
+    struct dw1000_driver_iopkt *iopkt = &e->tx_pkt;
+    memset(iopkt, 0, sizeof(*iopkt));
+    iopkt->drvid            = (uintptr_t) e;
+    iopkt->type             = DW1000_RSVC_TX;
+    iopkt->tx.flags         = flags;
+    iopkt->tx.antenna_delay = E_REG_IC_READ16_KEY(e, TX_ANTD);
 
     // Deal with CRC
     DW1000_ASSERT(len >= 2, "frame long enough to hold the FCS");
     uint16_t crc16;
     if (sfcst) {
-	// CRC has been provided, copy 
-	memcpy(iopkt.tx.frame, &E_REG_DATA_KEY(e, TX_BUFFER)[offset], len);
+	// CRC has been provided, copy
+	memcpy(iopkt->tx.frame, &E_REG_DATA_KEY(e, TX_BUFFER)[offset], len);
 	// memcpy, not a cast: see the receive path for why
 	uint16_t fcs;
-	memcpy(&fcs, &iopkt.tx.frame[len - 2], sizeof(fcs));
+	memcpy(&fcs, &iopkt->tx.frame[len - 2], sizeof(fcs));
 	crc16 = dw1000_le16_to_cpu(fcs);
     } else {
-	// CRC need to be computed
-	DW1000_ASSERT(len >= 2, "frame long enough to hold the FCS");
-
 	// Compute CRC16 CCITT
 	crc16 = e_crc16_ccitt(&E_REG_DATA_KEY(e, TX_BUFFER)[offset], len - 2);
 
 	// Copy data and CRC
 	uint16_t crc16_le = dw1000_cpu_to_le16(crc16);
-        memcpy(iopkt.tx.frame, &E_REG_DATA_KEY(e, TX_BUFFER)[offset], len - 2);
-	memcpy(&iopkt.tx.frame[len-2], (uint8_t *)&crc16_le, 2);
+        memcpy(iopkt->tx.frame, &E_REG_DATA_KEY(e, TX_BUFFER)[offset], len - 2);
+	memcpy(&iopkt->tx.frame[len-2], (uint8_t *)&crc16_le, 2);
     }
-    
-    size_t pktlen = DW1000_DRIVER_PKTLEN_TX(len);
 
-    // Move to TW state
-    E_SET_STATE(e, TX);
+    e->tx_pktlen  = DW1000_DRIVER_PKTLEN_TX(len);
+    e->tx_delayed = delayed;
 
-    // Prepare and send io packet
-    EMU_DEBUG("tx_start: sending packet"
+    EMU_DEBUG("tx_start: %s packet"
 	      " (offset=%d, size=%d, auto-crc=%c"
 	      " crc16=0x%04" PRIx16 ")",
+	      delayed ? "holding" : "sending",
 	      offset, len, sfcst ? 'N': 'Y', crc16);
-    
-    pthread_mutex_unlock(&e->mutex);
-    
-    if (rsvc_i(e->rsvc, RSVC_UWB_IO, &iopkt, pktlen) < 0) {
-	EMU_DEBUG("tx_start: sending packet failed");
 
-        return -1;
+    if (!delayed) {
+	e->tx_rawst = 0;
+	E_REG_IC_WRITE40_KEY(e, sys_status, SYS_STATUS);
+	pthread_mutex_unlock(&e->mutex);
+	return e_tx_engage(e);
     }
 
+    /* Delayed send. UM 3.3: the programmed time is the RMARKER, "the raw
+     * TX time, TX_RAWST ... before the antenna delay is added", its low
+     * nine bits ignored. The chip works back from it by Ton to an
+     * internal start time, waits for the counter to reach that, and
+     * begins preamble.
+     */
+    uint64_t now   = e_clock_full();
+    uint64_t dx    = E_REG_IC_READ40_KEY(e, DX_TIME) & ~0x1FFull;
+    uint64_t ton   = e_tx_ton(e);
+    uint64_t start = (dx - ton) & E_CLOCK_MASK;
+    int64_t  lead  = e_clock_delta(now & E_CLOCK_MASK, start);
+
+    /* UM 3.3: "it is the internal start time mentioned above that is used
+     * when deciding whether to set the HPDWARN event ... As long as the
+     * preamble start time is the near future, the HPDWARN event flag will
+     * not be set." Near future is the readable half of the counter; past
+     * that, the chip would have to run almost a whole period to reach the
+     * time again, which is what the warning is for.
+     *
+     * Neither flag cancels anything. UM 3.3 is explicit that a long delay
+     * may be intended, that HPDWARN "can be ignored and the transmission
+     * will begin at the allotted time", and that stopping it is the
+     * host's move, by TRXOFF. So the send is armed either way and the
+     * driver's own policy decides.
+     */
+    if (lead <= 0) {
+	DW1000_SET_FLG(sys_status, SYS_STATUS_HPDWARN);
+	EMU_DEBUG("tx_start: delayed send is late, HPDWARN"
+		  " (start=0x%010" PRIx64 " now=0x%010" PRIx64 ")",
+		  start, now & E_CLOCK_MASK);
+    } else if ((uint64_t)lead < E_TX_POWERUP_TICKS) {
+	/* UM 3.3: early enough not to warrant HPDWARN, too late for the
+	 * transmitter to be up before the preamble starts. The frame
+	 * still goes, the RMARKER is still on time, the first symbols of
+	 * preamble are not.
+	 */
+	DW1000_SET_FLG(sys_status, SYS_STATUS_TXPUTE);
+	EMU_DEBUG("tx_start: delayed send leaves %" PRId64 " ticks to power"
+		  " up, TXPUTE", lead);
+    }
+
+    e->tx_rawst = dx;
+    E_REG_IC_WRITE40_KEY(e, sys_status, SYS_STATUS);
+
+    E_SET_STATE(e, TX_WAIT);
+    e_deadline_arm(e, E_DEADLINE_TX, e_clock_forward(now, dx), 0);
+
+    pthread_mutex_unlock(&e->mutex);
     return 0;
 }
-
-
-
-
 
 
 void
@@ -807,6 +1377,11 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
 	uint32_t sys_ctrl = E_REG_IC_READ32_KEY(e, SYS_CTRL);
 	if (DW1000_GET_FLG(sys_ctrl, SYS_CTRL_TRXOFF)) {
 	    EMU_DEBUG("trxoff");
+	    /* Whatever was programmed is off the books: a delayed send or
+	     * receive still counting down, and the receive timeout that
+	     * would have ended the reception being cancelled here.
+	     */
+	    e_deadline_disarm_all(e);
 	    // Return to IDLE state
 	    DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_TXSTRT);
 	    DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_SFCST);
@@ -855,9 +1430,17 @@ void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
     _dw1000_spi_header_decode(hdr, hdrlen, &reg, &offset, &write);
 
     pthread_mutex_lock(&e->mutex);
+
+    /* SYS_TIME free-runs on the chip, so it is not storage the host wrote
+     * and the model happens to keep: it is whatever the clock says at the
+     * instant of the read. Sample it here rather than on a tick, which
+     * the model has no way to generate.
+     */
+    if (reg == DW1000_REG_SYS_TIME)
+	E_REG_IC_WRITE40_KEY(e, dw1000_emulation_clock(), SYS_TIME);
+
     E_REG_HOST_READ_IDX(e, reg, offset, data, datalen );
     pthread_mutex_unlock(&e->mutex);
-    
 }
 
 void _dw1000_spi_low_speed(dw1000_spi_driver_t *spi) {
@@ -924,6 +1507,12 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 			E_GET_STATE_STR(e));
 	    goto done;
 	}
+
+	/* UM 7.2.14(b): a frame arriving stops the frame wait timeout
+	 * counter, so RXRFTO will not be set. Same for the preamble
+	 * timeout, which UM 7.2.40.9 ends at preamble detection.
+	 */
+	e_deadline_disarm(e, E_DEADLINE_RXTO);
 	
 	// Not handled: AFFREJ AAT RXOVRR RXRSCS RXPREJ
 	uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
@@ -994,20 +1583,40 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
     case DW1000_RSVC_TX_DONE: {
 	EMU_DEBUG("RSVC INT <TX_DONE> (ts=0x%010lx)", iopkt->tx_done.timestamp);
 
-        // Transmission time
-	// (adjusted to take into account antenna delay)
-	uint64_t tx_time = dw1000_le64_to_cpu(iopkt->tx_done.timestamp);
-	E_REG_IC_WRITE40_KEY(e, tx_time, TX_TIME, TX_TIME_TX_STAMP);
+	uint64_t antd = E_REG_IC_READ16_KEY(e, TX_ANTD);
+	uint64_t raw;
 
-	// Raw transmission time
-	// (which is on a 512-tick boudary)
-        tx_time -= E_REG_IC_READ16_KEY(e, TX_ANTD);
-	E_REG_IC_WRITE40_KEY(e, tx_time, TX_TIME, TX_TIME_TX_RAWST);
+	if (e->tx_delayed) {
+	    /* A delayed send does not need to be told when it happened:
+	     * UM 3.3 says the chip works its transmitter start time
+	     * backwards from the programmed time precisely so that the
+	     * RMARKER lands on it, so TX_RAWST *is* DX_TIME with its low
+	     * nine bits cleared, and TX_STAMP is that plus the antenna
+	     * delay. The server's own stamp is discarded here; it carries
+	     * the scheduling jitter of the moment this node got round to
+	     * sending the request, which the chip would not have.
+	     *
+	     * That jitter is not gone, only moved: it is still in the
+	     * arrival times the server computes for every *other* node,
+	     * which have no such register to be corrected from. Closing
+	     * that needs a field on the wire, and the protocol has none --
+	     * see docs/emulation.md.
+	     */
+	    raw = e->tx_rawst;
+	} else {
+	    uint64_t tx_time = dw1000_le64_to_cpu(iopkt->tx_done.timestamp);
+	    raw = (tx_time - antd) & E_CLOCK_MASK;
 
-	// Assert that the transmission time as been generated
-	// taking into account clock transmission at a 512-tick boundary
-	DW1000_ASSERT(tx_time == DW1000_CLOCK_ROUNDUP(tx_time),
-		      "transmit timestamp on a 512-tick boundary");
+	    // Assert that the transmission time as been generated
+	    // taking into account clock transmission at a 512-tick boundary
+	    DW1000_ASSERT(raw == DW1000_CLOCK_ROUNDUP(raw),
+			  "transmit timestamp on a 512-tick boundary");
+	}
+
+	E_REG_IC_WRITE40_KEY(e, (raw + antd) & E_CLOCK_MASK,
+			     TX_TIME, TX_TIME_TX_STAMP);
+	E_REG_IC_WRITE40_KEY(e, raw, TX_TIME, TX_TIME_TX_RAWST);
+	e->tx_delayed = false;
 	
 	// Mark every part of the packet as transmitted
         uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);

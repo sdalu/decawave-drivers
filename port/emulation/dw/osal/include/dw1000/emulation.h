@@ -59,6 +59,52 @@ dw1000_emulation_create(rsvc_t *rsvc, void (*line_cb)(int line, void *args), voi
  */
 void dw1000_emulation_reset(struct dw1000_emulation *e);
 
+/**
+ * Stop the model and release it.
+ *
+ * The model runs a thread of its own to meet the times a host programs
+ * into DX_TIME and the receive timeouts, so it cannot simply be dropped
+ * on the floor the way a bare register array could. Joins that thread and
+ * frees @p e; the rsvc connection is the caller's and is left open.
+ *
+ * Must not be called from the line callback: that would be the model
+ * waiting for a thread that is waiting for the callback to return.
+ *
+ * @param e		the emulation, or NULL
+ */
+void dw1000_emulation_destroy(struct dw1000_emulation *e);
+
+
+/*----------------------------------------------------------------------*/
+/* The clock                                                            */
+/*----------------------------------------------------------------------*/
+
+/**
+ * The device time, now, as SYS_TIME would read it.
+ *
+ * The model has no oscillator to count, so it derives the device clock
+ * from the host's CLOCK_REALTIME by the same formula the reference
+ * medium server uses -- seconds since the epoch times
+ * @p DW1000_TIME_CLOCK_HZ, truncated, kept to 40 bits. That is what puts
+ * a node's SYS_TIME on the same timeline as the RX and TX timestamps the
+ * server hands it, which is the whole point: a delayed send is programmed
+ * as "this many ticks after the timestamp of the frame I just received",
+ * and the two have to be comparable.
+ *
+ * A medium server sharing the host should stamp with this same clock. It
+ * is exported so that a medium living in the same process (as
+ * tests/emulation does) can call it rather than reimplement it.
+ *
+ * @note Not the drifted clock. The reference server applies a per-node
+ *       clock drift it is told about by its controller, which the node
+ *       is never told; a node whose drift is non-zero therefore has a
+ *       SYS_TIME that runs at a slightly different rate from the
+ *       timestamps it is given. See docs/emulation.md.
+ *
+ * @return device time in units of @p DW1000_TIME_CLOCK_HZ, 40 bits
+ */
+uint64_t dw1000_emulation_clock(void);
+
 
 /*-- IO Packet definition and helpers ----------------------------------*/
 
