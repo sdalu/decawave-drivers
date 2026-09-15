@@ -53,6 +53,46 @@
 #include "dw1000/osal.h"
 #include "rsvc.h"
 
+#if defined(__FreeBSD__)
+#include <sys/sysctl.h>
+#include <sys/user.h>
+#endif
+
+
+/*----------------------------------------------------------------------*/
+/* How many threads this process has                                    */
+/*----------------------------------------------------------------------*/
+
+/* Used by one step, to tell a model that was joined from one that was
+ * merely abandoned. Where the answer cannot be had, the step says so and
+ * checks what it still can.
+ */
+static int
+thread_count(void)
+{
+#if defined(__FreeBSD__)
+    int mib[4] = { CTL_KERN, KERN_PROC,
+		   KERN_PROC_PID | KERN_PROC_INC_THREAD, (int)getpid() };
+    size_t len = 0;
+    if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0)
+	return -1;
+    return (int)(len / sizeof(struct kinfo_proc));
+#elif defined(__linux__)
+    FILE *f = fopen("/proc/self/status", "r");
+    char  line[256];
+    int   n = -1;
+    if (f == NULL)
+	return -1;
+    while (fgets(line, sizeof(line), f))
+	if (sscanf(line, "Threads: %d", &n) == 1)
+	    break;
+    fclose(f);
+    return n;
+#else
+    return -1;
+#endif
+}
+
 
 /*----------------------------------------------------------------------*/
 /* The wire protocol (docs/emulation.md)                                */
@@ -92,6 +132,13 @@ struct stub {
 
     /* Set by a step before it runs, read by the stub thread. */
     bool     deliver;                   /* loop a transmitted frame back */
+
+    /* A medium serving more than one node cannot take any one node's
+     * RSVC_CLOSE as its cue to shut down, and the lifecycle step opens
+     * and closes thirty connections of its own. So closing is answered
+     * always and obeyed only once, when main() says the run is over.
+     */
+    bool     shutdown;
 
     /* Written by the stub thread, read by a step once it has finished. */
     uint8_t  frame[DW1000_FRAME_MAXSIZE];
@@ -272,10 +319,16 @@ stub_medium(void *args)
 	    stub_uwb_io(s, &peer, peerlen, hdr.id, payload, paylen);
 	    break;
 
-	case RSVC_CLOSE:
+	case RSVC_CLOSE: {
+	    bool last;
 	    stub_send(s, &peer, peerlen, hdr.type, hdr.id, 0, 0, NULL, 0);
-	    running = false;
+	    pthread_mutex_lock(&s->lock);
+	    last = s->shutdown;
+	    pthread_mutex_unlock(&s->lock);
+	    if (last)
+		running = false;
 	    break;
+	}
 
 	default:
 	    fprintf(stderr, "stub: unknown service type 0x%04x\n", hdr.type);
@@ -801,6 +854,123 @@ step_rx_delayed(dw1000_t *dw, struct stub *s)
 }
 
 
+/* Create and tear down a model over and over.
+ *
+ * Every other step here creates one model and destroys it at exit, so
+ * the shutdown path runs once per process and never in the state a
+ * caller that loops through configurations puts it in. That caller
+ * exists -- a transmit power sweep builds a model per setting -- and a
+ * thread left behind each time would surface as a failure to create the
+ * nth one, a long way from the call that leaked the first.
+ *
+ * So: full cycles, each with a deadline armed and a frame on its way, so
+ * that the join has something to race rather than a thread already
+ * parked on its condition variable.
+ *
+ * The assertion is on growth, not on equality. A joined thread's entry
+ * lingers briefly on FreeBSD, so the count after a cycle is not reliably
+ * the count before it; what cannot happen is the count rising with the
+ * iteration count, which is what a leak looks like.
+ */
+#define LIFECYCLE_ROUNDS        30
+
+static const char *
+step_lifecycle(dw1000_t *dw, struct stub *s)
+{
+    int before, after;
+
+    (void)dw;
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    before = thread_count();
+
+    for (int i = 0 ; i < LIFECYCLE_ROUNDS ; i++) {
+	struct dw1000_emulation *em;
+	rsvc_t                  *rs;
+	dw1000_t                 d;
+	struct dw1000_ioline     irq   = { .line = DW1000_IOLINE_IRQ   };
+	struct dw1000_ioline     reset = { .line = DW1000_IOLINE_RESET };
+	dw1000_spi_driver_t      sp;
+	dw1000_config_t          cfg;
+	struct dw1000_radio      radio = {
+	    .channel  = 5,
+	    .prf      = DW1000_PRF_64MHZ,
+	    .rx_pac   = DW1000_PAC8,
+	    .tx_plen  = DW1000_PLEN_128,
+	    .tx_pcode = 10,
+	    .rx_pcode = 10,
+	    .bitrate  = DW1000_BITRATE_6800KBPS,
+	    .tx_power = DW1000_TX_POWER_AUTO,
+	    .proprietary.sfd = 0,
+	};
+
+	if ((rs = rsvc_open(s->path, (char *)"lifecycle", NULL)) == NULL)
+	    return REASON("rsvc_open failed on round %d", i);
+
+	/* No line callback: these models are not being watched, and the
+	 * one the rest of the file uses belongs to the other model.
+	 */
+	em = dw1000_emulation_create(rs, NULL, NULL);
+
+	memset(&sp, 0, sizeof(sp));
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.spi              = &sp;
+	cfg.irq              = &irq;
+	cfg.reset            = &reset;
+	cfg.lde_loading      = 1;
+	cfg.tx_antenna_delay = 16436;
+	cfg.rx_antenna_delay = 16436;
+	irq.emulation   = em;
+	reset.emulation = em;
+	sp.emulation    = em;
+
+	dw1000_init(&d, &cfg);
+	dw1000_hardreset(&d);
+	if (dw1000_initialise(&d) != 0)
+	    return REASON("dw1000_initialise failed on round %d", i);
+	if (dw1000_configure(&d, &radio) != 0)
+	    return REASON("dw1000_configure failed on round %d", i);
+
+	/* Something for the teardown to race: a receive timeout counting
+	 * down, and a delayed send whose deadline is close enough that
+	 * it may well fire while we are tearing down.
+	 */
+	dw1000_rx_set_timeout(&d, 19500);
+	dw1000_rx_start(&d, DW1000_RX_IMMEDIATE);
+
+	dw1000_tx_write_frame_data(&d, (uint8_t *)payload, PAYLOAD_LEN, 0);
+	dw1000_tx_fctrl(&d, FRAME_LEN, 0, DW1000_TX_IMMEDIATE);
+	dw1000_txrx_set_time(&d,
+	    (dw1000_get_system_time(&d) + USEC(800)) &
+	    ((1ull << DW1000_TIME_CLOCK_BITS) - 1));
+	dw1000_txrx_off(&d);
+	dw1000_tx_start(&d, DW1000_TX_DELAYED_START);
+
+	dw1000_emulation_stop(em);
+	rsvc_close(rs);
+	dw1000_emulation_destroy(em);
+	free(rs);
+    }
+
+    after = thread_count();
+
+    if (before < 0 || after < 0)
+	return NULL;            /* no counter on this platform */
+
+    /* Slack for the entries of just-joined threads, which is a constant;
+     * a leak would be LIFECYCLE_ROUNDS of them.
+     */
+    if (after > before + 4)
+	return REASON("thread count went from %d to %d over %d create and"
+		      " destroy cycles", before, after, LIFECYCLE_ROUNDS);
+
+    return NULL;
+}
+
+
 /*----------------------------------------------------------------------*/
 /* Harness                                                              */
 /*----------------------------------------------------------------------*/
@@ -958,16 +1128,26 @@ main(void)
     step("rx frame beats timeout", step_rx_frame_beats_timeout(&dw, &stub));
     step("rx delayed",           step_rx_delayed(&dw, &stub));
     step("rx delayed, late",     step_rx_delayed_late(&dw, &stub));
+    step("create/destroy cycles",step_lifecycle(&dw, &stub));
 
     dw1000_txrx_off(&dw);
 
-    /* The model owns a thread now, so it is stopped rather than dropped;
+    /* Shutdown order, see dw1000/emulation.h.
      * doing it before rsvc_close() is what keeps a deadline from firing
      * into a closed connection.
      */
+    /* The three steps, in the order dw1000/emulation.h insists on:
+     * stop the model's thread, close the connection (which joins the
+     * reader), and only then free the model.
+     */
+    pthread_mutex_lock(&stub.lock);
+    stub.shutdown = true;
+    pthread_mutex_unlock(&stub.lock);
+
+    dw1000_emulation_stop(emulation);
+    rsvc_close(rsvc);
     dw1000_emulation_destroy(emulation);
 
-    rsvc_close(rsvc);
     pthread_join(stub_thread, NULL);
     close(stub.fd);
 

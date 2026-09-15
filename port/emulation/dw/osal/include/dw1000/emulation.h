@@ -60,15 +60,41 @@ dw1000_emulation_create(rsvc_t *rsvc, void (*line_cb)(int line, void *args), voi
 void dw1000_emulation_reset(struct dw1000_emulation *e);
 
 /**
- * Stop the model and release it.
+ * Stop the model's own thread.
  *
- * The model runs a thread of its own to meet the times a host programs
- * into DX_TIME and the receive timeouts, so it cannot simply be dropped
- * on the floor the way a bare register array could. Joins that thread and
- * frees @p e; the rsvc connection is the caller's and is left open.
+ * The model runs a thread to meet the times a host programs into DX_TIME
+ * and to expire the receive timeouts, and that thread talks to the
+ * medium server. Joining it is therefore the first of the three steps a
+ * clean shutdown takes, and it has to come before the connection is
+ * closed: a deadline that fired into a closed connection would wait for
+ * a reply nobody is left to deliver.
  *
- * Must not be called from the line callback: that would be the model
- * waiting for a thread that is waiting for the callback to return.
+ * Idempotent. Must not be called from the line callback -- that would be
+ * the model waiting for a thread that is waiting for the callback to
+ * return.
+ *
+ * @param e		the emulation, or NULL
+ */
+void dw1000_emulation_stop(struct dw1000_emulation *e);
+
+/**
+ * Release the model.
+ *
+ * Shutting down has an order, and it is not negotiable, because the
+ * model and the rsvc connection each hold a thread that calls into the
+ * other:
+ *
+ *   1. @p dw1000_emulation_stop(e)  -- after this the model makes no
+ *                                      further calls on the connection;
+ *   2. @p rsvc_close(rsvc)          -- after this the reader thread has
+ *                                      been joined, so no frame can
+ *                                      arrive in the model;
+ *   3. @p dw1000_emulation_destroy(e).
+ *
+ * Step 1 is done for you if it has not been done already, which is safe
+ * whenever nothing is arriving. Step 2 is not: destroying the model
+ * while the connection is open leaves the reader thread able to deliver
+ * a frame into freed memory.
  *
  * @param e		the emulation, or NULL
  */

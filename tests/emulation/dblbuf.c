@@ -750,9 +750,14 @@ main(void)
     step("single buffered",         step_single_buffered(&dw, &stub));
 
     dw1000_txrx_off(&dw);
+    /* The three steps, in the order dw1000/emulation.h insists on:
+     * stop the model's thread, close the connection (which joins the
+     * reader), and only then free the model.
+     */
+    dw1000_emulation_stop(emulation);
+    rsvc_close(rsvc);
     dw1000_emulation_destroy(emulation);
 
-    rsvc_close(rsvc);
     pthread_join(stub_thread, NULL);
     close(stub.fd);
 

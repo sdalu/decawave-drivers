@@ -133,6 +133,8 @@ struct rsvc {
     uint8_t connected   : 1;		// status of the connection to the
     uint8_t running     : 1;		//  remote service, intermediate states
     uint8_t initialized : 1;		//  are: connected, running, initialized
+    volatile uint8_t stopping : 1;	// asked to stop; the reader checks
+					//  it each time round the loop
     
     uint64_t seq_id;			// global sequence id
 
@@ -286,6 +288,16 @@ rsvc_loop(void *args)
 	size = readv(rsvc->fd, iov, 2);
 	if ((size < 0) && (errno == EINTR))
 	    goto read_again;
+
+	/* Asked to stop. Checked here, before the asserts below, because
+	 * the datagram that woke us is the empty one rsvc_close() sent to
+	 * do exactly that and it carries no header.
+	 */
+	if (rsvc->stopping) {
+	    RSVC_DEBUG("loop: asked to stop");
+	    break;
+	}
+
 	datasize = size - sizeof(hdr);
 	
 	// Force fixing problems now!
@@ -338,6 +350,8 @@ rsvc_loop(void *args)
 
 	RSVC_DEBUG("loop: remote service data processed");
     }
+
+    return NULL;
 }
 
 
@@ -456,11 +470,31 @@ rsvc_open(char *socket_path, char *nickname, int *err)
 	goto failed;
     }
 
-    // Client address (necessary for bidirectional datagram)
+    /* Client address (necessary for bidirectional datagram).
+     *
+     * The process id alone is not enough to name it. Two connections
+     * from one process -- a test that builds a model per configuration,
+     * or anything simulating two nodes in one program -- would derive
+     * the same path, and the second bind() would fail on the first
+     * one's socket. Worse, the failure path below unlinks that path, so
+     * the second open would take the first connection's socket with it
+     * and leave a live rsvc talking to a name that no longer exists.
+     *
+     * A per-connection counter alongside the pid, which only has to be
+     * unique within the process.
+     */
+    static unsigned long clt_seq;
+    static pthread_mutex_t clt_seq_lock = PTHREAD_MUTEX_INITIALIZER;
+    unsigned long seq;
+
+    pthread_mutex_lock(&clt_seq_lock);
+    seq = clt_seq++;
+    pthread_mutex_unlock(&clt_seq_lock);
+
     memset(&rsvc->clt_addr, 0, sizeof(rsvc->clt_addr));
     rsvc->clt_addr.sun_family = AF_UNIX;
     r = snprintf(rsvc->clt_addr.sun_path, sizeof(rsvc->clt_addr.sun_path),
-	     "%s.%ld", socket_path, (long)getpid());
+	     "%s.%ld.%lu", socket_path, (long)getpid(), seq);
     if ((r <= 0) || ((size_t)r >= sizeof(rsvc->srv_addr.sun_path))) {
 	RSVC_DEBUG("open: socket path too long (max=%zu)",
 		   sizeof(rsvc->srv_addr.sun_path));
@@ -542,9 +576,39 @@ rsvc_close(rsvc_t *rsvc)
 	rsvc->initialized = 0;
     }
 
-    // Stop thread
+    /* Stop the reader, and wait for it.
+     *
+     * It used to be pthread_cancel() followed straight away by
+     * pthread_mutex_destroy(), with no join. Three things were wrong
+     * with that, and the third is fatal rather than untidy:
+     *
+     *  - the reader can be cancelled anywhere, including inside a
+     *    registered interrupt handler, and a handler that holds a lock
+     *    of its own (the emulation model holds one across every register
+     *    access) never releases it. Every later acquisition then blocks
+     *    for ever. fprintf() is a cancellation point, so a handler that
+     *    merely logs is enough to land there.
+     *  - destroying a mutex that a thread may still hold is undefined.
+     *  - without a join, the reader may still be running when this
+     *    returns and the caller starts freeing what the handler reads.
+     *
+     * So it is asked to stop instead, and woken by an empty datagram to
+     * its own address -- a blocking readv() will not notice a flag on
+     * its own. Then joined, after which nothing else is touching any of
+     * this.
+     */
     if (rsvc->running) {
-	pthread_cancel(rsvc->thread);
+	rsvc->stopping = 1;
+
+	int wake = socket(AF_UNIX, SOCK_DGRAM, 0);
+	if (wake >= 0) {
+	    (void)sendto(wake, "", 0, 0,
+			 (struct sockaddr *)&rsvc->clt_addr,
+			 sizeof(rsvc->clt_addr));
+	    close(wake);
+	}
+
+	pthread_join(rsvc->thread, NULL);
 	pthread_mutex_destroy(&rsvc->mutex);
 	rsvc->running = 0;
     }

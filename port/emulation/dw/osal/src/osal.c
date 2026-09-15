@@ -77,6 +77,7 @@ struct e_deadline {
 				 * 40-bit counter is meant, not just
 				 * where in it */
     uint64_t	arg;		/* E_DEADLINE_RXTO: the status flag */
+    uint64_t	seq;		/* bumped on every arm; see below   */
 };
 
 struct dw1000_emulation {
@@ -110,6 +111,7 @@ struct dw1000_emulation {
     bool		timer_running;
     bool		timer_stop;
     struct e_deadline	deadline[E_DEADLINE_COUNT];
+    uint64_t		deadline_seq;
 
     /* A delayed send, held between the TXDLYS command and the moment it
      * goes out. The frame is taken from TX_BUFFER when the command is
@@ -679,9 +681,20 @@ static void e_status_derived(struct dw1000_emulation *e) {
 /* What a deadline does when it comes due. Called with the model's mutex
  * released, because two of the three end up in a blocking socket call.
  */
-static void e_deadline_fire_tx  (struct dw1000_emulation *e);
-static void e_deadline_fire_rx  (struct dw1000_emulation *e);
-static void e_deadline_fire_rxto(struct dw1000_emulation *e, uint64_t flag);
+static void e_deadline_fire_tx  (struct dw1000_emulation *e, uint64_t seq);
+static void e_deadline_fire_rx  (struct dw1000_emulation *e, uint64_t seq);
+static void e_deadline_fire_rxto(struct dw1000_emulation *e, uint64_t seq,
+				 uint64_t flag);
+
+/* Is the deadline this action was dequeued from still the one that is
+ * current? False if the slot has been re-armed since, which means the
+ * host cancelled and started again while the action was on its way. The
+ * mutex must be held.
+ */
+static bool e_deadline_current(struct dw1000_emulation *e, int which,
+			       uint64_t seq) {
+    return !e->deadline[which].armed && (e->deadline[which].seq == seq);
+}
 
 /* Arm a deadline. The mutex must be held. Re-arming a slot replaces what
  * was there: the chip's timeouts are counters, not a queue.
@@ -693,6 +706,7 @@ static void e_deadline_arm(struct dw1000_emulation *e, int which,
     e->deadline[which].armed = true;
     e->deadline[which].at    = at;
     e->deadline[which].arg   = arg;
+    e->deadline[which].seq   = ++e->deadline_seq;
     pthread_cond_signal(&e->timer_cond);
 }
 
@@ -764,15 +778,26 @@ static void *e_timer_thread(void *args) {
 	    continue;
 	}
 
-	// Due. Take it out of the way before running it.
+	/* Due. Take it out of the way, and carry its stamp to the action.
+	 *
+	 * The action has to drop the mutex -- two of the three end up in
+	 * a blocking socket call -- and the host can do anything in that
+	 * gap, including a TRXOFF that cancels this operation and a fresh
+	 * command that starts another one. Checking the model's state is
+	 * not enough to tell those apart: a receive cancelled and
+	 * immediately re-enabled is in state RX either way, and the stale
+	 * timeout would fire into the new session. The stamp is what
+	 * distinguishes them, the slot being restamped on every arm.
+	 */
 	uint64_t arg = e->deadline[next].arg;
+	uint64_t seq = e->deadline[next].seq;
 	e_deadline_disarm(e, next);
 
 	pthread_mutex_unlock(&e->mutex);
 	switch (next) {
-	case E_DEADLINE_TX:   e_deadline_fire_tx  (e);      break;
-	case E_DEADLINE_RX:   e_deadline_fire_rx  (e);      break;
-	case E_DEADLINE_RXTO: e_deadline_fire_rxto(e, arg); break;
+	case E_DEADLINE_TX:   e_deadline_fire_tx  (e, seq);      break;
+	case E_DEADLINE_RX:   e_deadline_fire_rx  (e, seq);      break;
+	case E_DEADLINE_RXTO: e_deadline_fire_rxto(e, seq, arg); break;
 	default:              EMU_FATAL("unknown deadline %d", next);
 	}
 	pthread_mutex_lock(&e->mutex);
@@ -1026,21 +1051,36 @@ dw1000_emulation_create(rsvc_t *rsvc,
     return e;
 }
 
+void dw1000_emulation_stop(struct dw1000_emulation *e) {
+    if ((e == NULL) || !e->timer_running)
+	return;
+
+    pthread_mutex_lock(&e->mutex);
+    e_deadline_disarm_all(e);
+    e->timer_stop = true;
+    pthread_cond_signal(&e->timer_cond);
+    pthread_mutex_unlock(&e->mutex);
+
+    pthread_join(e->timer, NULL);
+    e->timer_running = false;
+}
+
 void dw1000_emulation_destroy(struct dw1000_emulation *e) {
     if (e == NULL)
 	return;
 
-    if (e->timer_running) {
-	pthread_mutex_lock(&e->mutex);
-	e_deadline_disarm_all(e);
-	e->timer_stop = true;
-	pthread_cond_signal(&e->timer_cond);
-	pthread_mutex_unlock(&e->mutex);
-	pthread_join(e->timer, NULL);
-	e->timer_running = false;
-    }
-
-    rsvc_unregister(e->rsvc, RSVC_UWB_IO);
+    /* Step 1, if the caller has not done it. Step 2 is the caller's and
+     * cannot be done here: the connection is theirs, and closing it is
+     * what joins the thread that would otherwise deliver a frame into
+     * the memory freed below.
+     *
+     * rsvc_unregister() is deliberately not called. It only marks the
+     * handler unused, and does not wait for one already dispatched, so
+     * it buys nothing that rsvc_close() has not already bought -- and
+     * calling it after rsvc_close() would be locking a mutex that
+     * rsvc_close() has destroyed.
+     */
+    dw1000_emulation_stop(e);
 
     pthread_cond_destroy(&e->timer_cond);
     pthread_mutex_destroy(&e->mutex);
@@ -1048,7 +1088,34 @@ void dw1000_emulation_destroy(struct dw1000_emulation *e) {
 }
 
 void dw1000_emulation_reset(struct dw1000_emulation *e) {
+    /* Under the mutex, like every other writer of this state. A host can
+     * drive the reset line at any moment, including while the rsvc
+     * reader is copying a frame into RX_BUFFER or the deadline thread is
+     * part way through an action, and memset-ing every register from
+     * underneath either of those is a plain data race. Safe to take
+     * during dw1000_emulation_create() too: nothing else exists yet to
+     * hold it.
+     */
+    pthread_mutex_lock(&e->mutex);
+
     E_SET_STATE(e, IDLE);
+
+    /* Whatever was programmed is gone with the rest. Without this a
+     * delayed send armed before the reset would still fire afterwards,
+     * into a model that has forgotten it.
+     */
+    e_deadline_disarm_all(e);
+    e->tx_delayed = false;
+    e->tx_rawst   = 0;
+    e->tx_start   = 0;
+    e->tx_pktlen  = 0;
+
+    /* The line is deasserted by the reset, and the model's memory of its
+     * level has to go with it: a stale `true` here would swallow the
+     * first rising edge after the reset, which is the one that says the
+     * chip came back.
+     */
+    e->irq = false;
 
     /* Both pointers to set 0 and nothing outstanding. DIS_DRXB is part
      * of the reset SYS_CFG written below, so the model comes up single
@@ -1104,8 +1171,10 @@ void dw1000_emulation_reset(struct dw1000_emulation *e) {
 
     uint32_t sys_status = 0;
     DW1000_SET_FLG(sys_status, SYS_STATUS_CPLOCK);
-    
+
     E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
+
+    pthread_mutex_unlock(&e->mutex);
 }
 
 
@@ -1290,10 +1359,11 @@ int dw1000_emulation_recv(struct dw1000_emulation *e) {
 }
 
 /* A delayed receive has come due. */
-static void e_deadline_fire_rx(struct dw1000_emulation *e) {
+static void e_deadline_fire_rx(struct dw1000_emulation *e, uint64_t seq) {
     pthread_mutex_lock(&e->mutex);
-    if (!E_IS_STATE(e, RX_WAIT)) {
+    if (!E_IS_STATE(e, RX_WAIT) || !e_deadline_current(e, E_DEADLINE_RX, seq)) {
 	// Cancelled between the deadline expiring and this running.
+	EMU_DEBUG("rx: delayed receive no longer current, dropped");
 	pthread_mutex_unlock(&e->mutex);
 	return;
     }
@@ -1310,11 +1380,19 @@ static void e_deadline_fire_rx(struct dw1000_emulation *e) {
  * not re-enable by itself afterwards whatever the double buffer and
  * auto-re-enable settings say.
  */
-static void e_deadline_fire_rxto(struct dw1000_emulation *e, uint64_t flag) {
+static void e_deadline_fire_rxto(struct dw1000_emulation *e, uint64_t seq,
+				 uint64_t flag) {
     bool edge;
 
     pthread_mutex_lock(&e->mutex);
-    if (!E_IS_STATE(e, RX)) {
+    /* The state check alone is not enough here. A receiver that was
+     * turned off and straight back on is in state RX either way, and
+     * this timeout belongs to the session that was cancelled -- firing
+     * it would end the new one early, and leave the new session's own
+     * timeout to expire later into nothing.
+     */
+    if (!E_IS_STATE(e, RX) || !e_deadline_current(e, E_DEADLINE_RXTO, seq)) {
+	EMU_DEBUG("rx: timeout no longer current, dropped");
 	pthread_mutex_unlock(&e->mutex);
 	return;
     }
@@ -1367,9 +1445,24 @@ static uint64_t e_tx_ton(struct dw1000_emulation *e) {
 		                                : E_TICKS_PER_PSYM_16MHZ);
 }
 
-/* Hand the held frame to the medium server and move to TX. The mutex
- * must NOT be held.
+/* Hand the held frame to the medium server. The mutex must NOT be held;
+ * the caller has already moved the state and taken its own copy of the
+ * packet, which is what keeps the decision to send and the send itself
+ * from being separable.
  */
+static int e_tx_deliver(struct dw1000_emulation *e,
+			struct dw1000_driver_iopkt *pkt, size_t len) {
+    /* Not const: rsvc_i() takes void*, and adding a cast here to keep a
+     * const that the call cannot honour would say less than this does.
+     */
+    if (rsvc_i(e->rsvc, RSVC_UWB_IO, pkt, len) < 0) {
+	EMU_DEBUG("tx_start: sending packet failed");
+	return -1;
+    }
+    return 0;
+}
+
+/* Move to TX and take a copy of the frame, under one hold. */
 static int e_tx_engage(struct dw1000_emulation *e) {
     pthread_mutex_lock(&e->mutex);
     E_SET_STATE(e, TX);
@@ -1377,24 +1470,34 @@ static int e_tx_engage(struct dw1000_emulation *e) {
     size_t                     len = e->tx_pktlen;
     pthread_mutex_unlock(&e->mutex);
 
-    if (rsvc_i(e->rsvc, RSVC_UWB_IO, &pkt, len) < 0) {
-	EMU_DEBUG("tx_start: sending packet failed");
-	return -1;
-    }
-    return 0;
+    return e_tx_deliver(e, &pkt, len);
 }
 
-/* A delayed send has come due. */
-static void e_deadline_fire_tx(struct dw1000_emulation *e) {
+/* A delayed send has come due.
+ *
+ * The check and the commitment are one hold. Splitting them -- test the
+ * state, drop the mutex, retake it and move to TX -- left a window in
+ * which a TRXOFF could find nothing armed (the slot having already been
+ * dequeued), set the model idle, and then have the frame go out anyway
+ * behind the host's back.
+ */
+static void e_deadline_fire_tx(struct dw1000_emulation *e, uint64_t seq) {
+    struct dw1000_driver_iopkt pkt;
+    size_t                     len;
+
     pthread_mutex_lock(&e->mutex);
-    if (!E_IS_STATE(e, TX_WAIT)) {
-	// TRXOFF got here first.
+    if (!E_IS_STATE(e, TX_WAIT) || !e_deadline_current(e, E_DEADLINE_TX, seq)) {
+	// TRXOFF got here first, or this send has already been replaced.
+	EMU_DEBUG("tx: delayed send no longer current, dropped");
 	pthread_mutex_unlock(&e->mutex);
 	return;
     }
+    E_SET_STATE(e, TX);
+    pkt = e->tx_pkt;
+    len = e->tx_pktlen;
     pthread_mutex_unlock(&e->mutex);
 
-    e_tx_engage(e);
+    e_tx_deliver(e, &pkt, len);
 }
 
 
