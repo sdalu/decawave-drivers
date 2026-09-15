@@ -729,6 +729,19 @@ static void e_deadline_disarm_all(struct dw1000_emulation *e) {
 	e->deadline[i].armed = false;
 }
 
+/* The medium server answered a call. Clears the unreachable latch, so
+ * that a server which stalls once and recovers is reported once per
+ * spell rather than once ever.
+ */
+static void e_medium_ok(struct dw1000_emulation *e) {
+    if (!e->medium_gone)
+	return;                 /* the common case, and no lock needed */
+
+    pthread_mutex_lock(&e->mutex);
+    e->medium_gone = false;
+    pthread_mutex_unlock(&e->mutex);
+}
+
 /* The medium server is unreachable.
  *
  * Returns true the first time, so the caller can say so once. Takes the
@@ -741,6 +754,7 @@ static bool e_medium_lost(struct dw1000_emulation *e) {
     pthread_mutex_lock(&e->mutex);
     first = !e->medium_gone;
     e->medium_gone = true;
+
 
     /* Nothing is on the air any more, and nothing is going to complete.
      * Say so in the model's own state rather than leaving it in TX or RX
@@ -1331,10 +1345,11 @@ static int e_rx_engage(struct dw1000_emulation *e) {
 	 * radio with nothing on the other end.
 	 */
 	if (e_medium_lost(e))
-	    EMU_WARNING("the medium server is unreachable; this node will"
-			" neither send nor receive from now on");
+	    EMU_WARNING("the medium server is not answering; this node"
+			" hears and says nothing until it does");
 	return -1;
     }
+    e_medium_ok(e);
     EMU_DEBUG("rx_start: done");
     return 0;
 }
@@ -1505,10 +1520,11 @@ static int e_tx_deliver(struct dw1000_emulation *e,
 	 * every later command on the "transmit in progress" check.
 	 */
 	if (e_medium_lost(e))
-	    EMU_WARNING("the medium server is unreachable; this node will"
-			" neither send nor receive from now on");
+	    EMU_WARNING("the medium server is not answering; this node"
+			" hears and says nothing until it does");
 	return -1;
     }
+    e_medium_ok(e);
     return 0;
 }
 

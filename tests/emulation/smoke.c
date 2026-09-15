@@ -28,10 +28,13 @@
  *    condition variable; dw1000_process_events() is called by the main
  *    thread, which holds nothing.
  *
- *  - the rsvc client blocks on a semaphore for a reply, with no timeout.
- *    A request left unanswered is a hang, not an error, so the stub
- *    answers every type it is sent -- with status -1 for one it does not
- *    know, never by staying silent.
+ *  - the rsvc client blocks on a semaphore for a reply. The wait is
+ *    bounded now (rsvc_set_reply_timeout(), five seconds by default), so
+ *    a request left unanswered is an error rather than a hang -- but
+ *    five seconds is a diagnosis, not a schedule, and a node that spends
+ *    them has already lost whatever timing it had. So the stub still
+ *    answers every type it is sent, with status -1 for one it does not
+ *    know, and never by staying silent.
  *
  * The whole run is under alarm(20) for the hangs that remain possible.
  */

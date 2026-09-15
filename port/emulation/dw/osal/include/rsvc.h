@@ -23,6 +23,7 @@
 #define RSVC_ERR_SOCKET 		-3
 #define RSVC_ERR_DATA_TOO_BIG		-4
 #define RSVC_ERR_THREAD			-5
+#define RSVC_ERR_TIMEOUT		-6
 
 
 /*
@@ -137,6 +138,30 @@ static inline
 int rsvc_o(rsvc_t *rsvc, uint16_t type, void *out, size_t *outlen) {
     return rsvc_call_extended(rsvc, type, NULL, 0, out, outlen, 0);
 }
+
+
+/**
+ * Set how long a call waits for its reply.
+ *
+ * A request that is never answered used to be an unbounded hang -- the
+ * server is another program, and one that does not know a service type,
+ * or has stopped, leaves the caller blocked for ever. The wait is
+ * bounded instead, and a call that runs out returns
+ * @p RSVC_ERR_TIMEOUT.
+ *
+ * The bound is a diagnostic, not a schedule. A reply travels over a
+ * local socket and arrives in microseconds; anything approaching the
+ * default has already broken whatever real-time behaviour the caller
+ * had, and the point of the timeout is that it says so instead of
+ * stopping. Setting it tight enough to expire on a merely slow server
+ * turns a working run into a broken one, so err long.
+ *
+ * Set it before any traffic; it is read without locking on every call.
+ *
+ * @param rsvc		pointer to rsvc context
+ * @param ms		milliseconds, or 0 to wait for ever as before
+ */
+void rsvc_set_reply_timeout(rsvc_t *rsvc, unsigned ms);
 
 
 /**

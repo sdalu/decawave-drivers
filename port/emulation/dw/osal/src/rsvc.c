@@ -37,6 +37,7 @@
 #include <pthread_np.h>
 #endif
 #include <semaphore.h>
+#include <time.h>
 #include <sys/queue.h>
 
 #include "rsvc.h"
@@ -51,6 +52,20 @@
 
 #define RSVC_HDR_FLG_INCLUDE_NICKNAME		0x01
 #define RSVC_HDR_FLG_INTERRUPT			0x02
+
+/* How long a call waits for its reply, when the caller sets nothing.
+ *
+ * Five seconds is not a latency budget. A reply crosses a local socket
+ * in microseconds, and a run that waits even a hundredth of this has
+ * already lost whatever timing it had; this is the point at which "the
+ * server is not going to answer" becomes a safer conclusion than going
+ * on waiting. Long is the safe direction to err: a bound tight enough
+ * to expire on a merely slow server would turn working runs into broken
+ * ones, while one that is too generous only delays a diagnosis.
+ */
+#ifndef RSVC_REPLY_TIMEOUT_MS
+#define RSVC_REPLY_TIMEOUT_MS			5000
+#endif
 
 #ifdef RSVC_WITH_DEBUG
 #  define RSVC_DEBUG(fmt, ...) fprintf(stderr, "[RSVC] "fmt"\n", ##__VA_ARGS__)
@@ -130,6 +145,9 @@ typedef struct rsvc_inprogress {
  * Context for the remote service
  */
 struct rsvc {
+    unsigned reply_timeout_ms;		// bound on waiting for a reply;
+					//  0 waits for ever. See
+					//  rsvc_set_reply_timeout().
     uint8_t connected   : 1;		// status of the connection to the
     uint8_t running     : 1;		//  remote service, intermediate states
     uint8_t initialized : 1;		//  are: connected, running, initialized
@@ -237,6 +255,13 @@ rsvc_register(rsvc_t *rsvc,
     RSVC_UNLOCK(rsvc);
 
     return ok;
+}
+
+
+void
+rsvc_set_reply_timeout(rsvc_t *rsvc, unsigned ms)
+{
+    rsvc->reply_timeout_ms = ms;
 }
 
 
@@ -442,12 +467,84 @@ rsvc_call_extended(rsvc_t *rsvc, uint16_t type,
 	return RSVC_ERR_IO;
     }
 
-    /* Waiting...
+    /* Waiting for the reply, but not for ever.
+     *
+     * The server is another program. One that does not recognise a
+     * service type, or that has stopped, leaves this thread blocked
+     * with nothing to wake it -- and because a node's whole job happens
+     * on these calls, that is a hang rather than an error.
+     *
+     * The deadline is absolute so that an EINTR resumes the same wait
+     * rather than restarting it, which is what a relative timeout would
+     * do and would make a stream of signals defeat the bound entirely.
      */
- wait_again:
-    if (sem_wait(&inprogress.sem) < 0) {
-	assert(errno == EINTR);
-	goto wait_again;
+    if (rsvc->reply_timeout_ms == 0) {
+    wait_forever:
+	if (sem_wait(&inprogress.sem) < 0) {
+	    assert(errno == EINTR);
+	    goto wait_forever;
+	}
+    } else {
+	struct timespec deadline;
+	bool            expired = false;
+
+	clock_gettime(CLOCK_REALTIME, &deadline);
+	deadline.tv_sec  += rsvc->reply_timeout_ms / 1000;
+	deadline.tv_nsec += (long)(rsvc->reply_timeout_ms % 1000) * 1000000L;
+	if (deadline.tv_nsec >= 1000000000L) {
+	    deadline.tv_nsec -= 1000000000L;
+	    deadline.tv_sec  += 1;
+	}
+
+	while (sem_timedwait(&inprogress.sem, &deadline) < 0) {
+	    if (errno == EINTR)
+		continue;
+	    assert(errno == ETIMEDOUT);
+	    expired = true;
+	    break;
+	}
+
+	if (expired) {
+	    /* The wait ran out -- but possibly at the very moment the
+	     * reader was claiming this request, so who owns the entry has
+	     * to be settled before anything is torn down. The list is
+	     * that answer, and it is only meaningful under the lock:
+	     *
+	     *  - still on it: the reader has not reached it, never will
+	     *    now, and it is ours to remove and report.
+	     *  - gone from it: the reader took it, under this same lock,
+	     *    and is on its way to sem_post(). It holds a pointer to
+	     *    `inprogress`, which lives on this stack -- so returning
+	     *    here would pull the semaphore out from under it. Wait
+	     *    for the post, which is a few instructions away, and
+	     *    treat the call as the success it turned out to be.
+	     */
+	    bool ours = false;
+	    rsvc_inprogress_t *ip;
+
+	    RSVC_LOCK(rsvc);
+	    TAILQ_FOREACH(ip, &rsvc->inprogress, entries) {
+		if (ip == &inprogress) {
+		    TAILQ_REMOVE(&rsvc->inprogress, &inprogress, entries);
+		    ours = true;
+		    break;
+		}
+	    }
+	    RSVC_UNLOCK(rsvc);
+
+	    if (ours) {
+		RSVC_DEBUG("call: no reply to type 0x%04x within %u ms",
+			   type, rsvc->reply_timeout_ms);
+		sem_destroy(&inprogress.sem);
+		return RSVC_ERR_TIMEOUT;
+	    }
+
+	claim_again:
+	    if (sem_wait(&inprogress.sem) < 0) {
+		assert(errno == EINTR);
+		goto claim_again;
+	    }
+	}
     }
 
     /* Process reply
@@ -488,6 +585,7 @@ rsvc_open(char *socket_path, char *nickname, int *err)
     TAILQ_INIT(&rsvc->inprogress);
     rsvc->fd = -1;
     rsvc->nickname = nickname;
+    rsvc->reply_timeout_ms = RSVC_REPLY_TIMEOUT_MS;
     
     
     /* Configure UNIX socket connection

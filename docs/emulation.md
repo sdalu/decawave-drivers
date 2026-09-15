@@ -391,6 +391,19 @@ the server replies. A server that takes a millisecond to answer a `TX`
 delays every timeout and every other programmed time by that much. Reply
 promptly and do the work afterwards.
 
+**Every request must be answered.** A node sends `TX` and `RX_CONFIG` as
+ordinary request/reply calls and waits for the reply; there is no
+fire-and-forget. A server that does not recognise a service type must
+answer it with a non-zero status rather than ignore it -- the reference
+server does, by rescuing the exception its dispatch raises and replying
+with an error. The wait is bounded (five seconds by default,
+`rsvc_set_reply_timeout()` to change it), so silence is now reported
+rather than fatal, but the bound exists to diagnose a broken server and
+not to tolerate a slow one: a node that reaches it has already stopped
+behaving like a radio. On a timeout the call returns `RSVC_ERR_TIMEOUT`,
+the model returns to idle, and it says so once until the server answers
+again.
+
 Because the model owns a thread, shutting down has an order, and none of
 it commutes -- the model's thread calls the connection and the
 connection's thread calls the model:

@@ -142,6 +142,12 @@ struct stub {
      */
     bool     shutdown;
 
+    /* When set, an RX_CONFIG is received and simply not answered --
+     * the behaviour of a server that does not know a service type, or
+     * has stopped between the request and the reply.
+     */
+    bool     swallow;
+
     /* Written by the stub thread, read by a step once it has finished. */
     uint8_t  frame[DW1000_FRAME_MAXSIZE];
     size_t   framelen;
@@ -228,11 +234,18 @@ stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 	bool     deliver;
 	size_t   framelen = 0;
 
+	pthread_mutex_lock(&s->lock);
+	s->rxcfg_count++;
+	if (s->swallow) {
+	    pthread_mutex_unlock(&s->lock);
+	    return;                     /* no reply, deliberately */
+	}
+	pthread_mutex_unlock(&s->lock);
+
 	stub_send(s, peer, peerlen, RSVC_UWB_IO, id, 0, 0, NULL, 0);
 
 	memset(&out, 0, sizeof(out));
 	pthread_mutex_lock(&s->lock);
-	s->rxcfg_count++;
 	deliver = s->deliver && s->have_frame;
 	if (deliver) {
 	    framelen         = s->framelen;
@@ -461,8 +474,9 @@ wait_irq(dw1000_t *dw, unsigned timeout_ms)
 #define USEC(x)         ((uint64_t)DW1000_USEC_TO_CLOCK(x))
 #define MSEC(x)         USEC((x) * 1000)
 
-static int  failures;
-static char reason[256];
+static int     failures;
+static char    reason[256];
+static rsvc_t *g_rsvc;          /* the connection step_unanswered_call tunes */
 
 #define REASON(...) (snprintf(reason, sizeof(reason), __VA_ARGS__), reason)
 
@@ -1096,6 +1110,80 @@ step_lifecycle(dw1000_t *dw, struct stub *s)
 }
 
 
+/* A server that does not answer is an error, not a hang.
+ *
+ * Every call a node makes is a request with a reply, and a server that
+ * has stopped -- or that does not recognise a service type, which is
+ * what an older server does with a newer node -- leaves nothing to wake
+ * the caller. That used to block the node for ever, and because a node's
+ * work happens on these calls, for ever meant the run was over with no
+ * indication why. The wait is bounded now.
+ *
+ * Two things are checked, and the second matters as much as the first: 
+ * that the call comes back at all, and that it comes back no sooner than
+ * the bound. A call that failed instantly would also "not hang", and
+ * would be a far worse bug -- it would abandon replies that were merely
+ * in flight.
+ */
+static const char *
+step_unanswered_call(dw1000_t *dw, struct stub *s)
+{
+    struct timespec t0, t1;
+    double          waited_ms;
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    s->swallow = true;
+    pthread_mutex_unlock(&s->lock);
+
+    /* 200 ms rather than the 5 s default: the bound is what is under
+     * test, not its size, and a test should not take five seconds to
+     * prove a timeout works.
+     */
+    rsvc_set_reply_timeout(g_rsvc, 200);
+
+    clock_gettime(CLOCK_REALTIME, &t0);
+    dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+    clock_gettime(CLOCK_REALTIME, &t1);
+
+    waited_ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
+	      + (double)(t1.tv_nsec - t0.tv_nsec) / 1000000.0;
+
+    pthread_mutex_lock(&s->lock);
+    s->swallow = false;
+    pthread_mutex_unlock(&s->lock);
+    rsvc_set_reply_timeout(g_rsvc, 5000);
+
+    if (waited_ms < 150.0)
+	return REASON("the call came back after %.0f ms, before its 200 ms"
+		      " bound: a reply still in flight would have been"
+		      " abandoned", waited_ms);
+    if (waited_ms > 3000.0)
+	return REASON("the call took %.0f ms against a 200 ms bound",
+		      waited_ms);
+
+    /* And the model is usable again: the unanswered call left it idle,
+     * and the unreachable latch cleared when the server answered the
+     * next one. Without that, one stall would silence the node for the
+     * rest of the run.
+     */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = true;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0)
+	return "the receiver could not be restarted after a timed-out call";
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.rx_ok)
+	return "no frame after the server started answering again";
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+    return NULL;
+}
+
+
 /* Defined with the rest of the harness below; this step needs to build a
  * medium of its own, which is the only reason they are used up here.
  */
@@ -1345,6 +1433,7 @@ main(void)
 	return 1;
     }
 
+    g_rsvc    = rsvc;
     emulation = dw1000_emulation_create(rsvc, line_cb, NULL);
     ioline_irq.emulation   = emulation;
     ioline_reset.emulation = emulation;
@@ -1373,6 +1462,7 @@ main(void)
     step("rx frame wait timeout",step_rx_frame_wait_timeout(&dw, &stub));
     step("rx preamble timeout",  step_rx_preamble_timeout(&dw, &stub));
     step("rx frame beats timeout", step_rx_frame_beats_timeout(&dw, &stub));
+    step("unanswered call",      step_unanswered_call(&dw, &stub));
     step("rx delayed",           step_rx_delayed(&dw, &stub));
     step("rx delayed, late",     step_rx_delayed_late(&dw, &stub));
     step("wait4resp auto-rx",    step_wait4resp(&dw, &stub));
