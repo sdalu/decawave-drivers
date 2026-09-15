@@ -687,6 +687,9 @@ step_tx_delayed_after_late(dw1000_t *dw, struct stub *s)
 static const char *
 step_rx_frame_wait_timeout(dw1000_t *dw, struct stub *s)
 {
+    uint64_t started;
+    int64_t  elapsed;
+
     pthread_mutex_lock(&s->lock);
     s->deliver = false;
     pthread_mutex_unlock(&s->lock);
@@ -695,11 +698,25 @@ step_rx_frame_wait_timeout(dw1000_t *dw, struct stub *s)
     dw1000_rx_set_timeout_preamble(dw, 0);      /* RXPTO out of the way */
     dw1000_rx_set_timeout(dw, 19500);           /* ~20 ms, 1.026 us units */
 
+    /* Timed, not just awaited. Checking only that the flag turns up
+     * inside two seconds would pass a model that raised the timeout the
+     * instant the receiver was enabled, which is the failure most worth
+     * catching here: the arithmetic of the period is the thing being
+     * tested, and 19500 units of 65536 ticks is 20 ms.
+     */
+    started = dw1000_get_system_time(dw);
+
     if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0)
 	return "dw1000_rx_start did not start the reception";
 
     if (!wait_irq(dw, IRQ_TIMEOUT_MS))
 	return "no interrupt for the frame wait timeout";
+
+    elapsed = delta(started, dw1000_get_system_time(dw));
+    if (elapsed < (int64_t)MSEC(18))
+	return REASON("RXRFTO came after %" PRId64 " ticks, and 19500"
+		      " units of 65536 ticks is %" PRIu64,
+		      elapsed, (uint64_t)19500 * 65536);
     if (!evt.rx_timeout)
 	return "the rx_timeout callback was not called";
     if (!(evt.rx_timeout_status & DW1000_FLG_SYS_STATUS_RXRFTO))
@@ -719,6 +736,9 @@ step_rx_frame_wait_timeout(dw1000_t *dw, struct stub *s)
 static const char *
 step_rx_preamble_timeout(dw1000_t *dw, struct stub *s)
 {
+    uint64_t started;
+    int64_t  elapsed;
+
     pthread_mutex_lock(&s->lock);
     s->deliver = false;
     pthread_mutex_unlock(&s->lock);
@@ -727,11 +747,24 @@ step_rx_preamble_timeout(dw1000_t *dw, struct stub *s)
     dw1000_rx_set_timeout(dw, 0);               /* RXRFTO out of the way */
     dw1000_rx_set_timeout_preamble(dw, 2456);   /* ~20 ms */
 
+    /* (2456 + 1) PACs of 8 symbols at 508*128 ticks is 20.0 ms, and the
+     * point of timing it is the +1 and the PAC size: a model that used
+     * the programmed value raw, or took the PAC as 16 symbols, would
+     * still raise RXPTO and would still pass an untimed check.
+     */
+    started = dw1000_get_system_time(dw);
+
     if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0)
 	return "dw1000_rx_start did not start the reception";
 
     if (!wait_irq(dw, IRQ_TIMEOUT_MS))
 	return "no interrupt for the preamble detection timeout";
+
+    elapsed = delta(started, dw1000_get_system_time(dw));
+    if (elapsed < (int64_t)MSEC(18) || elapsed > (int64_t)MSEC(30))
+	return REASON("RXPTO came after %" PRId64 " ticks; (2456+1) PACs"
+		      " of 8 symbols is %" PRIu64,
+		      elapsed, (uint64_t)2457 * 8 * 508 * 128);
     if (!evt.rx_timeout)
 	return "the rx_timeout callback was not called";
     if (!(evt.rx_timeout_status & DW1000_FLG_SYS_STATUS_RXPTO))

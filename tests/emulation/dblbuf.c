@@ -115,6 +115,8 @@ struct stub {
     unsigned burst;                     /* frames to send on RX_CONFIG */
     unsigned next_id;                   /* first payload byte of the next */
     unsigned sent;                      /* frames actually sent */
+    int      corrupt;                   /* index in the burst to damage,
+					 * or -1 for none */
 };
 
 static void
@@ -175,14 +177,17 @@ stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 
     case DW1000_RSVC_RX_CONFIG: {
 	unsigned n, first;
+	int      corrupt;
 
 	stub_send(s, peer, peerlen, RSVC_UWB_IO, id, 0, 0, NULL, 0);
 
 	pthread_mutex_lock(&s->lock);
-	n     = s->burst;
-	first = s->next_id;
+	n       = s->burst;
+	first   = s->next_id;
+	corrupt = s->corrupt;
 	s->next_id += n;
 	s->burst    = 0;
+	s->corrupt  = -1;
 	s->sent    += n;
 	pthread_mutex_unlock(&s->lock);
 
@@ -195,6 +200,10 @@ stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 	    out.rx.flags     = 0;
 	    out.rx.timestamp = dw1000_emulation_clock();
 	    framelen = burst_frame(out.rx.frame, first + i);
+
+	    // Damage the FCS of the nominated frame, if any.
+	    if (corrupt >= 0 && (unsigned)corrupt == i)
+		out.rx.frame[framelen - 1] ^= 0xFF;
 
 	    stub_send(s, peer, peerlen, RSVC_UWB_IO, 0, 0,
 		      RSVC_HDR_FLG_INTERRUPT, &out,
@@ -307,6 +316,12 @@ static struct {
     .wake = PTHREAD_COND_INITIALIZER,
 };
 
+static void cb_nothing(dw1000_t *dw, uint32_t status)
+{ (void)dw; (void)status; }
+
+static void cb_rx_nothing(dw1000_t *dw, uint32_t status, size_t len, bool rng)
+{ (void)dw; (void)status; (void)len; (void)rng; }
+
 static void
 line_cb(int line, void *args)
 {
@@ -391,6 +406,34 @@ buffered_frame_id(dw1000_t *dw)
     return byte;
 }
 
+/* Put the chip back to a known state.
+ *
+ * The steps below each make claims about which buffer holds what, and a
+ * step that inherited a half-consumed buffer or a stray RXOVRR from the
+ * one before it would be testing the previous step's leftovers. A hard
+ * reset is the honest way to get there: it is what a host has, it
+ * resets the model's pointers and pending count along with the
+ * registers, and re-running initialise and configure afterwards is what
+ * any host would do.
+ */
+static const dw1000_config_t *g_config;
+static struct dw1000_radio    g_radio;
+
+static const char *
+restart(dw1000_t *dw)
+{
+    dw1000_init(dw, g_config);
+    dw1000_hardreset(dw);
+    if (dw1000_initialise(dw) != 0)
+	return "dw1000_initialise failed on restart";
+    if (dw1000_configure(dw, &g_radio) != 0)
+	return "dw1000_configure failed on restart";
+
+    dw1000_rx_set_timeout(dw, 0);
+    dw1000_rx_set_timeout_preamble(dw, 0);
+    return NULL;
+}
+
 /* Ask the medium for a burst and give the frames time to land. */
 static void
 deliver(dw1000_t *dw, struct stub *s, unsigned n)
@@ -427,6 +470,10 @@ static const char *
 step_one_frame_moves_ic(dw1000_t *dw, struct stub *s)
 {
     int host, ic, id;
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
 
     deliver(dw, s, 1);
 
@@ -457,6 +504,10 @@ static const char *
 step_two_frames_two_sets(dw1000_t *dw, struct stub *s)
 {
     int host, ic, first, second;
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
 
     deliver(dw, s, 2);
 
@@ -493,6 +544,10 @@ static const char *
 step_overrun(dw1000_t *dw, struct stub *s)
 {
     unsigned before, after;
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
 
     pthread_mutex_lock(&s->lock);
     before = s->next_id;
@@ -549,6 +604,10 @@ step_single_buffered(dw1000_t *dw, struct stub *s)
     int host0, ic0, host1, ic1, id;
     unsigned first;
     uint32_t cfg;
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
 
     cfg = _dw1000_reg_read32(dw, DW1000_REG_SYS_CFG, DW1000_OFF_NONE);
     DW1000_SET_FLG(cfg, SYS_CFG_DIS_DRXB);
@@ -586,6 +645,123 @@ step_single_buffered(dw1000_t *dw, struct stub *s)
 		      " single buffered)", id, first);
 
     clear_rx_status(dw);
+    return NULL;
+}
+
+
+/* The second buffered frame must raise the interrupt line.
+ *
+ * IRQS is the OR of the unmasked status bits *as the host sees them*
+ * (UM 7.2.17), and four of those bits are per-buffer. A model that took
+ * them from the IC's set instead would, with both buffers full, look at
+ * the set the IC had already swung away from and find nothing: IRQS
+ * reads zero, no edge is raised, and the second frame sits unnoticed
+ * until a third one arrives. That is what this pins.
+ */
+static const char *
+step_second_frame_interrupts(dw1000_t *dw, struct stub *s)
+{
+    uint32_t mask, st;
+    unsigned first;
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
+
+    pthread_mutex_lock(&s->lock);
+    first = s->next_id;
+    pthread_mutex_unlock(&s->lock);
+
+    mask = _dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE);
+    if (!(mask & DW1000_FLG_SYS_STATUS_RXFCG))
+	return "RXFCG is masked, so this step would prove nothing";
+
+    deliver(dw, s, 2);
+
+    // First frame: in the set the host is on, and the line is asserted.
+    if (buffered_frame_id(dw) != (int)first)
+	return REASON("the host's buffer holds frame %d, want %u",
+		      buffered_frame_id(dw), first);
+    st = sys_status(dw);
+    if (!(st & DW1000_FLG_SYS_STATUS_IRQS))
+	return "IRQS is clear with a frame waiting in the host's buffer";
+
+    // Consume it and move on to the second.
+    clear_rx_status(dw);
+    hrbpt(dw);
+
+    if (buffered_frame_id(dw) != (int)(first + 1))
+	return REASON("the second buffer holds frame %d, want %u",
+		      buffered_frame_id(dw), first + 1);
+
+    st = sys_status(dw);
+    if (!(st & DW1000_FLG_SYS_STATUS_RXFCG))
+	return "the second buffer carries no RXFCG";
+    if (!(st & DW1000_FLG_SYS_STATUS_IRQS))
+	return REASON("IRQS is clear although RXFCG is set and unmasked in"
+		      " the set the host is now on (status 0x%08" PRIx32
+		      ", mask 0x%08" PRIx32 ")", st, mask);
+
+    clear_rx_status(dw);
+    hrbpt(dw);
+    return NULL;
+}
+
+/* A frame with a bad FCS does not move the IC pointer.
+ *
+ * UM 4.3.2: "In the case that a received frame is rejected by frame
+ * filtering or bad CRC the ICRBP will not move on and the buffer will be
+ * reused for the next incoming frame." So of a burst of two whose first
+ * is damaged, only the second is kept, and it is kept in the buffer the
+ * damaged one landed in.
+ */
+static const char *
+step_bad_crc_keeps_buffer(dw1000_t *dw, struct stub *s)
+{
+    int host_before, ic_before, host_after, ic_after, id;
+    unsigned first;
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
+
+    buffer_pointers(dw, &host_before, &ic_before);
+
+    pthread_mutex_lock(&s->lock);
+    first      = s->next_id;
+    s->corrupt = 0;             /* damage the first of the two */
+    pthread_mutex_unlock(&s->lock);
+
+    deliver(dw, s, 2);
+
+    /* One frame was kept, not two: the IC pointer moved once, so it now
+     * differs from the host's, which has not moved at all.
+     */
+    buffer_pointers(dw, &host_after, &ic_after);
+    if (host_after != host_before)
+	return REASON("HSRBP moved on its own, %d to %d",
+		      host_before, host_after);
+    if (ic_after == ic_before)
+	return "ICRBP did not move for the good frame of the pair";
+    if (ic_after == ((ic_before + 2) % 2))
+	return "ICRBP moved twice, so the damaged frame was kept";
+
+    // And what is in the buffer is the good frame, not the damaged one.
+    id = buffered_frame_id(dw);
+    if (id != (int)(first + 1))
+	return REASON("the buffer holds frame %d, want %u: the damaged"
+		      " frame's buffer must have been reused",
+		      id, first + 1);
+
+    /* RXFCE is deliberately not checked. The damaged frame set it in
+     * this buffer and the good frame then reused the very same buffer --
+     * which is the behaviour under test -- so its RXFCG has replaced it.
+     * A buffer that still showed RXFCE here would mean the good frame
+     * had gone somewhere else.
+     */
+
+    clear_rx_status(dw);
+    hrbpt(dw);
     return NULL;
 }
 
@@ -628,7 +804,8 @@ stub_start(struct stub *s, const char *path, pthread_t *thread)
     struct sockaddr_un addr;
 
     memset(s, 0, sizeof(*s));
-    s->fd = -1;
+    s->fd      = -1;
+    s->corrupt = -1;
     pthread_mutex_init(&s->lock, NULL);
 
     if ((size_t)snprintf(s->path, sizeof(s->path), "%s", path) >=
@@ -680,10 +857,15 @@ main(void)
 	.rxauto           = 1,
 	.tx_antenna_delay = 16436,
 	.rx_antenna_delay = 16436,
-	.cb.tx_done       = NULL,
-	.cb.rx_ok         = NULL,
-	.cb.rx_error      = NULL,
-	.cb.rx_timeout    = NULL,
+	/* Present but empty. Nothing here waits on a callback -- the steps
+	 * read registers -- but dw1000_initialise() unmasks only the
+	 * events it has somewhere to report, and one step needs RXFCG
+	 * unmasked to have an IRQS worth checking.
+	 */
+	.cb.tx_done       = cb_nothing,
+	.cb.rx_ok         = cb_rx_nothing,
+	.cb.rx_error      = cb_nothing,
+	.cb.rx_timeout    = cb_nothing,
     };
 
     struct dw1000_radio radio = {
@@ -743,9 +925,14 @@ main(void)
     dw1000_rx_set_timeout(&dw, 0);
     dw1000_rx_set_timeout_preamble(&dw, 0);
 
+    g_config = &config;
+    g_radio  = radio;
+
     step("aligned at reset",        step_aligned_at_reset(&dw, &stub));
     step("one frame moves ICRBP",   step_one_frame_moves_ic(&dw, &stub));
     step("two frames, two sets",    step_two_frames_two_sets(&dw, &stub));
+    step("second frame interrupts", step_second_frame_interrupts(&dw, &stub));
+    step("bad crc keeps buffer",    step_bad_crc_keeps_buffer(&dw, &stub));
     step("three frames overrun",    step_overrun(&dw, &stub));
     step("single buffered",         step_single_buffered(&dw, &stub));
 
