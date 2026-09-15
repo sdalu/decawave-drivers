@@ -231,6 +231,15 @@ send has to carry its own. A lead below the airtime is refused with -1,
 so a default left over from a shorter preamble shows up at the next send
 rather than as a lost frame.
 
+Measured leads, for scale. Both spank's `delayed_send_estimator` and the
+gem's `estimate_delayed_send_lead_time` binary-search the delay they
+pass, so what they report is the whole lead and already carries the
+airtime of the preamble in use. At 128 symbols (138 us of airtime) an
+nRF52 at 8 or 16 MHz SPI needed 0.27 ms, a Raspberry Pi 4 over spidev at
+20 MHz 0.16 ms, a Pi 4B 0.173 ms; the host term alone is therefore
+roughly 132 us, 22 us and 35 us. Read such a figure as a lead for that
+preamble, not as something to add the airtime to.
+
 Transmit power is deliberately not among them: it is part of
 `dw1000_radio_t`, and `DW1000_TX_POWER(dB)` names it outright, so a board
 whose RF path differs from the reference one is corrected where the radio

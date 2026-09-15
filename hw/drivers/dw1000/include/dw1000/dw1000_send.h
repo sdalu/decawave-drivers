@@ -139,10 +139,18 @@
  *        symbol preamble but 4.2 ms at 4096. On top of it goes the
  *        host's own latency: between the read of the system time and
  *        TXSTRT sit the DX_TIME write, the timestamp write and the
- *        SYS_CTRL write, plus the chip's transmit power-up. Measured on
- *        2026-09-14 (spank's delayed-send estimator, a maximum-size
- *        frame): 0.27 ms on an nRF52 at 8 or 16 MHz SPI, 0.16 ms on a
- *        Raspberry Pi 4 over spidev at 20 MHz.
+ *        SYS_CTRL write, plus the chip's transmit power-up.
+ * @note  What the estimators report is the sum, not the second term.
+ *        Both spank's delayed-send estimator and the gem's
+ *        DW1000#estimate_delayed_send_lead_time binary-search the delay
+ *        they pass, which is the whole lead, so their figures already
+ *        carry the airtime of whatever preamble was configured.
+ *        Measured on 2026-09-14 at a 128 symbol preamble (138 us of
+ *        airtime): 0.27 ms on an nRF52 at 8 or 16 MHz SPI, 0.16 ms on a
+ *        Raspberry Pi 4 over spidev at 20 MHz, 0.173 ms on a
+ *        Raspberry Pi 4B. Subtracting the airtime leaves roughly 132 us,
+ *        22 us and 35 us of host latency. Take such a figure as a lead
+ *        for that preamble, not as a term to add one to.
  * @note  The airtime term is only known once @p dw1000_configure() has
  *        run, and it changes with the preamble: call this after the
  *        radio is configured, and again if it is reconfigured. A lead
