@@ -92,20 +92,14 @@ struct  __attribute__((packed,aligned(1))) dw1000_driver_iopkt {
 
 
 
+/* The length actually put on the wire, for each message the port sends.
+ * A `frame` array is declared at its maximum and sent at its true
+ * length, so a TX packet stops after the frame's last byte.
+ */
 #define DW1000_DRIVER_PKT_HDRLEN						\
     (sizeof(uintptr_t) + sizeof(uint8_t))
 #define DW1000_DRIVER_PKT_DATALEN(field)					\
     sizeof(((struct dw1000_driver_iopkt*)NULL)->field)
-
-
-#define DW1000_DRIVER_PKTMAXLEN_INIT						\
-    (DW1000_DRIVER_PKT_HDRLEN + DW1000_DRIVER_PKT_DATALEN(init))
-
-#define DW1000_DRIVER_PKTMAXLEN_INIT_ACK					\
-    (DW1000_DRIVER_PKT_HDRLEN + DW1000_DRIVER_PKT_DATALEN(init_ack))
-
-#define DW1000_DRIVER_PKTMAXLEN_DESTROY						\
-    (DW1000_DRIVER_PKT_HDRLEN + DW1000_DRIVER_PKT_DATALEN(destroy))
 
 #define DW1000_DRIVER_PKTMAXLEN_TX						\
     (DW1000_DRIVER_PKT_HDRLEN + DW1000_DRIVER_PKT_DATALEN(tx))
@@ -113,14 +107,6 @@ struct  __attribute__((packed,aligned(1))) dw1000_driver_iopkt {
 #define DW1000_DRIVER_PKTMAXLEN_RX_CONFIG					\
     (DW1000_DRIVER_PKT_HDRLEN + DW1000_DRIVER_PKT_DATALEN(rx_config))
 
-
-
-
-#define DW1000_DRIVER_PKTLEN_INIT(strlen)					\
-    (DW1000_DRIVER_PKTMAXLEN_INIT - DW1000_DRIVER_NICKNAME_MAXLEN + (strlen))
-
-#define DW1000_DRIVER_PKTLEN_DESTROY()						\
-    DW1000_DRIVER_PKTMAXLEN_DESTROY
 
 #define DW1000_DRIVER_PKTLEN_TX(framelen)					\
     (DW1000_DRIVER_PKTMAXLEN_TX - DW1000_FRAME_MAXSIZE + (framelen))

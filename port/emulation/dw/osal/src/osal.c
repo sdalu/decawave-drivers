@@ -103,7 +103,16 @@ struct dw1000_emulation {
 #define TRACE_LEAVE() EMU_DEBUG("<-- %s", __func__);
 
 
-void e_raise_interrupt(struct dw1000_emulation *e);
+/* The interrupt line, in two halves. e_irq_update() recomputes IRQS from
+ * SYS_STATUS and SYS_MASK and reports whether the line just went from low
+ * to high; it touches registers, so it runs with the model's mutex held.
+ * e_irq_fire() is the call out to whoever owns the line, and runs with the
+ * mutex *released*: it lands in code this port does not own, and holding a
+ * non-recursive lock across a callback into a driver is how the caller
+ * ends up deadlocked against its own SPI transfer.
+ */
+static bool e_irq_update(struct dw1000_emulation *e);
+static void e_irq_fire(struct dw1000_emulation *e);
 
 
 E_DEFINE_PASSTHROUGH(SYS_STATUS, 0xff, 0x1b, 0xff, 0xff, 0xff);
@@ -688,7 +697,10 @@ int dw1000_emulation_send(struct dw1000_emulation *e) {
     if (sfcst) {
 	// CRC has been provided, copy 
 	memcpy(iopkt.tx.frame, &E_REG_DATA_KEY(e, TX_BUFFER)[offset], len);
-	crc16 = dw1000_le16_to_cpu(*(uint16_t *)&iopkt.tx.frame[len - 2]);
+	// memcpy, not a cast: see the receive path for why
+	uint16_t fcs;
+	memcpy(&fcs, &iopkt.tx.frame[len - 2], sizeof(fcs));
+	crc16 = dw1000_le16_to_cpu(fcs);
     } else {
 	// CRC need to be computed
 	DW1000_ASSERT(len >= 2, "frame long enough to hold the FCS");
@@ -817,11 +829,19 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
     }
     pthread_mutex_unlock(&e->mutex);
 
-    
     if (send) dw1000_emulation_send(e);
     if (recv) dw1000_emulation_recv(e);
 
-    e_raise_interrupt(e);
+    /* IRQS is derived from SYS_STATUS and SYS_MASK, so recomputing it is a
+     * read-modify-write of a register and belongs under the mutex -- which
+     * it was not, and a frame arriving on the rsvc reader thread between
+     * the two reads here left IRQS describing neither status.
+     */
+    pthread_mutex_lock(&e->mutex);
+    bool edge = e_irq_update(e);
+    pthread_mutex_unlock(&e->mutex);
+
+    if (edge) e_irq_fire(e);
 }
 
 void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
@@ -854,6 +874,7 @@ void _dw1000_spi_high_speed(dw1000_spi_driver_t *spi) {
 void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, void *args) {
     struct dw1000_driver_iopkt *iopkt = data;
     struct dw1000_emulation    *e     = args;
+    bool                        edge  = false;
 
     /* The service type is what got us here, and the connection is reached
      * through the emulation; neither is needed again.
@@ -881,10 +902,16 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	// Ranging
 	bool ranging = iopkt->rx.flags & DW1000_RSVC_FLG_RANGING;
 
-	// Compute CRC
-	uint16_t crc    = e_crc16_ccitt(iopkt->rx.frame, framelen - 2);
-	bool     crc_ok = dw1000_cpu_to_le16(crc) ==
-	                  *(uint16_t *)&iopkt->rx.frame[framelen - 2];
+	/* Compute the FCS and compare it with the two bytes the frame
+	 * carries. Read through memcpy: `frame` is a member of a packed
+	 * struct at an offset that is not a multiple of two, so casting
+	 * into it is an unaligned access, undefined and a fault on the
+	 * architectures that trap it.
+	 */
+	uint16_t crc = e_crc16_ccitt(iopkt->rx.frame, framelen - 2);
+	uint16_t fcs;
+	memcpy(&fcs, &iopkt->rx.frame[framelen - 2], sizeof(fcs));
+	bool crc_ok = crc == dw1000_le16_to_cpu(fcs);
 	
         // Debug info
         EMU_DEBUG("RSVC INT <RX_DONE>"
@@ -923,7 +950,7 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 
 	// Reception time
 	// (adjusted to take into account antenna delay)
-	uint64_t rx_time = dw1000_cpu_to_le64(iopkt->rx.timestamp);
+	uint64_t rx_time = dw1000_le64_to_cpu(iopkt->rx.timestamp);
 	E_REG_IC_WRITE40_KEY(e, rx_time, RX_TIME, RX_TIME_RX_STAMP);
 	
 	// Raw transmission time
@@ -969,7 +996,7 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 
         // Transmission time
 	// (adjusted to take into account antenna delay)
-	uint64_t tx_time = dw1000_cpu_to_le64(iopkt->tx_done.timestamp);
+	uint64_t tx_time = dw1000_le64_to_cpu(iopkt->tx_done.timestamp);
 	E_REG_IC_WRITE40_KEY(e, tx_time, TX_TIME, TX_TIME_TX_STAMP);
 
 	// Raw transmission time
@@ -1010,14 +1037,19 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
     }
 
 
-    e_raise_interrupt(e);
+    edge = e_irq_update(e);
 
  done:
     pthread_mutex_unlock(&e->mutex);
+
+    if (edge) e_irq_fire(e);
 }
 
 
-void e_raise_interrupt(struct dw1000_emulation *e) {
+/* Recompute IRQS and report the rising edge. The model's mutex must be
+ * held; nothing here leaves the model.
+ */
+static bool e_irq_update(struct dw1000_emulation *e) {
     // Re-compute interruption flag IRQS
     uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
     uint32_t sys_mask   = E_REG_IC_READ32_KEY(e, SYS_MASK);
@@ -1028,13 +1060,19 @@ void e_raise_interrupt(struct dw1000_emulation *e) {
     else      { DW1000_CLR_FLG(sys_status, SYS_STATUS_IRQS); }
     E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
 
-    // Raise interrupts (only on state change)
-    if (!e->irq && irqs) {
-	EMU_DEBUG("posting interrupt");	
-	if (e->line_cb)
-	    e->line_cb(DW1000_IOLINE_IRQ, e->line_args);
-    }
+    // The line is level-sensitive on the chip; what a host sees is the
+    // edge, so only the low-to-high transition is reported.
+    bool edge = !e->irq && irqs;
     e->irq = irqs;
+    return edge;
+}
+
+/* Drive the line. The model's mutex must NOT be held.
+ */
+static void e_irq_fire(struct dw1000_emulation *e) {
+    EMU_DEBUG("posting interrupt");
+    if (e->line_cb)
+	e->line_cb(DW1000_IOLINE_IRQ, e->line_args);
 }
 
 

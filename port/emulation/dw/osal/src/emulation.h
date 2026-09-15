@@ -190,30 +190,30 @@ struct e_register {
     e_reg_read_##mode(e, DW1000_REG_##idx, DW1000_OFF_NONE, system)
 
 #define _E_REG_IC_WRITE16_KEY_OFF(_e, v, idx, off)			\
-    _E_REG_WRITE_BITS_OFF(16, e, v, idx, off, true)
-#define _E_REG_IC_WRITE16_KEY_0(e, v, idx)				\
-    _E_REG_WRITE_BITS_0(16, e, v, idx, true)
+    _E_REG_WRITE_BITS_OFF(16, _e, v, idx, off, true)
+#define _E_REG_IC_WRITE16_KEY_0(_e, v, idx)				\
+    _E_REG_WRITE_BITS_0(16, _e, v, idx, true)
 #define _E_REG_IC_WRITE32_KEY_OFF(_e, v, idx, off)			\
-    _E_REG_WRITE_BITS_OFF(32, e, v, idx, off, true)
-#define _E_REG_IC_WRITE32_KEY_0(e, v, idx)				\
-    _E_REG_WRITE_BITS_0(32, e, v, idx, true)
+    _E_REG_WRITE_BITS_OFF(32, _e, v, idx, off, true)
+#define _E_REG_IC_WRITE32_KEY_0(_e, v, idx)				\
+    _E_REG_WRITE_BITS_0(32, _e, v, idx, true)
 #define _E_REG_IC_WRITE40_KEY_OFF(_e, v, idx, off)			\
-    _E_REG_WRITE_BITS_OFF(40, e, v, idx, off, true)
+    _E_REG_WRITE_BITS_OFF(40, _e, v, idx, off, true)
 #define _E_REG_IC_WRITE40_KEY_0(_e, v, idx)				\
-    _E_REG_WRITE_BITS_0(40, e, v, idx, true)
+    _E_REG_WRITE_BITS_0(40, _e, v, idx, true)
 
-#define _E_REG_IC_READ16_KEY_OFF(e, idx, off)				\
-    _E_REG_READ_BITS_OFF(16, e, idx, off, true)
+#define _E_REG_IC_READ16_KEY_OFF(_e, idx, off)				\
+    _E_REG_READ_BITS_OFF(16, _e, idx, off, true)
 #define _E_REG_IC_READ16_KEY_0(_e, idx)					\
-    _E_REG_READ_BITS_0(16, e, idx, true)
-#define _E_REG_IC_READ32_KEY_OFF(e, idx, off)				\
-    _E_REG_READ_BITS_OFF(32, e, idx, off, true)
-#define _E_REG_IC_READ32_KEY_0(e, idx)					\
-    _E_REG_READ_BITS_0(32, e, idx, true)
-#define _E_REG_IC_READ40_KEY_OFF(e, idx, off)				\
-    _E_REG_READ_BITS_OFF(40, e, idx, off, true)
-#define _E_REG_IC_READ40_KEY_0(e, idx)					\
-    _E_REG_READ_BITS_0(40, e, idx, true)
+    _E_REG_READ_BITS_0(16, _e, idx, true)
+#define _E_REG_IC_READ32_KEY_OFF(_e, idx, off)				\
+    _E_REG_READ_BITS_OFF(32, _e, idx, off, true)
+#define _E_REG_IC_READ32_KEY_0(_e, idx)					\
+    _E_REG_READ_BITS_0(32, _e, idx, true)
+#define _E_REG_IC_READ40_KEY_OFF(_e, idx, off)				\
+    _E_REG_READ_BITS_OFF(40, _e, idx, off, true)
+#define _E_REG_IC_READ40_KEY_0(_e, idx)					\
+    _E_REG_READ_BITS_0(40, _e, idx, true)
 
 
 /*
@@ -236,18 +236,18 @@ struct e_register {
     _E_GET_OVERRIDE_3(__VA_ARGS__, _E_REG_HOST_READ40_KEY_OFF,		\
                                    _E_REG_HOST_READ40_KEY_0)(__VA_ARGS__)
 
-#define _E_REG_HOST_READ16_KEY_OFF(e, idx, off)				\
-    _E_REG_READ_BITS_OFF(16, e, idx, off, false)
+#define _E_REG_HOST_READ16_KEY_OFF(_e, idx, off)			\
+    _E_REG_READ_BITS_OFF(16, _e, idx, off, false)
 #define _E_REG_HOST_READ16_KEY_0(_e, idx)				\
-    _E_REG_READ_BITS_0(16, e, idx, false)
-#define _E_REG_HOST_READ32_KEY_OFF(e, idx, off)				\
-    _E_REG_READ_BITS_OFF(32, e, idx, off, false)
-#define _E_REG_HOST_READ32_KEY_0(e, idx)				\
-    _E_REG_READ_BITS_0(32, e, idx, false)
-#define _E_REG_HOST_READ40_KEY_OFF(e, idx, off)				\
-    _E_REG_READ_BITS_OFF(40, e, idx, off, false)
-#define _E_REG_HOST_READ40_KEY_0(e, idx)				\
-    _E_REG_READ_BITS_0(40, e, idx, false)
+    _E_REG_READ_BITS_0(16, _e, idx, false)
+#define _E_REG_HOST_READ32_KEY_OFF(_e, idx, off)			\
+    _E_REG_READ_BITS_OFF(32, _e, idx, off, false)
+#define _E_REG_HOST_READ32_KEY_0(_e, idx)				\
+    _E_REG_READ_BITS_0(32, _e, idx, false)
+#define _E_REG_HOST_READ40_KEY_OFF(_e, idx, off)			\
+    _E_REG_READ_BITS_OFF(40, _e, idx, off, false)
+#define _E_REG_HOST_READ40_KEY_0(_e, idx)				\
+    _E_REG_READ_BITS_0(40, _e, idx, false)
 
 
 
