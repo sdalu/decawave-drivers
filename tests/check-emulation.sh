@@ -38,7 +38,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 # Not a glob over tests/emulation: tests/check-manifest.sh exists to
 # punish a build step that discovers its own inputs, and a test added
 # here should be added here deliberately.
-tests="smoke timing"
+tests="smoke timing dblbuf"
 
 status=0
 for t in $tests; do

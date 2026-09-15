@@ -118,11 +118,25 @@ struct e_register {
 
 
 
-#define E_SWINGSET_IC(e)						\
-    (DW1000_GET_FLG(E_REG_IC_READ32_KEY(e, SYS_STATUS), SYS_STATUS_ICRBP) ? 1 : 0)
+/* Which of the two register sets a side is looking at.
+ *
+ * UM table 7 duplicates seven registers and four SYS_STATUS bits; the
+ * host reaches the set named by HSRBP and the IC the one named by
+ * ICRBP. Read from the model's own fields rather than from SYS_STATUS,
+ * which is where the chip keeps them: selecting a set is what every
+ * register access starts with, so asking a register for the answer
+ * would be asking it of itself. The two are kept in step -- the fields
+ * are what decides, the status bits are what the host reads.
+ *
+ * With DIS_DRXB set, which is the reset value, there is one buffer and
+ * both sides are on set 0.
+ */
+#define E_SWINGSET_IC(e)	((e)->dblbuf ? (e)->rbp_ic   : 0)
+#define E_SWINGSET_HOST(e)	((e)->dblbuf ? (e)->rbp_host : 0)
 
-#define E_SWINGSET_HOST(e)						\
-    (DW1000_GET_FLG(E_REG_IC_READ32_KEY(e, SYS_STATUS), SYS_STATUS_HSRBP) ? 1 : 0)
+/* ... and which one a given access uses. `system` is the IC. */
+#define E_SWINGSET(e, system)						\
+    ((system) ? E_SWINGSET_IC(e) : E_SWINGSET_HOST(e))
 
 
 
@@ -130,7 +144,11 @@ struct e_register {
 #define E_REG_KEY(e, idx)         E_REG(e, DW1000_REG_##idx)
 
 
-#define E_REG_DATA(e, idx)	(E_REG(e,idx)->data[(e)->swing_set])
+/* The IC's view of a register's bytes: what the model itself reads and
+ * writes. A host-side equivalent is not needed; the host only ever
+ * arrives through e_reg_read()/e_reg_write().
+ */
+#define E_REG_DATA(e, idx)	(E_REG(e,idx)->data[E_SWINGSET_IC(e)])
 #define E_REG_DATA_KEY(e, idx)	E_REG_DATA(e, DW1000_REG_##idx)
 
 

@@ -69,8 +69,20 @@ struct dw1000_emulation {
     void               (*line_cb)(int line, void *args);
     void                *line_args;
     int 		state;
-    int 		swing_set;
     bool                irq;
+
+    /* The double receive buffer of UM 4.3. `dblbuf` is DIS_DRXB
+     * inverted, tracked as the host writes SYS_CFG; `rbp_host` moves on
+     * the HRBPT command and `rbp_ic` on each frame received with a good
+     * CRC, and both are mirrored into the HSRBP and ICRBP status bits
+     * where a host reads them. `pending` counts frames the IC has put
+     * in a buffer that the host has not released yet: at two, both
+     * buffers are full and the next frame is an overrun.
+     */
+    bool		dblbuf;
+    int			rbp_host;
+    int			rbp_ic;
+    unsigned		pending;
 
     /* The deadline thread. The chip meets a programmed time by counting
      * its own clock; the model has no tick to count, so it sleeps until
@@ -373,6 +385,91 @@ static uint64_t e_clock_forward(uint64_t now_full, uint64_t at) {
 }
 
 
+/*-- The double receive buffer -----------------------------------------*/
+
+/* Publish the two buffer pointers into SYS_STATUS.
+ *
+ * HSRBP and ICRBP are bits 30 and 31, which the passthrough mask puts
+ * outside the swinging part of SYS_STATUS, so one write reaches both
+ * sets and a host reads the same answer whichever set it is on. The
+ * mutex must be held.
+ */
+static void e_dblbuf_publish(struct dw1000_emulation *e) {
+    uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
+
+    if (e->rbp_host) DW1000_SET_FLG(sys_status, SYS_STATUS_HSRBP);
+    else             DW1000_CLR_FLG(sys_status, SYS_STATUS_HSRBP);
+    if (e->rbp_ic)   DW1000_SET_FLG(sys_status, SYS_STATUS_ICRBP);
+    else             DW1000_CLR_FLG(sys_status, SYS_STATUS_ICRBP);
+
+    E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
+}
+
+/* The HRBPT command: the host is done with the buffer it holds.
+ *
+ * UM 4.3.2: "Every time the HRBPT command is issued the HSRBP status bit
+ * will toggle", and UM 4.3.5: "The overrun condition and the RXOVRR
+ * status bit will be cleared as soon as the host issues the HRBPT
+ * command." The mutex must be held.
+ */
+static void e_dblbuf_toggle_host(struct dw1000_emulation *e) {
+    e->rbp_host = !e->rbp_host;
+    if (e->pending > 0)
+	e->pending--;
+
+    uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
+    DW1000_CLR_FLG(sys_status, SYS_STATUS_RXOVRR);
+    E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
+
+    e_dblbuf_publish(e);
+    EMU_DEBUG("dblbuf: HRBPT, host now on set %d (ic %d, %u pending)",
+	      e->rbp_host, e->rbp_ic, e->pending);
+}
+
+
+/* Does the receiver come back on by itself?
+ *
+ * UM 5.3.2, the RXAUTR configuration bit. It is what makes the double
+ * buffer worth having: without it the host has to re-enable between
+ * frames, so a second frame can never arrive while the first is still
+ * unread and an overrun cannot happen.
+ *
+ * Nothing is sent to the medium server when the receiver comes back
+ * this way. RX_CONFIG is a request, answered synchronously, and the
+ * only place this is decided is inside the rsvc reader's own callback
+ * -- which is the thread that would have to read the reply. The
+ * reference server applies no behaviour to RX_CONFIG anyway
+ * (docs/emulation.md), so the model's state is the whole of it.
+ */
+static bool e_rx_auto_reenable(struct dw1000_emulation *e) {
+    uint32_t sys_cfg = E_REG_IC_READ32_KEY(e, SYS_CFG);
+    return DW1000_GET_FLG(sys_cfg, SYS_CFG_RXAUTR);
+}
+
+/* A frame has been taken: the IC moves to the other set.
+ *
+ * UM 4.3.2: "Reception of a new frame with good CRC will cause the ICRBP
+ * bit to increment (or toggle). In the case that a received frame is
+ * rejected by frame filtering or bad CRC the ICRBP will not move on and
+ * the buffer will be reused for the next incoming frame." So this is
+ * called for a good frame and nothing else.
+ *
+ * Called after the interrupt has been worked out, not before: everything
+ * about the frame -- its status bits included -- belongs to the set the
+ * IC was on while writing it.
+ */
+static void e_dblbuf_advance_ic(struct dw1000_emulation *e) {
+    if (!e->dblbuf)
+	return;
+
+    e->rbp_ic = !e->rbp_ic;
+    e->pending++;
+    e_dblbuf_publish(e);
+    EMU_DEBUG("dblbuf: frame taken, ic now on set %d (host %d, %u pending)",
+	      e->rbp_ic, e->rbp_host, e->pending);
+}
+
+
 /*-- Deadlines ---------------------------------------------------------*/
 
 /* Arm, disarm, and wait. Every one of these needs the model's mutex held
@@ -561,8 +658,9 @@ void e_reg_write(struct dw1000_emulation *e, int idx, size_t offset,
     e_reg_sanitize(e, idx, length, offset);
 
     struct e_register *reg        = E_REG(e, idx);
-    uint8_t           *reg_data_c = reg->data[e->swing_set];
-    uint8_t           *reg_data_o = reg->data[(e->swing_set + 1) % 2];
+    int                side       = E_SWINGSET(e, system);
+    uint8_t           *reg_data_c = reg->data[side];
+    uint8_t           *reg_data_o = reg->data[(side + 1) % 2];
     size_t             reg_start  = 0;
     size_t             reg_end    = offset + length;
     int                seg_idx    = 0;
@@ -640,7 +738,7 @@ void e_reg_read(struct dw1000_emulation *e, int idx,  size_t offset,
 
 
     struct e_register *reg       = E_REG(e, idx);
-    uint8_t           *reg_data  = reg->data[e->swing_set];
+    uint8_t           *reg_data  = reg->data[E_SWINGSET(e, system)];
     size_t             reg_start = 0;
     size_t             reg_end   = offset + length;
     int                seg_idx   = 0;
@@ -711,8 +809,6 @@ dw1000_emulation_create(rsvc_t *rsvc,
     e->line_cb   = line_cb;
     e->line_args = line_args;
    
-    e->swing_set = 0;
-
     E_SET_STATE(e, OFF);
     
     E_REG_ATTACH(e, SYS_TIME,    SINGLE); // refreshed on every read
@@ -798,7 +894,15 @@ void dw1000_emulation_destroy(struct dw1000_emulation *e) {
 
 void dw1000_emulation_reset(struct dw1000_emulation *e) {
     E_SET_STATE(e, IDLE);
-    e->swing_set = 0;
+
+    /* Both pointers to set 0 and nothing outstanding. DIS_DRXB is part
+     * of the reset SYS_CFG written below, so the model comes up single
+     * buffered, which is what the chip does (UM 4.3.1).
+     */
+    e->dblbuf   = false;
+    e->rbp_host = 0;
+    e->rbp_ic   = 0;
+    e->pending  = 0;
 
     // Clear everything
     for (int i = 0 ; i < DW1000_COUNT_REGISTERS ; i++) {
@@ -1006,11 +1110,19 @@ int dw1000_emulation_recv(struct dw1000_emulation *e) {
     DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_RXDLYE);
     E_REG_IC_WRITE32_KEY(e, sys_ctrl, SYS_CTRL);
 
-    // Sanity check
-    DW1000_ASSERT(E_IS_STATE(e, IDLE),
-		  "receiver enabled from idle");
+    /* Sanity check.
+     *
+     * Not "the model is idle": with RXAUTR the receiver puts itself back
+     * on after every frame (UM 5.3.2), so a host that enables it again
+     * -- which dw1000_rx_start() does on each call -- finds it already
+     * on, and the chip takes that in its stride. What is not allowed is
+     * enabling the receiver on top of a transmission.
+     */
+    DW1000_ASSERT(! E_IS_STATE(e, TX) && ! E_IS_STATE(e, TX_WAIT),
+		  "receiver not enabled during a transmission");
     DW1000_ASSERT(! DW1000_GET_FLG(sys_ctrl, SYS_CTRL_TXSTRT),
 		  "receiver enabled with no transmit pending");
+
 
     if (delayed) {
 	/* UM 4.2: the chip stays idle until SYS_TIME reaches DX_TIME and
@@ -1373,8 +1485,33 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
     
     E_REG_HOST_WRITE_IDX(e, reg, offset, data, datalen);
 
+    if (reg == DW1000_REG_SYS_CFG) {
+	/* UM 4.3.1: double buffering is DIS_DRXB cleared. Tracked here
+	 * rather than read per access, since which set an access uses is
+	 * decided before the access happens.
+	 */
+	uint32_t sys_cfg = E_REG_IC_READ32_KEY(e, SYS_CFG);
+	bool     want    = !DW1000_GET_FLG(sys_cfg, SYS_CFG_DIS_DRXB);
+	if (want != e->dblbuf) {
+	    e->dblbuf = want;
+	    EMU_DEBUG("dblbuf: %s", want ? "enabled" : "disabled");
+	    e_dblbuf_publish(e);
+	}
+    }
+
     if (reg == DW1000_REG_SYS_CTRL) {
 	uint32_t sys_ctrl = E_REG_IC_READ32_KEY(e, SYS_CTRL);
+
+	/* HRBPT is a command bit, self-clearing, and independent of the
+	 * rest of SYS_CTRL: the driver writes it on its own in the last
+	 * byte of the register.
+	 */
+	if (DW1000_GET_FLG(sys_ctrl, SYS_CTRL_HRBPT)) {
+	    DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_HRBPT);
+	    E_REG_IC_WRITE32_KEY(e, sys_ctrl, SYS_CTRL);
+	    e_dblbuf_toggle_host(e);
+	}
+
 	if (DW1000_GET_FLG(sys_ctrl, SYS_CTRL_TRXOFF)) {
 	    EMU_DEBUG("trxoff");
 	    /* Whatever was programmed is off the books: a delayed send or
@@ -1458,6 +1595,7 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
     struct dw1000_driver_iopkt *iopkt = data;
     struct dw1000_emulation    *e     = args;
     bool                        edge  = false;
+    bool                        taken = false;
 
     /* The service type is what got us here, and the connection is reached
      * through the emulation; neither is needed again.
@@ -1513,6 +1651,35 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	 * timeout, which UM 7.2.40.9 ends at preamble detection.
 	 */
 	e_deadline_disarm(e, E_DEADLINE_RXTO);
+
+	/* Overrun. UM 4.3.5: the IC has filled one buffer, moved to the
+	 * other and filled that too, and come back to a buffer the host
+	 * has still not released with HRBPT. The frame in progress is
+	 * abandoned -- "the frame reception in progress will be aborted"
+	 * -- ICRBP does not move, and RXOVRR stands until the host
+	 * issues HRBPT.
+	 */
+	if (e->dblbuf && (e->pending >= 2)) {
+	    uint32_t ovrr = E_REG_IC_READ32_KEY(e, SYS_STATUS);
+	    DW1000_SET_FLG(ovrr, SYS_STATUS_RXOVRR);
+	    E_REG_IC_WRITE32_KEY(e, ovrr, SYS_STATUS);
+
+	    EMU_WARNING("receiver overrun: both buffers hold a frame the"
+			" host has not read out");
+
+	    /* UM 4.3.5: "assuming RX auto-re-enable is enabled (by
+	     * RXAUTR) the receiver will begin looking for preamble
+	     * again".
+	     */
+	    if (e_rx_auto_reenable(e)) {
+		e_rx_arm_timeouts(e, e_clock_full());
+	    } else {
+		E_SET_STATE(e, IDLE);
+	    }
+
+	    edge = e_irq_update(e);
+	    goto done;
+	}
 	
 	// Not handled: AFFREJ AAT RXOVRR RXRSCS RXPREJ
 	uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
@@ -1573,9 +1740,22 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
 
         EMU_DEBUG("RSVC INT <RX_DONE> commited to registers");
-	
-	// Return to IDLE state
-	E_SET_STATE(e, IDLE);
+
+	/* Only a good frame moves the IC on to the other buffer, and it
+	 * does so after the interrupt has been worked out below.
+	 */
+	taken = crc_ok;
+
+	/* UM 5.3.2: with RXAUTR the receiver turns itself back on for
+	 * the next frame, and UM 7.2.14 restarts the frame wait
+	 * countdown with it. Otherwise the chip goes idle and waits for
+	 * the host.
+	 */
+	if (e_rx_auto_reenable(e)) {
+	    e_rx_arm_timeouts(e, e_clock_full());
+	} else {
+	    E_SET_STATE(e, IDLE);
+	}
 
 	break;
     }
@@ -1647,6 +1827,8 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 
 
     edge = e_irq_update(e);
+    if (taken)
+	e_dblbuf_advance_ic(e);
 
  done:
     pthread_mutex_unlock(&e->mutex);
