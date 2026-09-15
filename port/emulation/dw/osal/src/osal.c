@@ -101,6 +101,14 @@ struct dw1000_emulation {
     int			rbp_ic;
     unsigned		pending;
 
+    /* Set the first time the medium server cannot be reached. A running
+     * simulation ends by taking the server down while its nodes are
+     * still going, so this is the ordinary end of a run: it is said once
+     * and then the model goes quiet, rather than a line per frame for
+     * however long the node takes to notice it is over.
+     */
+    bool		medium_gone;
+
     /* The deadline thread. The chip meets a programmed time by counting
      * its own clock; the model has no tick to count, so it sleeps until
      * the host clock says the moment has come. One thread serves every
@@ -721,6 +729,32 @@ static void e_deadline_disarm_all(struct dw1000_emulation *e) {
 	e->deadline[i].armed = false;
 }
 
+/* The medium server is unreachable.
+ *
+ * Returns true the first time, so the caller can say so once. Takes the
+ * mutex itself: the callers are the paths that talk to the server, and
+ * those run with it released.
+ */
+static bool e_medium_lost(struct dw1000_emulation *e) {
+    bool first;
+
+    pthread_mutex_lock(&e->mutex);
+    first = !e->medium_gone;
+    e->medium_gone = true;
+
+    /* Nothing is on the air any more, and nothing is going to complete.
+     * Say so in the model's own state rather than leaving it in TX or RX
+     * waiting for a report that cannot arrive, and drop the deadlines
+     * with it.
+     */
+    e_deadline_disarm_all(e);
+    E_SET_STATE(e, IDLE);
+    pthread_mutex_unlock(&e->mutex);
+
+    return first;
+}
+
+
 /* The earliest armed deadline, or -1. "Earliest" is on the 40-bit clock,
  * so it is the smallest non-negative distance from now and not the
  * smallest number.
@@ -1290,7 +1324,16 @@ static int e_rx_engage(struct dw1000_emulation *e) {
     size_t pktlen = DW1000_DRIVER_PKTLEN_RX_CONFIG();
 
     if (rsvc_i(e->rsvc, RSVC_UWB_IO, &iopkt, pktlen) < 0) {
-	EMU_FATAL("rx_start: sending RX_CONFIG failed");
+	/* The server has gone. Not fatal: a node outliving its medium is
+	 * how every simulation ends, and aborting there turns an orderly
+	 * shutdown into what looks like a crash. The receiver simply
+	 * never hears anything again, which is the truthful model of a
+	 * radio with nothing on the other end.
+	 */
+	if (e_medium_lost(e))
+	    EMU_WARNING("the medium server is unreachable; this node will"
+			" neither send nor receive from now on");
+	return -1;
     }
     EMU_DEBUG("rx_start: done");
     return 0;
@@ -1456,7 +1499,14 @@ static int e_tx_deliver(struct dw1000_emulation *e,
      * const that the call cannot honour would say less than this does.
      */
     if (rsvc_i(e->rsvc, RSVC_UWB_IO, pkt, len) < 0) {
-	EMU_DEBUG("tx_start: sending packet failed");
+	/* As for the receiver. The state matters more here: the caller
+	 * has already moved the model to TX, and without this it would
+	 * sit there waiting for a TX_DONE that cannot come, refusing
+	 * every later command on the "transmit in progress" check.
+	 */
+	if (e_medium_lost(e))
+	    EMU_WARNING("the medium server is unreachable; this node will"
+			" neither send nor receive from now on");
 	return -1;
     }
     return 0;

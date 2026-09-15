@@ -298,11 +298,26 @@ rsvc_loop(void *args)
 	    break;
 	}
 
-	datasize = size - sizeof(hdr);
-	
-	// Force fixing problems now!
-	assert(size     >= 0);		// -> fix socket communication
-	assert(datasize >= 0);		// -> fix server implementation
+	/* The connection is gone. That is not a programming error to
+	 * abort on: the server is another process, and a simulation ends
+	 * by taking it down while its nodes are still running. Leave the
+	 * loop; rsvc_close() will join us.
+	 */
+	if (size < 0) {
+	    RSVC_DEBUG("loop: read failed (%s), connection gone",
+		       strerror(errno));
+	    break;
+	}
+
+	/* Too short to carry a header. A server sending nonsense is a
+	 * server bug, but it is the server's, and dropping the datagram
+	 * says so without taking this process down with it.
+	 */
+	datasize = size - (ssize_t)sizeof(hdr);
+	if (datasize < 0) {
+	    RSVC_DEBUG("loop: runt datagram (%zd bytes), dropped", size);
+	    continue;
+	}
 
 	// Interruption-like ?
 	if (hdr.flags & RSVC_HDR_FLG_INTERRUPT) {
@@ -404,7 +419,28 @@ rsvc_call_extended(rsvc_t *rsvc, uint16_t type,
     size = writev(rsvc->fd, iov, 3); // atomic for datagram socket
     if ((size < 0) && (errno == EINTR)) 
 	goto send_again;
-    assert(size >= 0);
+
+    /* The send failed, which in practice means the server's socket is
+     * no longer there -- a simulation shutting down unlinks it while its
+     * nodes are still transmitting, so this is the ordinary end of every
+     * run and not a fault to abort on. It used to be an assert, and the
+     * abort came *after* the run's work was done, which made it look
+     * like a crash and hid nothing useful.
+     *
+     * The in-progress entry has to come off the list here: rsvc_loop()
+     * takes it off when a reply matches, and no reply is ever coming for
+     * a request that did not leave.
+     */
+    if (size < 0) {
+	RSVC_DEBUG("call: send failed (%s)", strerror(errno));
+
+	RSVC_LOCK(rsvc);
+	TAILQ_REMOVE(&rsvc->inprogress, &inprogress, entries);
+	RSVC_UNLOCK(rsvc);
+
+	sem_destroy(&inprogress.sem);
+	return RSVC_ERR_IO;
+    }
 
     /* Waiting...
      */

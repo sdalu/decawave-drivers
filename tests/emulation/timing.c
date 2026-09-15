@@ -283,6 +283,17 @@ stub_medium(void *args)
 	    fprintf(stderr, "stub: recvfrom: %s\n", strerror(errno));
 	    break;
 	}
+	/* Zero bytes means the socket has been shut down under us, which
+	 * is how step_medium_vanishes() releases this thread once it has
+	 * taken the socket's path away. Nothing in the protocol sends an
+	 * empty datagram, so there is no legitimate reading to confuse it
+	 * with -- and continuing would spin, since a shut-down socket
+	 * returns zero for ever.
+	 */
+	if (n == 0) {
+	    running = false;
+	    continue;
+	}
 	if ((size_t)n < sizeof(hdr)) {
 	    fprintf(stderr, "stub: short datagram (%zd bytes)\n", n);
 	    continue;
@@ -1085,6 +1096,128 @@ step_lifecycle(dw1000_t *dw, struct stub *s)
 }
 
 
+/* Defined with the rest of the harness below; this step needs to build a
+ * medium of its own, which is the only reason they are used up here.
+ */
+static bool make_socket_dir(char *dir, size_t dirlen,
+			    char *sock, size_t socklen);
+static bool stub_start(struct stub *s, const char *path, pthread_t *thread);
+
+/* The medium server disappears while the node is still running.
+ *
+ * This is not a corner case; it is how every simulation ends. The
+ * simulator takes its socket away and its nodes carry on for a moment,
+ * transmitting into a path that is no longer there. The model used to
+ * abort on that -- an assert on a failed writev inside rsvc, and an
+ * EMU_FATAL on a failed RX_CONFIG -- so an orderly shutdown produced
+ * what looked like a crash, after the run's work was already done and
+ * with nothing useful in it. Observed in spank's simulation, where it
+ * fired for two nodes out of ten in one run and none in the next.
+ *
+ * What should happen instead is what a radio does when there is nothing
+ * on the other end: nothing. The send fails, it is reported once, and
+ * the model goes back to idle rather than sitting in TX waiting for a
+ * completion that cannot arrive.
+ *
+ * The assertion this step makes is simply that it finishes. An abort
+ * takes the whole process with it, so a model that still aborted would
+ * not reach the end of this function, let alone the steps after it.
+ */
+static const char *
+step_medium_vanishes(dw1000_t *dw, struct stub *s)
+{
+    char   dir2[128];
+    char   path2[sizeof(((struct sockaddr_un *)0)->sun_path)];
+    struct stub s2;
+    pthread_t   th2;
+    rsvc_t     *rs;
+    struct dw1000_emulation *em;
+    dw1000_t    d;
+    struct dw1000_ioline irq   = { .line = DW1000_IOLINE_IRQ   };
+    struct dw1000_ioline reset = { .line = DW1000_IOLINE_RESET };
+    dw1000_spi_driver_t  sp;
+    dw1000_config_t      cfg;
+    struct dw1000_radio  radio = {
+	.channel  = 5,
+	.prf      = DW1000_PRF_64MHZ,
+	.rx_pac   = DW1000_PAC8,
+	.tx_plen  = DW1000_PLEN_128,
+	.tx_pcode = 10,
+	.rx_pcode = 10,
+	.bitrate  = DW1000_BITRATE_6800KBPS,
+	.tx_power = DW1000_TX_POWER_AUTO,
+	.proprietary.sfd = 0,
+    };
+
+    (void)dw; (void)s;
+
+    /* A medium of its own, so that taking it away does not take the
+     * one every other step is using with it.
+     */
+    if (!make_socket_dir(dir2, sizeof(dir2), path2, sizeof(path2)))
+	return "cannot make a second socket directory";
+    if (!stub_start(&s2, path2, &th2))
+	return REASON("cannot start the second medium: %s", strerror(errno));
+
+    if ((rs = rsvc_open(path2, (char *)"vanish", NULL)) == NULL)
+	return "rsvc_open failed against the second medium";
+
+    em = dw1000_emulation_create(rs, NULL, NULL);
+    memset(&sp, 0, sizeof(sp));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.spi = &sp; cfg.irq = &irq; cfg.reset = &reset;
+    cfg.lde_loading = 1;
+    cfg.tx_antenna_delay = 16436;
+    cfg.rx_antenna_delay = 16436;
+    irq.emulation = em; reset.emulation = em; sp.emulation = em;
+
+    dw1000_init(&d, &cfg);
+    dw1000_hardreset(&d);
+    if (dw1000_initialise(&d) != 0)
+	return "dw1000_initialise failed against the second medium";
+    if (dw1000_configure(&d, &radio) != 0)
+	return "dw1000_configure failed against the second medium";
+
+    /* The server goes away -- properly, which means the socket itself
+     * and not merely its name. Unlinking the path is not enough: the
+     * node's socket is *connected*, so the binding outlives the name and
+     * sends keep succeeding. It is the endpoint's destruction, when the
+     * server process exits, that makes a send fail, so that is what is
+     * reproduced here.
+     */
+    shutdown(s2.fd, SHUT_RDWR);
+    pthread_join(th2, NULL);
+    close(s2.fd);
+    unlink(path2);
+
+    /* Each of these reached an abort before the fix: the transmit
+     * through rsvc's assert on writev, the receive through the model's
+     * EMU_FATAL on a failed RX_CONFIG.
+     */
+    dw1000_tx_send(&d, (uint8_t *)payload, PAYLOAD_LEN, DW1000_TX_IMMEDIATE);
+
+    dw1000_txrx_off(&d);        /* a well-behaved host, as the driver is */
+    dw1000_rx_start(&d, DW1000_RX_IMMEDIATE);
+
+    /* And again, which is the part that says the model recovered rather
+     * than merely survived: after a failed send or receive it must be
+     * idle, not stuck in TX or RX refusing everything that follows. The
+     * model asserts on a transmit started from anything but idle, so a
+     * model that did not reset its state would abort right here.
+     */
+    dw1000_txrx_off(&d);
+    dw1000_tx_send(&d, (uint8_t *)payload, PAYLOAD_LEN, DW1000_TX_IMMEDIATE);
+
+    dw1000_emulation_stop(em);
+    rsvc_close(rs);
+    dw1000_emulation_destroy(em);
+    free(rs);
+    rmdir(dir2);
+
+    return NULL;
+}
+
+
 /*----------------------------------------------------------------------*/
 /* Harness                                                              */
 /*----------------------------------------------------------------------*/
@@ -1244,6 +1377,7 @@ main(void)
     step("rx delayed, late",     step_rx_delayed_late(&dw, &stub));
     step("wait4resp auto-rx",    step_wait4resp(&dw, &stub));
     step("create/destroy cycles",step_lifecycle(&dw, &stub));
+    step("medium vanishes",      step_medium_vanishes(&dw, &stub));
 
     dw1000_txrx_off(&dw);
 
