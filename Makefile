@@ -142,7 +142,7 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-manifest check-emulation check-probe	## compile the option matrix (~1 min), check the manifest, run the emulation smoke test, run the probe format test
+check: check-options check-manifest check-emulation check-probe	## compile the option matrix (~1 min), check the manifest, run the emulation smoke test, run the probe tests
 
 # 256 compiles, tens of seconds in total, so the script reports progress
 # as it goes. CC, CFLAGS and WERROR reach it through the environment.
@@ -168,8 +168,12 @@ check-emulation:				## run the emulation smoke test (driver, port/emulation, stu
 # by design, so this is the one probe check that needs no chip, no
 # driver and no radio either -- record, role, port/emulation and the
 # format test, the same reason check-emulation exists for the driver.
-# The script reads the paths from the manifest, as everything here does.
-check-probe:					## run the probe format test (record, role, port/emulation)
+# The exchange test goes further and runs the responder against
+# port/emulation, which is what pins the two things a responder owes a
+# link that is not working: that a run ends, and that it says what it
+# heard. The script reads the paths from the manifest, as everything
+# here does.
+check-probe:					## run the probe tests (format, and the responder against port/emulation)
 	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-probe.sh
 
 # --- building ---------------------------------------------------------

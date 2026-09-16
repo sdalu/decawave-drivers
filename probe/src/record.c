@@ -29,6 +29,7 @@ dw1000_probe_status_name(dw1000_probe_status_t status)
 {
     switch (status) {
     case DW1000_PROBE_STATUS_OK:           return "ok";
+    case DW1000_PROBE_STATUS_NO_POLL:      return "no-poll";
     case DW1000_PROBE_STATUS_NO_RESPONSE:  return "no-response";
     case DW1000_PROBE_STATUS_NO_FINAL:     return "no-final";
     case DW1000_PROBE_STATUS_NO_REPORT:    return "no-report";
@@ -317,15 +318,31 @@ dw1000_probe_stats_format(char *buf, size_t len,
 {
     char b_applied[DW1000_PROBE_FIELD_BUFSZ], b_req[DW1000_PROBE_FIELD_BUFSZ];
 
+    /* The reception account goes between `of=` and the origin, so that
+       the origin keys stay last as they are on every other line. A
+       positional reader of the STATS line would break on any insertion
+       at all; this line has never had one, and record.h states the key
+       set as the contract. */
     return (size_t)snprintf(buf, len,
 	"STATS role=%s tx_power_db=%s tx_power_req_db=%s driver=%s"
-	" completed=%u of=%u node=%s run=%s",
+	" completed=%u of=%u"
+	" heard=%u drop_unwatched=%u drop_overrun=%u drop_foreign=%u"
+	" drop_short=%u drop_type=%u drop_dst=%u drop_seq=%u"
+	" node=%s run=%s",
 	dw1000_probe_role_name(origin->role),
 	fmt_tenths_always(b_applied, sizeof(b_applied), stats->tx_power_db_x10),
 	fmt_tx_power_req(b_req, sizeof(b_req), stats->tx_power_req_db_x10),
 	fmt_str(stats->driver_version),
 	(unsigned)stats->resolved,
 	(unsigned)stats->attempted,
+	(unsigned)stats->heard,
+	(unsigned)stats->drop_unwatched,
+	(unsigned)stats->drop_overrun,
+	(unsigned)stats->drop_foreign,
+	(unsigned)stats->drop_short,
+	(unsigned)stats->drop_type,
+	(unsigned)stats->drop_dst,
+	(unsigned)stats->drop_seq,
 	fmt_str(origin->node),
 	fmt_str(origin->run));
 }

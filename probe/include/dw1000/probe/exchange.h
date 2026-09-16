@@ -82,6 +82,17 @@ struct dw1000_probe_twr_init_result {
  * buffered to dw1000_probe_port_emit() -- immediately after this
  * function returns is that time, since the run is then over.
  *
+ * IT DOES RETURN, which was not always so and is worth stating because
+ * it bounds how long a caller can be held. Every wait in the run has a
+ * deadline, the first POLL's being much the longest (tens of seconds,
+ * to cover a harness's head start); an attempt whose deadline passes
+ * becomes a record with DW1000_PROBE_STATUS_NO_POLL rather than a wait
+ * that cannot end. A run nobody answers therefore costs its first
+ * attempt the long budget and each one after it the short one, and then
+ * reports @p count no-poll records and a STATS line carrying the
+ * reception account: what the receiver delivered, and why none of it
+ * was accepted.
+ *
  * @param dw         the driver instance
  * @param count      how many exchanges to answer
  * @param ss         true for the two-frame single-sided estimate only

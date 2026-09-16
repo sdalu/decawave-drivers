@@ -20,7 +20,8 @@
  *  - dw1000_probe_pack_power()'s rounding, clamp and non-finite rejection;
  *  - that a too-small buffer reports the untruncated length and writes
  *    nothing past it;
- *  - the STATS, READY and TEMP lines;
+ *  - the STATS, READY and TEMP lines, the reception account on STATS
+ *    included;
  *  - and, since it is linked in regardless, that the emulation port's
  *    clock actually moves;
  *  - dw1000_probe_distances(): no-drift, drift (single-sided, symmetric
@@ -214,7 +215,7 @@ static const char *
 case_status_names(void)
 {
     static const char *want[] = {
-	"ok", "no-response", "no-final", "no-report", "bad-distance",
+	"ok", "no-poll", "no-response", "no-final", "no-report", "bad-distance",
     };
     size_t i;
     const char *got;
@@ -372,6 +373,14 @@ case_stats_ready_temp(void)
 	.driver_version      = "1.1.0",
 	.attempted           = 40,
 	.resolved            = 38,
+	.heard               = 97,
+	.drop_unwatched      = 2,
+	.drop_overrun        = 1,
+	.drop_foreign        = 11,
+	.drop_short          = 0,
+	.drop_type           = 3,
+	.drop_dst            = 4,
+	.drop_seq            = 5,
     };
     struct dw1000_probe_origin o = {
 	.node = "D4", .role = DW1000_PROBE_ROLE_TWR_RESP, .run = "r1",
@@ -381,8 +390,23 @@ case_stats_ready_temp(void)
     dw1000_probe_stats_format(buf, sizeof(buf), &st, &o);
     if (strcmp(buf,
 	    "STATS role=twr_resp tx_power_db=7.5 tx_power_req_db=auto"
-	    " driver=1.1.0 completed=38 of=40 node=D4 run=r1") != 0)
+	    " driver=1.1.0 completed=38 of=40"
+	    " heard=97 drop_unwatched=2 drop_overrun=1 drop_foreign=11"
+	    " drop_short=0 drop_type=3 drop_dst=4 drop_seq=5"
+	    " node=D4 run=r1") != 0)
 	return REASON("STATS: got '%s'", buf);
+
+    /* The account is a partition, so the drops can never exceed what was
+       heard and the remainder is the frames that matched. Checked on the
+       jig above rather than left as prose in record.h: 97 - 26 = 71. */
+    {
+	unsigned dropped = (unsigned)st.drop_unwatched + st.drop_overrun +
+			   st.drop_foreign + st.drop_short + st.drop_type +
+			   st.drop_dst + st.drop_seq;
+	if (dropped != 26 || st.heard - dropped != 71)
+	    return REASON("STATS account: %u dropped of %u heard",
+			  dropped, (unsigned)st.heard);
+    }
 
     dw1000_probe_ready_format(buf, sizeof(buf), &o);
     if (strcmp(buf, "READY role=twr_resp node=D4 run=r1") != 0)
@@ -391,6 +415,45 @@ case_stats_ready_temp(void)
     dw1000_probe_temp_format(buf, sizeof(buf), 125, 2537, 3300, &o);
     if (strcmp(buf, "TEMP 12.5 2537 3300 node=D4 run=r1") != 0)
 	return REASON("TEMP: got '%s'", buf);
+
+    /* DW1000_PROBE_RECORD_MAX claims to hold any line these formatters
+       produce, given a node and a run of 64 bytes each. STATS is the
+       line that grew when the reception account was added to it, so the
+       claim is measured here rather than recomputed by hand: every count
+       at its widest, the worst tx_power pair, and both origin strings at
+       the stated bound. */
+    {
+	char wide[65];
+	struct dw1000_probe_stats big = {
+	    .tx_power_db_x10     = -9999,
+	    .tx_power_req_db_x10 = 9999,
+	    .driver_version      = "1.99.99+65535.gdeadbeefdeadbeef.dirty",
+	    .attempted           = 65535,
+	    .resolved            = 65535,
+	    .heard               = 65535,
+	    .drop_unwatched      = 65535,
+	    .drop_overrun        = 65535,
+	    .drop_foreign        = 65535,
+	    .drop_short          = 65535,
+	    .drop_type           = 65535,
+	    .drop_dst            = 65535,
+	    .drop_seq            = 65535,
+	};
+	struct dw1000_probe_origin wo;
+	size_t want;
+
+	memset(wide, 'x', sizeof(wide) - 1);
+	wide[sizeof(wide) - 1] = '\0';
+	wo.node = wide;
+	wo.role = DW1000_PROBE_ROLE_TWR_RESP;
+	wo.run  = wide;
+
+	want = dw1000_probe_stats_format(buf, sizeof(buf), &big, &wo);
+	if (want >= DW1000_PROBE_RECORD_MAX)
+	    return REASON("the widest STATS line wants %zu bytes,"
+			  " DW1000_PROBE_RECORD_MAX is %d",
+			  want, DW1000_PROBE_RECORD_MAX);
+    }
 
     return NULL;
 }

@@ -9,11 +9,22 @@
  * The two-node ranging exchange: the wire frame (build/parse), the
  * bounded waits, and the `twr_resp` / `twr_init` role bodies.
  *
- * FRAME MATCHING, in one predicate (frame_matches() below): a captured
+ * FRAME MATCHING, in one predicate (frame_classify() below): a captured
  * frame is ours only if the "dwp" mark is there, the type is the one
  * being waited for, dst equals our own address, and -- except for a POLL,
  * whose seq is not yet known -- the seq matches the exchange in
  * progress. Anything else is ignored and the wait continues.
+ *
+ * WHAT WAS IGNORED IS NOW COUNTED, which is the whole of the difference
+ * between a predicate and a classifier here. "The receiver heard
+ * nothing" and "the receiver heard frames and rejected every one of
+ * them" are different defects with different fixes, and an instrument
+ * that cannot tell them apart sends its operator to the wrong half of
+ * the bench. The account is per run and is reported on the STATS line;
+ * <dw1000/probe/record.h> states what it partitions. Two of its
+ * categories are about this file rather than about the link: a frame
+ * that arrived while no wait was running, and a frame overwritten in the
+ * single capture slot before a wait could look at it.
  *
  * TWO PLACES WHERE THE BRIEF'S OWN WIRE FORMAT CANNOT BE FOLLOWED
  * LITERALLY, both flagged here and in the final report rather than
@@ -159,27 +170,45 @@ frame_build_header(uint8_t *buf, char type, uint8_t seq, uint16_t dst, uint16_t 
     return FRAME_HDR_LEN;
 }
 
+/* Why a captured frame was not the one being waited for. Every
+ * condition has to hold for a frame to be ours, so which one gets the
+ * blame cannot change whether a frame is accepted: the order below is a
+ * reporting choice alone, each reason narrower than the one before it,
+ * so that the first that fits is the informative one. */
+enum frame_verdict {
+    FRAME_MATCH = 0,
+    FRAME_DROP_FOREIGN,     /* no "dwp" mark: somebody else's traffic    */
+    FRAME_DROP_SHORT,       /* ours, too short for the awaited payload   */
+    FRAME_DROP_TYPE,        /* ours, the wrong kind of frame             */
+    FRAME_DROP_DST,         /* ours, addressed to another node           */
+    FRAME_DROP_SEQ,         /* ours, a different exchange                */
+    FRAME_VERDICT__COUNT
+};
+
 /* See the frame-matching predicate in the file comment above.
  * @p min_words bounds how much payload must actually be present for the
  * type being waited for (0 for POLL/RESPONSE, 3 for FINAL, 5 for
  * REPORT), so a truncated or corrupt frame that happens to pass the
  * header checks is not read past what it actually carries.
  */
-static bool
-frame_matches(const uint8_t *buf, size_t len, char want_type,
-             int expected_seq, uint16_t own_addr, size_t min_words)
+static enum frame_verdict
+frame_classify(const uint8_t *buf, size_t len, char want_type,
+              int expected_seq, uint16_t own_addr, size_t min_words)
 {
+    /* The mark is asked for before the length, so that a runt of
+     * somebody else's traffic is reported as foreign rather than as a
+     * short frame of ours. Its own guard is the three bytes it reads. */
+    if (len < 3 || buf[0] != 'd' || buf[1] != 'w' || buf[2] != 'p')
+        return FRAME_DROP_FOREIGN;
     if (len < FRAME_HDR_LEN + min_words * FRAME_WORD_LEN)
-        return false;
-    if (buf[0] != 'd' || buf[1] != 'w' || buf[2] != 'p')
-        return false;
+        return FRAME_DROP_SHORT;
     if ((char)buf[3] != want_type)
-        return false;
-    if (expected_seq != FRAME_SEQ_ANY && buf[4] != (uint8_t)expected_seq)
-        return false;
+        return FRAME_DROP_TYPE;
     if (get_u16le(&buf[5]) != own_addr)
-        return false;
-    return true;
+        return FRAME_DROP_DST;
+    if (expected_seq != FRAME_SEQ_ANY && buf[4] != (uint8_t)expected_seq)
+        return FRAME_DROP_SEQ;
+    return FRAME_MATCH;
 }
 
 
@@ -198,6 +227,35 @@ frame_matches(const uint8_t *buf, size_t len, char want_type,
 /* Gap between exchanges: a short pause so the initiator does not hammer
  * the channel back to back. */
 #define PROBE_EXCHANGE_GAP_US 20000U
+
+/* How long a responder waits for the FIRST POLL of a run. Generous,
+ * because the gap it has to cover is the harness's and not the radio's:
+ * the responder is started first, and the initiator follows after a
+ * fixed head start the harness states rather than detects (12 s on this
+ * bench). It cannot detect it, because the READY line a poller would
+ * look for does not reach the log until the session ends; see
+ * dw1000_probe_ready_format() in <dw1000/probe/record.h>. Thirty seconds
+ * covers that head start with room to spare, and still ends a run that
+ * nobody ever answered. */
+#if !defined(PROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US)
+#define PROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US 30000000U
+#endif
+
+/* And for every POLL after the first, by which time the initiator is
+ * known to be running: its own gap between exchanges is 20 ms plus at
+ * most four frame budgets of its own, so two seconds is two orders of
+ * margin. What it buys is that an initiator which stops mid-run leaves a
+ * short tail of no-poll records and a STATS line, instead of a responder
+ * that never returns.
+ *
+ * Both are overridable at compile time, and both defaults are a harness
+ * property rather than a radio one -- a bench with a different head
+ * start wants a different first budget. tests/probe/exchange.c overrides
+ * them to milliseconds, which is the only way a gate can prove a wait
+ * ends without waiting out the wait. */
+#if !defined(PROBE_EXCHANGE_POLL_TIMEOUT_US)
+#define PROBE_EXCHANGE_POLL_TIMEOUT_US 2000000U
+#endif
 
 /* How long to wait for a transmit's completion to be reported before
  * giving up on reading its RMARKER time -- a frame this short is on air
@@ -256,13 +314,64 @@ dw1000_probe_tx_capture(void)
 
 
 /*======================================================================*/
+/* The reception account                                                */
+/*======================================================================*/
+
+/* What became of every frame the callback captured during a run, kept so
+ * that a run which resolved nothing can still say why. Reported on the
+ * STATS line; <dw1000/probe/record.h> states what partitions what.
+ *
+ * Plain statics with no lock of their own, unlike the capture above:
+ * every write is on the role's own thread, none is in a callback. They
+ * follow rx_frame_seq, which IS written in a callback, and each read of
+ * it below takes the bus lock as every other reader does. */
+static struct {
+    uint16_t unwatched;
+    uint16_t overrun;
+    uint16_t drop[FRAME_VERDICT__COUNT];  /* indexed by enum frame_verdict */
+} heard;
+
+static uint32_t heard_start;    /* rx_frame_seq when the run began       */
+static uint32_t heard_upto;     /* how far the account has followed it   */
+
+/* Saturating, because a count that has wrapped is worse than useless and
+ * 65535 frames rejected already says everything a larger number would. */
+static void
+heard_bump(uint16_t *counter, uint32_t by)
+{
+    uint32_t v = (uint32_t)*counter + by;
+
+    *counter = v > 65535u ? 65535u : (uint16_t)v;
+}
+
+static void
+heard_reset(void)
+{
+    memset(&heard, 0, sizeof(heard));
+
+    dw1000_probe_port_bus_lock();
+    heard_start = rx_frame_seq;
+    dw1000_probe_port_bus_unlock();
+    heard_upto = heard_start;
+}
+
+
+/*======================================================================*/
 /* Send / wait                                                          */
 /*======================================================================*/
 
 /* Turn the receiver on (or off, for timeout_us == 0: dw1000_rx_set_timeout()
- * treats that as "disable", so the receiver waits with no chip-side bound
- * at all -- used only for the responder's wait for the next POLL, which
- * has no deadline of its own; see dw1000_probe_twr_resp_run() below).
+ * treats that as "disable", so the receiver listens with no chip-side
+ * bound at all -- used only for the responder's wait for the next POLL,
+ * whose budget is seconds and does not fit the chip's 16-bit microsecond
+ * field, which tops out at 65 ms. That wait is bounded, and bounded on
+ * the host: frame_wait()'s deadline is what ends it. The comment that
+ * used to stand here said the wait had no deadline because the bench
+ * waits for READY before starting the initiator. The bench does not and
+ * cannot -- see dw1000_probe_ready_format() in <dw1000/probe/record.h> --
+ * and the consequence of believing it was a responder that hung with
+ * nothing printed rather than reporting what it had failed to hear.
+ * See dw1000_probe_twr_resp_run() below).
  * Always starts from IDLE via dw1000_txrx_off(), which
  * dw1000_rx_set_timeout() requires (see its own doc comment) -- so a
  * caller never has to reason about what a previous wait or transmit left
@@ -358,10 +467,20 @@ frame_wait(char want_type, int expected_seq, uint16_t own_addr, size_t min_words
           dw1000_probe_time_t deadline, struct rx_capture *out)
 {
     uint32_t seen;
+    bool     matched = false;
 
     dw1000_probe_port_bus_lock();
     seen = rx_frame_seq;
     dw1000_probe_port_bus_unlock();
+
+    /* Frames captured since the previous wait ended. The exchange is a
+     * sequence of waits with gaps between them and nothing looks at the
+     * capture slot in a gap, so these are gone: the slot holds only the
+     * newest. They are counted rather than examined, because the count
+     * is the one thing that can be said about them, and because a peer
+     * answering faster than this role gets back to waiting lands here.
+     * That would be this instrument losing a frame, not the link. */
+    heard_bump(&heard.unwatched, seen - heard_upto);
 
     while (dw1000_probe_port_now() < deadline) {
         struct rx_capture snap;
@@ -369,6 +488,10 @@ frame_wait(char want_type, int expected_seq, uint16_t own_addr, size_t min_words
 
         dw1000_probe_port_bus_lock();
         if (rx_frame_seq != seen) {
+            /* Everything but the newest is gone for the same reason: one
+             * slot, so a burst arriving between two polls of this loop
+             * leaves only its last frame behind. */
+            heard_bump(&heard.overrun, rx_frame_seq - seen - 1);
             seen = rx_frame_seq;
             /* Single-producer/single-consumer snapshot, taken under the
              * same lock the producer (dw1000_probe_rx_capture(), called
@@ -379,14 +502,26 @@ frame_wait(char want_type, int expected_seq, uint16_t own_addr, size_t min_words
         }
         dw1000_probe_port_bus_unlock();
 
-        if (got && frame_matches(snap.data, snap.length, want_type,
-                                 expected_seq, own_addr, min_words)) {
-            *out = snap;
-            return true;
+        if (got) {
+            enum frame_verdict verdict =
+                frame_classify(snap.data, snap.length, want_type,
+                               expected_seq, own_addr, min_words);
+
+            if (verdict == FRAME_MATCH) {
+                *out    = snap;
+                matched = true;
+                break;
+            }
+            heard_bump(&heard.drop[verdict], 1);
         }
         dw1000_probe_port_sleep(PROBE_EXCHANGE_POLL_INTERVAL_US);
     }
-    return false;
+
+    /* Wherever it ended, the account has now followed the capture this
+     * far, so the next wait counts its gap from here and not from the
+     * start of the run. */
+    heard_upto = seen;
+    return matched;
 }
 
 
@@ -409,6 +544,8 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
         .run  = NULL,
     };
 
+    heard_reset();
+
     char line[DW1000_PROBE_RECORD_MAX];
     dw1000_probe_ready_format(line, sizeof(line), &origin);
     dw1000_probe_port_emit(line); /* safe here: no exchange is in flight yet */
@@ -422,23 +559,35 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
         rec.seq      = (uint16_t)i;
         rec.exchange = ss ? DW1000_PROBE_EXCHANGE_SS : DW1000_PROBE_EXCHANGE_DS;
 
-        /* Wait for the next POLL, no deadline of its own: the bench
-         * waits for READY before starting the initiator, so there is
-         * nothing to bound this against -- see rx_arm()'s comment. */
+        /* Wait for the next POLL, bounded, and the bound is the whole
+         * point of it. This wait used to be given UINT64_MAX on the
+         * stated grounds that the bench waits for READY before starting
+         * the initiator; the bench does not and cannot, and what the
+         * false premise bought was a responder that could not end. A
+         * board that heard no POLL sat here until its console session
+         * was cut, having emitted no record and no STATS -- silence,
+         * where a run of no-poll records would have said which end had
+         * gone deaf and what, if anything, it was hearing instead.
+         *
+         * The first attempt gets the long budget because the gap it
+         * covers is the harness's head start; every attempt after it
+         * gets the short one, the initiator being known to be running by
+         * then. Both are stated at the top of this file. */
         rx_arm(dw, 0);
         struct rx_capture poll;
-        (void)frame_wait(FRAME_TYPE_POLL, FRAME_SEQ_ANY, own_addr, 0,
-                         UINT64_MAX, &poll);
+        dw1000_probe_time_t poll_deadline = dw1000_probe_port_now() +
+            (i == 0 ? PROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US
+                    : PROBE_EXCHANGE_POLL_TIMEOUT_US);
+        bool got_poll = frame_wait(FRAME_TYPE_POLL, FRAME_SEQ_ANY, own_addr, 0,
+                                   poll_deadline, &poll);
 
         result.attempted++;
-        rec.status = DW1000_PROBE_STATUS_NO_RESPONSE;
 
-        uint8_t  wire_seq  = poll.data[4];
-        uint16_t poll_src  = get_u16le(&poll.data[7]);
-
-        rec.t_rp     = poll.rx_time;
-        rec.present |= DW1000_PROBE_F_T_RP;
-
+        /* Read whatever happened, so that <dw1000/probe/record.h>'s
+         * promise -- the near end's temperature and voltage are in every
+         * record -- stays true of a no-poll record too. Read here rather
+         * than before the wait, so that it is the die at the attempt and
+         * not the die up to thirty seconds earlier. */
         int16_t  temp;
         uint16_t vbat;
         dw1000_probe_port_bus_lock();
@@ -448,78 +597,93 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
         rec.resp_vbat = vbat;
         rec.present  |= DW1000_PROBE_F_RESP_TEMP | DW1000_PROBE_F_RESP_VBAT;
 
-        uint16_t packed;
-        if (dw1000_probe_pack_power(poll.power_signal_dbm, &packed)) {
-            rec.resp_rx  = packed;
-            rec.present |= DW1000_PROBE_F_RESP_RX;
-        }
-        if (dw1000_probe_pack_power(poll.power_firstpath_dbm, &packed)) {
-            rec.resp_fp  = packed;
-            rec.present |= DW1000_PROBE_F_RESP_FP;
-        }
+        if (!got_poll) {
+            /* Nothing arrived. The STATS line at the end of the run is
+             * where a reader learns whether that means nothing was
+             * heard at all, or frames were heard and rejected. */
+            rec.status = DW1000_PROBE_STATUS_NO_POLL;
+        } else {
+            rec.status = DW1000_PROBE_STATUS_NO_RESPONSE;
 
-        /* RESPONSE, addressed back to whoever sent the POLL. */
-        uint8_t resp_buf[FRAME_HDR_LEN];
-        frame_build_header(resp_buf, FRAME_TYPE_RESPONSE, wire_seq,
-                           poll_src, own_addr);
+            uint8_t  wire_seq  = poll.data[4];
+            uint16_t poll_src  = get_u16le(&poll.data[7]);
 
-        uint64_t t_sr;
-        if (frame_send(dw, resp_buf, sizeof(resp_buf), &t_sr, true)) {
-            rec.t_sr     = t_sr;
-            rec.present |= DW1000_PROBE_F_T_SR;
-            rec.status   = DW1000_PROBE_STATUS_NO_FINAL;
+            rec.t_rp     = poll.rx_time;
+            rec.present |= DW1000_PROBE_F_T_RP;
 
-            struct rx_capture final;
-            dw1000_probe_time_t final_deadline =
-                dw1000_probe_port_now() + PROBE_EXCHANGE_FRAME_TIMEOUT_US;
+            uint16_t packed;
+            if (dw1000_probe_pack_power(poll.power_signal_dbm, &packed)) {
+                rec.resp_rx  = packed;
+                rec.present |= DW1000_PROBE_F_RESP_RX;
+            }
+            if (dw1000_probe_pack_power(poll.power_firstpath_dbm, &packed)) {
+                rec.resp_fp  = packed;
+                rec.present |= DW1000_PROBE_F_RESP_FP;
+            }
 
-            if (frame_wait(FRAME_TYPE_FINAL, wire_seq, own_addr, 3,
-                          final_deadline, &final)) {
-                rec.t_sp = get_u40le(&final.data[FRAME_HDR_LEN + 0 * FRAME_WORD_LEN]);
-                rec.t_rr = get_u40le(&final.data[FRAME_HDR_LEN + 1 * FRAME_WORD_LEN]);
-                /* word 2, the t_sr echo, is not read here: see the file
-                 * comment above -- nothing on this driver's side ever
-                 * has a genuine value to check it against. */
-                rec.present |= DW1000_PROBE_F_T_SP | DW1000_PROBE_F_T_RR;
+            /* RESPONSE, addressed back to whoever sent the POLL. */
+            uint8_t resp_buf[FRAME_HDR_LEN];
+            frame_build_header(resp_buf, FRAME_TYPE_RESPONSE, wire_seq,
+                               poll_src, own_addr);
 
-                if (ss) {
-                    dw1000_probe_distances(&rec);
-                    rec.status = DW1000_PROBE_STATUS_OK;
-                } else {
-                    rec.t_rf     = final.rx_time;
-                    rec.present |= DW1000_PROBE_F_T_RF;
-                    rec.status   = DW1000_PROBE_STATUS_NO_REPORT;
+            uint64_t t_sr;
+            if (frame_send(dw, resp_buf, sizeof(resp_buf), &t_sr, true)) {
+                rec.t_sr     = t_sr;
+                rec.present |= DW1000_PROBE_F_T_SR;
+                rec.status   = DW1000_PROBE_STATUS_NO_FINAL;
 
-                    struct rx_capture report;
-                    rx_arm(dw, PROBE_EXCHANGE_FRAME_TIMEOUT_US);
-                    dw1000_probe_time_t report_deadline =
-                        dw1000_probe_port_now() + PROBE_EXCHANGE_FRAME_TIMEOUT_US;
+                struct rx_capture final;
+                dw1000_probe_time_t final_deadline =
+                    dw1000_probe_port_now() + PROBE_EXCHANGE_FRAME_TIMEOUT_US;
 
-                    if (frame_wait(FRAME_TYPE_REPORT, wire_seq, own_addr, 5,
-                                  report_deadline, &report)) {
-                        rec.t_sf = get_u40le(&report.data[FRAME_HDR_LEN + 0 * FRAME_WORD_LEN]);
-                        rec.init_temp = (int16_t)get_u40le(
-                            &report.data[FRAME_HDR_LEN + 1 * FRAME_WORD_LEN]);
-                        rec.init_vbat = (uint16_t)get_u40le(
-                            &report.data[FRAME_HDR_LEN + 2 * FRAME_WORD_LEN]);
-                        rec.init_rx = (uint16_t)get_u40le(
-                            &report.data[FRAME_HDR_LEN + 3 * FRAME_WORD_LEN]);
-                        rec.init_fp = (uint16_t)get_u40le(
-                            &report.data[FRAME_HDR_LEN + 4 * FRAME_WORD_LEN]);
-                        rec.present |= DW1000_PROBE_F_T_SF | DW1000_PROBE_F_INIT_TEMP |
-                                       DW1000_PROBE_F_INIT_VBAT | DW1000_PROBE_F_INIT_RX |
-                                       DW1000_PROBE_F_INIT_FP;
+                if (frame_wait(FRAME_TYPE_FINAL, wire_seq, own_addr, 3,
+                              final_deadline, &final)) {
+                    rec.t_sp = get_u40le(&final.data[FRAME_HDR_LEN + 0 * FRAME_WORD_LEN]);
+                    rec.t_rr = get_u40le(&final.data[FRAME_HDR_LEN + 1 * FRAME_WORD_LEN]);
+                    /* word 2, the t_sr echo, is not read here: see the file
+                     * comment above -- nothing on this driver's side ever
+                     * has a genuine value to check it against. */
+                    rec.present |= DW1000_PROBE_F_T_SP | DW1000_PROBE_F_T_RR;
 
-                        if (dw1000_probe_distances(&rec)) {
-                            bool have_sym = (rec.present & DW1000_PROBE_F_SYM) != 0;
-                            rec.status = have_sym ? DW1000_PROBE_STATUS_OK
-                                                   : DW1000_PROBE_STATUS_BAD_DISTANCE;
-                        }
-                    } else {
-                        /* NO_REPORT: the single-sided estimate is still
-                         * recoverable from the four instants that did
-                         * arrive. */
+                    if (ss) {
                         dw1000_probe_distances(&rec);
+                        rec.status = DW1000_PROBE_STATUS_OK;
+                    } else {
+                        rec.t_rf     = final.rx_time;
+                        rec.present |= DW1000_PROBE_F_T_RF;
+                        rec.status   = DW1000_PROBE_STATUS_NO_REPORT;
+
+                        struct rx_capture report;
+                        rx_arm(dw, PROBE_EXCHANGE_FRAME_TIMEOUT_US);
+                        dw1000_probe_time_t report_deadline =
+                            dw1000_probe_port_now() + PROBE_EXCHANGE_FRAME_TIMEOUT_US;
+
+                        if (frame_wait(FRAME_TYPE_REPORT, wire_seq, own_addr, 5,
+                                      report_deadline, &report)) {
+                            rec.t_sf = get_u40le(&report.data[FRAME_HDR_LEN + 0 * FRAME_WORD_LEN]);
+                            rec.init_temp = (int16_t)get_u40le(
+                                &report.data[FRAME_HDR_LEN + 1 * FRAME_WORD_LEN]);
+                            rec.init_vbat = (uint16_t)get_u40le(
+                                &report.data[FRAME_HDR_LEN + 2 * FRAME_WORD_LEN]);
+                            rec.init_rx = (uint16_t)get_u40le(
+                                &report.data[FRAME_HDR_LEN + 3 * FRAME_WORD_LEN]);
+                            rec.init_fp = (uint16_t)get_u40le(
+                                &report.data[FRAME_HDR_LEN + 4 * FRAME_WORD_LEN]);
+                            rec.present |= DW1000_PROBE_F_T_SF | DW1000_PROBE_F_INIT_TEMP |
+                                           DW1000_PROBE_F_INIT_VBAT | DW1000_PROBE_F_INIT_RX |
+                                           DW1000_PROBE_F_INIT_FP;
+
+                            if (dw1000_probe_distances(&rec)) {
+                                bool have_sym = (rec.present & DW1000_PROBE_F_SYM) != 0;
+                                rec.status = have_sym ? DW1000_PROBE_STATUS_OK
+                                                       : DW1000_PROBE_STATUS_BAD_DISTANCE;
+                            }
+                        } else {
+                            /* NO_REPORT: the single-sided estimate is still
+                             * recoverable from the four instants that did
+                             * arrive. */
+                            dw1000_probe_distances(&rec);
+                        }
                     }
                 }
             }
@@ -533,9 +697,18 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
     }
 
     /* Stop listening. */
+    uint32_t txpower_reg;
+    uint32_t captured;
+
     dw1000_probe_port_bus_lock();
     dw1000_txrx_off(dw);
-    uint32_t txpower_reg = dw1000_tx_get_power(dw);
+    /* The tail of the run: anything captured after the last wait ended
+     * is unwatched exactly as any other gap is, and counting it here is
+     * what makes the account add up to the frames delivered. */
+    heard_bump(&heard.unwatched, rx_frame_seq - heard_upto);
+    heard_upto  = rx_frame_seq;
+    captured    = rx_frame_seq - heard_start;
+    txpower_reg = dw1000_tx_get_power(dw);
     dw1000_probe_port_bus_unlock();
 
     struct dw1000_probe_stats stats;
@@ -546,6 +719,15 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
     stats.driver_version      = DW1000_VERSION_FULL;
     stats.attempted            = result.attempted;
     stats.resolved             = result.resolved;
+
+    stats.heard          = captured > 65535u ? 65535u : (uint16_t)captured;
+    stats.drop_unwatched = heard.unwatched;
+    stats.drop_overrun   = heard.overrun;
+    stats.drop_foreign   = heard.drop[FRAME_DROP_FOREIGN];
+    stats.drop_short     = heard.drop[FRAME_DROP_SHORT];
+    stats.drop_type      = heard.drop[FRAME_DROP_TYPE];
+    stats.drop_dst       = heard.drop[FRAME_DROP_DST];
+    stats.drop_seq       = heard.drop[FRAME_DROP_SEQ];
 
     dw1000_probe_stats_format(line, sizeof(line), &stats, &origin);
     emit_line(line);
@@ -566,6 +748,12 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
     long     total     = warmup + count;
     struct dw1000_probe_twr_init_result result = { 0, 0 };
     long i;
+
+    /* The initiator has no STATS line to report an account on, so these
+     * counts go nowhere. Reset anyway: leaving them would have a later
+     * responder run on the same node report this run's frames as its
+     * own. */
+    heard_reset();
 
     for (i = 0; i < total; i++) {
         bool counted = (i >= warmup);

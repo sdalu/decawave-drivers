@@ -48,9 +48,18 @@
  * not resolve. This one emits a line regardless, because the count of
  * attempts that resolved is the one statistic a board could already
  * produce, and losing it would be a regression.
+ *
+ * NO_POLL is the one status that says nothing arrived at all, and it
+ * exists only because the responder's wait for a POLL is bounded. While
+ * that wait had no deadline there was no such outcome to name: a
+ * responder that heard nothing sat in it, emitted no record and no
+ * STATS, and was indistinguishable from a crashed one. An attempt that
+ * ends here carries the responder's own die reading and nothing else.
  */
 typedef enum {
     DW1000_PROBE_STATUS_OK = 0,        /**< four frames, distances computed       */
+    DW1000_PROBE_STATUS_NO_POLL,       /**< no POLL arrived before the attempt's
+                                     own deadline: nothing was exchanged   */
     DW1000_PROBE_STATUS_NO_RESPONSE,   /**< POLL received, RESPONSE never left:
                                      no transmit completion, t_sr absent   */
     DW1000_PROBE_STATUS_NO_FINAL,      /**< RESPONSE sent, no FINAL by deadline   */
@@ -325,9 +334,37 @@ size_t dw1000_probe_record_format(char *buf, size_t len,
  * from one process.
  *
  * Printed keys, fixed because a parser reads them: `role=` `tx_power_db=`
- * `tx_power_req_db=` `driver=` `completed=` `of=`. The first, fourth and
- * fifth-through-sixth match the reference; the requested power and the
- * driver version are additions.
+ * `tx_power_req_db=` `driver=` `completed=` `of=`, then the reception
+ * account below. The first, fourth and fifth-through-sixth match the
+ * reference; everything after them is an addition, appended rather than
+ * interleaved for the reason the record line gives.
+ *
+ * THE RECEPTION ACCOUNT answers a question `completed=0 of=40` cannot:
+ * whether the receiver heard nothing at all, or heard frames and threw
+ * every one of them away. Those are different defects with different
+ * fixes, and telling them apart used to need a second run with a second
+ * instrument.
+ *
+ * `heard=` is every frame the chip delivered to the application's rx_ok
+ * callback during the run. The seven `drop_` counts and the frames that
+ * matched partition it exactly, so `heard` minus their sum is the number
+ * of frames that were the one being waited for. Two of the seven are
+ * about this instrument rather than the link, and are the more
+ * interesting for that:
+ *
+ *  - `drop_unwatched=` arrived while no wait was running. The exchange
+ *    is a sequence of waits with gaps between them, and a peer that
+ *    answers inside a gap is not heard. A non-zero count here is the
+ *    turnaround being lost to the host, not to the radio;
+ *  - `drop_overrun=` arrived and was overwritten before the wait's poll
+ *    looked at it, the capture being a single slot.
+ *
+ * The other five are the frame-matching predicate's own reasons, in the
+ * order it applies them, each one narrower than the last: `drop_foreign=`
+ * carried no `dwp` mark and belongs to somebody else; `drop_short=` was
+ * too short to hold the payload the awaited type needs; `drop_type=` was
+ * one of ours of the wrong kind; `drop_dst=` was addressed elsewhere;
+ * `drop_seq=` belonged to a different exchange.
  */
 struct dw1000_probe_stats {
     int16_t     tx_power_db_x10;     /**< APPLIED power, read back from the
@@ -348,6 +385,19 @@ struct dw1000_probe_stats {
     uint16_t    attempted;           /**< printed `of=`                     */
     uint16_t    resolved;            /**< of those, how many reached OK;
                                           printed `completed=`              */
+
+    /* The reception account. See the note above for what partitions
+       what; all eight saturate rather than wrap, because a count that
+       has gone round is worse than useless and 65535 frames rejected
+       says everything a larger number would. */
+    uint16_t    heard;               /**< frames delivered during the run   */
+    uint16_t    drop_unwatched;      /**< no wait was running               */
+    uint16_t    drop_overrun;        /**< overwritten before it was read    */
+    uint16_t    drop_foreign;        /**< no `dwp` mark                     */
+    uint16_t    drop_short;          /**< too short for the awaited type    */
+    uint16_t    drop_type;           /**< ours, wrong kind                  */
+    uint16_t    drop_dst;            /**< addressed elsewhere               */
+    uint16_t    drop_seq;            /**< a different exchange              */
 };
 
 /**
@@ -360,9 +410,19 @@ size_t dw1000_probe_stats_format(char *buf, size_t len,
 /**
  * @brief Write the `READY ...` line a responder prints before listening.
  *
- * The bench waits for this before starting the initiator; without it the
- * opening exchanges are lost to a peer that is not listening yet, which
- * is one of the results that motivated building the instrument.
+ * A marker in the capture, not a signal anything can wait for, and the
+ * difference has cost a bench campaign already. A harness that buffers
+ * its console (a Ruby one does, whenever stdout is not a terminal) holds
+ * the whole log until the session ends, so a reader polling for this
+ * line cannot ever see it in time: the line was printed, it was simply
+ * not written yet. What a harness does instead is give the initiator a
+ * fixed head start and say so, and what the responder does instead is
+ * bound its own wait for the first POLL, so that a start-up that went
+ * wrong shows up as no-poll records rather than as silence.
+ *
+ * It stays worth printing. It is how a capture says which run its lines
+ * belong to, and it is how the responder reports that bring-up got as
+ * far as listening.
  */
 size_t dw1000_probe_ready_format(char *buf, size_t len,
                           const struct dw1000_probe_origin *origin);
