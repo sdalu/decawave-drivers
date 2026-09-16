@@ -746,7 +746,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
 {
     uint8_t  wire_seq  = 0;
     long     total     = warmup + count;
-    struct dw1000_probe_twr_init_result result = { 0, 0 };
+    struct dw1000_probe_twr_init_result result = { 0, 0, 0 };
     long i;
 
     /* The initiator has no STATS line to report an account on, so these
@@ -809,8 +809,20 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
                         put_u40le(&report_buf[FRAME_HDR_LEN + 3 * FRAME_WORD_LEN], init_rx);
                         put_u40le(&report_buf[FRAME_HDR_LEN + 4 * FRAME_WORD_LEN], init_fp);
 
+                        /* Tested, where it once was not. Every other
+                         * send in this exchange is checked; this one was
+                         * cast to void, so a REPORT that never left the
+                         * chip looked exactly like one the peer failed to
+                         * hear -- the responder said `no-report` and the
+                         * initiator still counted the exchange as having
+                         * reached REPORT. Measured 2026-09-16 on a Unix
+                         * initiator against a board responder: 10 of 20
+                         * exchanges "reached REPORT" while the responder
+                         * heard 38 frames and matched no REPORT at all. */
                         uint64_t unused_tx_time;
-                        (void)frame_send(dw, report_buf, sizeof(report_buf), &unused_tx_time, false);
+                        if (!frame_send(dw, report_buf, sizeof(report_buf),
+                                        &unused_tx_time, false))
+                            result.report_failed++;
                     }
                 }
             }

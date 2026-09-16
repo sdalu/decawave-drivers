@@ -535,6 +535,12 @@ main(int argc, char *argv[])
             " exchanges reached %s (warmup=%ld, not counted)",
             result.reached, result.attempted,
             ss ? "FINAL" : "REPORT", warmup);
+        /* Only worth a line when it happened: an unconfirmed REPORT send
+         * is the difference between "the peer did not hear us" and "we
+         * never got it out", and the peer cannot tell them apart. */
+        if (result.report_failed > 0)
+            INFO("twr_init: %" PRIu32 " REPORT send(s) unconfirmed",
+                 result.report_failed);
     }
 
     /* Shut the radio down before tearing down the event thread and the

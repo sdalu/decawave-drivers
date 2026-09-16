@@ -54,8 +54,17 @@ struct dw1000_probe_twr_resp_result {
  */
 struct dw1000_probe_twr_init_result {
     uint32_t attempted;     /**< counted exchanges only; warm-up excluded */
-    uint32_t reached;       /**< of @p attempted, how many reached FINAL
-                                 (single-sided) or REPORT (four-frame)    */
+    uint32_t reached;       /**< of @p attempted, how many reached the
+                                 point of sending FINAL (single-sided) or
+                                 REPORT (four-frame). Reaching the point
+                                 is not the same as the frame arriving:
+                                 see @p report_failed                     */
+    uint32_t report_failed; /**< of @p reached, how many REPORT sends the
+                                 driver did not confirm. Counted because
+                                 this send's result used to be discarded,
+                                 and a responder reporting `no-report`
+                                 could not be told apart from an
+                                 initiator that never got the frame out   */
 };
 
 /*===========================================================================*/
