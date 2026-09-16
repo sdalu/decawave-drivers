@@ -142,7 +142,7 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-manifest check-emulation	## compile the option matrix (~1 min), check the manifest, run the emulation smoke test
+check: check-options check-manifest check-emulation check-probe	## compile the option matrix (~1 min), check the manifest, run the emulation smoke test, run the probe format test
 
 # 256 compiles, tens of seconds in total, so the script reports progress
 # as it goes. CC, CFLAGS and WERROR reach it through the environment.
@@ -163,6 +163,14 @@ check-manifest:					## check dw1000.cmake still describes the tree
 # fails the Makefile for spelling a port path out itself).
 check-emulation:				## run the emulation smoke test (driver, port/emulation, stub medium)
 	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-emulation.sh
+
+# probe/include/dw1000/probe/record.h and role.h are free of <dw1000/dw1000.h>
+# by design, so this is the one probe check that needs no chip, no
+# driver and no radio either -- record, role, port/emulation and the
+# format test, the same reason check-emulation exists for the driver.
+# The script reads the paths from the manifest, as everything here does.
+check-probe:					## run the probe format test (record, role, port/emulation)
+	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-probe.sh
 
 # --- building ---------------------------------------------------------
 
@@ -303,4 +311,5 @@ distclean: clean				## clean, plus the generated documentation
 	rm -rf doc/generated
 
 .PHONY: help portcheck check check-options check-manifest check-emulation \
+	check-probe \
 	lib version version-full tag ports options sources doc clean distclean

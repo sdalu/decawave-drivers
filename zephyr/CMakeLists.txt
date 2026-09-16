@@ -33,3 +33,23 @@ zephyr_library_sources(${DW1000_SOURCES})
 zephyr_library_sources(${DW1000_OSAL_ZEPHYR_SOURCES})
 
 endif()
+
+# The probe is a separate library from the driver and a separate option,
+# for the reason given in Kconfig: it does not depend on the driver. Its
+# include directory is the probe API; a probe port has none of its own,
+# since it only implements <dw1000/probe/port.h>.
+if (CONFIG_DW1000_PROBE)
+
+include(${CMAKE_CURRENT_LIST_DIR}/../dw1000.cmake)
+
+zephyr_include_directories(${DW1000_PROBE_INCLUDE_DIR})
+zephyr_library_sources(${DW1000_PROBE_SOURCES_CORE})
+zephyr_library_sources(${DW1000_PROBE_ZEPHYR_SOURCES})
+
+# The exchange drives the chip, so it is its own symbol with its own
+# dependency -- see Kconfig.
+if (CONFIG_DW1000_PROBE_EXCHANGE)
+zephyr_library_sources(${DW1000_PROBE_SOURCES_EXCHANGE})
+endif()
+
+endif()

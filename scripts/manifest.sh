@@ -76,6 +76,14 @@ portvar() {
     cmvar "DW1000_OSAL_${up}_$2"
 }
 
+# set(DW1000_PROBE_EMULATION_SOURCES ...) for probe port emulation. Shallower
+# than portvar(): a probe port implements probe/include/dw1000/probe/port.h
+# alone, so there is no per-port include directory to ask for.
+probeportvar() {
+    up=`echo "$1" | tr 'a-z' 'A-Z'`
+    cmvar "DW1000_PROBE_${up}_SOURCES"
+}
+
 what=$1
 [ $# -gt 0 ] && shift
 
@@ -92,6 +100,19 @@ libs)     out=; for l in `cmvar DW1000_LIBS`; do out="$out -l$l"; done
 ports)    cmvar DW1000_OSAL_PORTS ;;
 inc)      portvar "$1" INCLUDE_DIR ;;
 src)      portvar "$1" SOURCES ;;
+
+# The probe: record and role, free of <dw1000/dw1000.h>, and its ports --
+# tests/check-probe.sh asks here rather than naming probe/src or
+# probe/port/* itself, the same discipline check-emulation.sh keeps for
+# the driver.
+probeincdir)  cmvar DW1000_PROBE_INCLUDE_DIR ;;
+# Composed here from its two pieces, exactly as `sources` is for the
+# driver: the cmake composite is ${...} references the awk cannot expand.
+probecore)    cmvar DW1000_PROBE_SOURCES_CORE ;;
+probeexchange) cmvar DW1000_PROBE_SOURCES_EXCHANGE ;;
+probesrc)     echo "`cmvar DW1000_PROBE_SOURCES_CORE` `cmvar DW1000_PROBE_SOURCES_EXCHANGE`" ;;
+probeports)   cmvar DW1000_PROBE_PORTS ;;
+probeportsrc) probeportvar "$1" ;;
 
 # Every port's OSAL object, for `make clean`: which port was built is not
 # recorded anywhere, so clean removes them all.
@@ -147,6 +168,8 @@ vars)
     echo "usage: manifest.sh version|incdir|core|send|sources|libs|ports|objs" >&2
     echo "       manifest.sh inc|src <port>" >&2
     echo "       manifest.sh vars <port> <directory>" >&2
+    echo "       manifest.sh probeincdir|probecore|probeexchange|probesrc|probeports" >&2
+    echo "       manifest.sh probeportsrc <port>" >&2
     exit 1
     ;;
 esac

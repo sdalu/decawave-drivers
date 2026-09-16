@@ -23,6 +23,14 @@
 #   DW1000_OSAL_<PORT>_INCLUDE_DIR   for PORT in CF2 CHIBIOS EMULATION MYNEWT
 #   DW1000_OSAL_<PORT>_SOURCES       NULL UNIX ZEPHYR
 #
+#   DW1000_PROBE_INCLUDE_DIR        the probe API, add to your include path
+#   DW1000_PROBE_SOURCES            the probe core -- record and role, no chip,
+#                            no port, and deliberately no <dw1000/dw1000.h>
+#   DW1000_PROBE_PORTS              the probe ports this tree ships
+#   DW1000_PROBE_<PORT>_SOURCES     for PORT in EMULATION; a probe port needs no
+#                            include directory of its own, since it only
+#                            implements probe/include/dw1000/probe/port.h
+#
 # Pick exactly one OSAL: it is the port contract the core compiles
 # against, and its include directory must come before nothing else that
 # offers a <dw1000/osal.h>.
@@ -141,3 +149,37 @@ set(DW1000_OSAL_ZEPHYR_INCLUDE_DIR
     ${CMAKE_CURRENT_LIST_DIR}/port/zephyr/dw/osal/include)
 set(DW1000_OSAL_ZEPHYR_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/port/zephyr/dw/osal/src/osal.c)
+
+# --- probe --------------------------------------------------------------
+# What one exchange produced, and how it is written down: see
+# probe/include/dw1000/probe/record.h. record.c and role.c are free of
+# <dw1000/dw1000.h> by design; exchange.c is not -- it drives the chip --
+# which is why it is its own translation unit rather than folded into
+# either. All three are still a source list of their own rather than part
+# of DW1000_SOURCES, since a consumer that wants the probe wants it
+# addressed separately from the driver core.
+set(DW1000_PROBE_INCLUDE_DIR
+    ${CMAKE_CURRENT_LIST_DIR}/probe/include)
+# Two layers, the same shape as DW1000_SOURCES_CORE / _SEND above. CORE is
+# the record and the roles, free of <dw1000/dw1000.h>; EXCHANGE drives the
+# chip. A consumer wanting the format with no driver takes CORE alone.
+set(DW1000_PROBE_SOURCES_CORE
+    ${CMAKE_CURRENT_LIST_DIR}/probe/src/role.c
+    ${CMAKE_CURRENT_LIST_DIR}/probe/src/record.c)
+set(DW1000_PROBE_SOURCES_EXCHANGE
+    ${CMAKE_CURRENT_LIST_DIR}/probe/src/exchange.c)
+
+set(DW1000_PROBE_SOURCES
+    ${DW1000_PROBE_SOURCES_CORE}
+    ${DW1000_PROBE_SOURCES_EXCHANGE})
+
+set(DW1000_PROBE_PORTS emulation unix zephyr)
+
+set(DW1000_PROBE_EMULATION_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/probe/port/emulation/src/port.c)
+
+set(DW1000_PROBE_UNIX_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/probe/port/unix/src/port.c)
+
+set(DW1000_PROBE_ZEPHYR_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/probe/port/zephyr/src/port.c)
