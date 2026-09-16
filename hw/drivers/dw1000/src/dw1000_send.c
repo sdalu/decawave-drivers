@@ -43,6 +43,36 @@ _dw1000_tx_prepare_data_send(
 static inline bool
 _dw1000_tx_prepare_fctrl(dw1000_t *dw, size_t length, int tx_mode)
 {
+    /* Errata 1.4 §3.2 (RX-1). "The 129th octet (i.e. buffer offset
+     * index[128]) of the second RX buffer (i.e. the one accessed when
+     * HSRBP = 1) gets corrupted when the user writes TX data at offsets
+     * greater than index 127, and issues a TX send command, before
+     * reading the received frame."
+     *
+     * A payload of more than 128 bytes written from offset 0 reaches
+     * index 128, so this is the send the erratum names, and the three
+     * workarounds it offers are all "do not do that" (do not answer a
+     * long message with one beyond 127 octets; keep messages short in
+     * double buffered mode; use single buffering for long messages).
+     * Refuse rather than corrupt a frame the host has not read yet.
+     *
+     * Reachable only with proprietary long frames. Without them
+     * dw1000_tx_get_frame_maxsize() is 127, so the largest payload is
+     * 125 and a host cannot write past index 124 whatever it does. That
+     * is why this has never bitten anyone here, and why the test for it
+     * needs its own build.
+     *
+     * Conservative in one direction, deliberately: the erratum names the
+     * second buffer, HSRBP = 1, and this does not test HSRBP. Tracking
+     * it would mean shadowing a pointer the overrun path toggles
+     * unconditionally, or an SPI read on every send, to halve the
+     * refusals of a case the erratum tells you not to build. dw->rx_held
+     * is the window where a frame is reported and not yet released,
+     * which is what "before reading the received frame" means here.
+     */
+    if (dw->config->dblbuff && dw->rx_held && (length > 128))
+	return false;
+
     // Adjust data length if CRC is automatically appended
     if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
 	length += DW1000_CRC_LENGTH;

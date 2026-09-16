@@ -329,6 +329,13 @@ typedef struct dw1000_config {
      * dw1000_initialise() refuses this flag without an rx_error
      * callback rather than leave the receiver to stop for good on the
      * first overrun.
+     *
+     * Errata 1.4 §3.2 (RX-1) applies to this mode and to no other: a
+     * transmit whose payload passes index 127, issued while a frame is
+     * still unread in the second receive buffer, corrupts that frame's
+     * 129th octet. The send functions refuse such a transmit while a
+     * frame is held, and it cannot arise at all without proprietary long
+     * frames. See @p dw1000_tx_write_frame_data().
      */
     uint8_t    dblbuff:1;
     /**
@@ -1308,6 +1315,16 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset, int tx_mode);
  *
  * @note  DW TX buffer is 1024 bytes (UM §7.2.11).
  * @note  Data outside buffer will be silently discarded
+ * @warning Errata 1.4 §3.2 (RX-1): writing here past index 127 and then
+ *        issuing a send, while a double buffered frame sits unread in
+ *        the second receive buffer, corrupts that frame's 129th octet.
+ *        This function does NOT enforce it, having no way to refuse: it
+ *        returns void, and it cannot know a send will follow. The send
+ *        functions of <dw1000/dw1000_send.h> do refuse it. A caller
+ *        driving the transmitter by hand, through this and
+ *        @p dw1000_tx_fctrl() and @p dw1000_tx_start(), owns the
+ *        constraint itself. It cannot arise without proprietary long
+ *        frames, @p dw1000_tx_get_frame_maxsize() being 127 otherwise.
  *
  * @param dw        driver context
  * @param data      data to write

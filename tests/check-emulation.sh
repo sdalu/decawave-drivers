@@ -12,6 +12,10 @@
 #           receive, RXRFTO and RXPTO -- and the create/destroy cycle
 #   dblbuf  the double receive buffer: the swinging set, HRBPT, overrun
 #
+# dblbuf is built twice. Errata 1.4 RX-1 needs a TX write past index 127,
+# which the 127 byte standard frame cannot reach, so the second build
+# turns proprietary long frames on and the file compiles one extra step.
+#
 # Here: one summary line per test, and the test's own lines kept when
 # something failed. Run by `make check`.
 #
@@ -39,14 +43,22 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 # Not a glob over tests/emulation: tests/check-manifest.sh exists to
 # punish a build step that discovers its own inputs, and a test added
 # here should be added here deliberately.
-tests="smoke timing dblbuf"
+tests="smoke timing dblbuf dblbuf_longframe"
 
 status=0
 for t in $tests; do
     echo "emulation: building the $t test, port/emulation, $cc"
 
-    if ! $cc $cflags $inc -DDW1000_VERSION_GIT="\"$gitver\"" \
-	    -pthread -o "$tmp/$t" "$top/tests/emulation/$t.c" $src \
+    # One file, two builds: see the note at the top.
+    case $t in
+    dblbuf_longframe) file=dblbuf
+		      extra=-DDW1000_WITH_PROPRIETARY_LONG_FRAME=1 ;;
+    *)		      file=$t
+		      extra= ;;
+    esac
+
+    if ! $cc $cflags $extra $inc -DDW1000_VERSION_GIT="\"$gitver\"" \
+	    -pthread -o "$tmp/$t" "$top/tests/emulation/$file.c" $src \
 	    $libs > "$tmp/build.log" 2>&1; then
 	sed 's/^/  /' "$tmp/build.log"
 	echo "emulation: the $t test does not build"

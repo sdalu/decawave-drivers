@@ -53,17 +53,6 @@ now, `DW1000_WITH_DWM1000_EVK_COMPATIBILITY` having been dropped in
 What this audit did not cover in the first place is the **Not audited**
 bullet above; it is still uncovered.
 
-### Errata RX-1 is documented but not enforced
-
-A TX buffer write past offset 127, issued before the second RX buffer is
-read out, corrupts byte 128 of that buffer. It bites a double-buffered
-node answering with a frame longer than 127 bytes. Stated in
-`hw/drivers/dw1000/README.md` since 2026-09-16, so the "nor documented"
-half is closed, but still not enforced:
-`dw1000_tx_write_frame_data()` neither rejects nor splits such a write,
-and the header says nothing. The only erratum item still uncovered; see
-the Errata 1.4 table.
-
 ### Settled: channel 5 now carries the current manual's values
 
 - **Location**: `src/dw1000.c`, `channel_tunning[]`, the channel 5 row.
@@ -269,9 +258,14 @@ embedded-transmit paths:
 | Med | `MRXOVRR` was never unmasked, so the documented overrun recovery ran only when some other event happened to bring the driver in | `dw1000_initialise()` |
 | Med | A payload over the frame ceiling was clamped and transmitted truncated, reporting success; the assert beside the clamp is compiled out on four of the five ports | `_dw1000_tx_prepare_fctrl()`, with `dw1000_tx_get_frame_maxsize()` exported so the rule lives in one place |
 | Low | `dw1000_tx_get_power()`'s comment claimed the chip could disagree with the cache. TX_POWER is a plain read/write register, so it cannot; the read is worth one thing only, noticing a chip that reset since it was configured | `dw1000.h` |
+| Low | Errata RX-1 neither enforced nor documented. It is the last erratum item that was uncovered, and it turns out to be unreachable without proprietary long frames: the standard 127 byte ceiling means the largest payload is 125 and no host can write past TX index 124 | `_dw1000_tx_prepare_fctrl()` refuses a payload past index 127 while a frame is held; documented on `dw1000_tx_write_frame_data()` and the `dblbuff` field |
 | Low | The vendor policy differences were documented nowhere but in this file | `hw/drivers/dw1000/README.md`, which covers DIS_STXP, the FCS in the reported length, the IDLE-before-TXSTRT precondition and who re-arms the receiver |
 
-Each of the first five carries a regression test against `port/emulation`
+The RX-1 guard is covered by a second build of
+`tests/emulation/dblbuf.c` with proprietary long frames turned on, the
+only configuration in which the erratum can be reached at all; the
+default build compiles that step out. Each of the other five carries a
+regression test against `port/emulation`
 and each was cycled (failing before, passing after, failing again
 reverted): `tests/emulation/dblbuf.c` gained "frame held across
 txrx_off" and "dblbuff needs rx_error", `tests/emulation/timing.c`
@@ -387,7 +381,7 @@ now matches 2.18 throughout. No other table moved between 2.12 and 2.18.
 | Item | Status in this driver |
 | :--- | :-------------------- |
 | TX-1 delayed TX may not complete | Worked around: the TX clock is forced on for a delayed send. Measured on hardware, 85 silent losses before against 0 after; see **Fixed**. |
-| RX-1 byte 128 of the second RX buffer corrupted by a TX write past offset 127 before readout | **Not enforced**, though documented in `hw/drivers/dw1000/README.md` since 2026-09-16; see **Open**. |
+| RX-1 byte 128 of the second RX buffer corrupted by a TX write past offset 127 before readout | Enforced since 2026-09-16: the send functions refuse a payload reaching past TX index 127 while a frame is held. Unreachable anyway without proprietary long frames. Every erratum item is now covered. |
 | TX-2 TX buffer index reset at TXSTRT | Not applicable; the driver offers no fast-turnaround write during transmission. |
 | IRQ-1 IRQ glitch in double-buffered mode | Mitigated by the masked clears; `dw1000_pending_interrupt()` supports the poll-the-line workaround. |
 | PMSC-1 wake-up event longer than 500 µs | Not applicable; no sleep entry point. `dw1000_hardreset()` holds WAKEUP high. |

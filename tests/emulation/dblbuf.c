@@ -419,6 +419,11 @@ static struct {
     int    id_before;           /* frame the callback was handed */
     int    id_after;            /* and what it held afterwards */
     int    host_in, ic_in;      /* the pointers, as the callback saw them */
+#if DW1000_WITH_PROPRIETARY_LONG_FRAME
+    bool   rx1_mode;            /* run the errata RX-1 sends instead */
+    int    rx1_long_rc;         /* 129 bytes: past TX index 127 */
+    int    rx1_short_rc;        /* 128 bytes: the last safe length */
+#endif
 } rx_probe;
 
 static void
@@ -429,6 +434,41 @@ cb_rx_probe(dw1000_t *dw, uint32_t status, size_t len, bool rng)
     if (! rx_probe.active)
 	return;
     rx_probe.called = true;
+
+#if DW1000_WITH_PROPRIETARY_LONG_FRAME
+    if (rx_probe.rx1_mode) {
+	static uint8_t big[160];
+	memset(big, 0x33, sizeof(big));
+
+	/* The send functions want IDLE, and in double buffered mode the
+	 * driver re-enabled the receiver before entering this callback,
+	 * so a responder answering from here has to stop it first. This
+	 * is the call their @pre names for the double buffered case:
+	 * dw1000_txrx_off() would drop the receive status of the frame
+	 * being held, and holding it is the whole point here.
+	 */
+	dw1000_txrx_idle(dw);
+
+	/* A frame is held right now, which is the erratum's "before
+	 * reading the received frame". 129 bytes from offset 0 touches
+	 * TX index 128; 128 bytes stops at 127.
+	 */
+	rx_probe.rx1_long_rc  = dw1000_tx_send(dw, big, 129,
+					       DW1000_TX_IMMEDIATE);
+
+	/* Back to IDLE before the second one. When the guard is in place
+	 * the first send was refused and the chip never left IDLE, but
+	 * this step has to report that refusal failing rather than die on
+	 * the model's state assertion, which is what a send issued into a
+	 * transmitter still busy with the first one would do.
+	 */
+	dw1000_txrx_idle(dw);
+
+	rx_probe.rx1_short_rc = dw1000_tx_send(dw, big, 128,
+					       DW1000_TX_IMMEDIATE);
+	return;
+    }
+#endif
 
     buffer_pointers(dw, &rx_probe.host_in, &rx_probe.ic_in);
     rx_probe.id_before = buffered_frame_id(dw);
@@ -922,6 +962,52 @@ step_hold_survives_txrx_off(dw1000_t *dw, struct stub *s)
 }
 
 
+#if DW1000_WITH_PROPRIETARY_LONG_FRAME
+/* Errata 1.4 3.2 (RX-1): a long transmit while a frame is held.
+ *
+ * "The 129th octet (i.e. buffer offset index[128]) of the second RX
+ * buffer ... gets corrupted when the user writes TX data at offsets
+ * greater than index 127, and issues a TX send command, before reading
+ * the received frame." The send functions refuse that send rather than
+ * corrupt the held frame.
+ *
+ * This step exists only in a long frame build, and that is the finding
+ * as much as the guard is: without proprietary long frames
+ * dw1000_tx_get_frame_maxsize() is 127, the largest payload is 125, and
+ * no host can write past TX index 124 however hard it tries. The
+ * erratum is unreachable in the configuration everything here ships in.
+ */
+static const char *
+step_errata_rx1(dw1000_t *dw, struct stub *s)
+{
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
+
+    deliver(dw, s, 1);
+
+    memset(&rx_probe, 0, sizeof(rx_probe));
+    rx_probe.active   = true;
+    rx_probe.rx1_mode = true;
+    bool processed    = dw1000_process_events(dw);
+    rx_probe.active   = false;
+
+    if (! processed || ! rx_probe.called)
+	return "the rx_ok callback never ran, so nothing was held";
+
+    if (rx_probe.rx1_long_rc == 0)
+	return "a 129 byte payload was accepted while a frame was held:"
+	       " that write reaches TX index 128";
+    if (rx_probe.rx1_short_rc != 0)
+	return REASON("a 128 byte payload was refused while a frame was"
+		      " held (%d): the guard is one byte too eager",
+		      rx_probe.rx1_short_rc);
+    return NULL;
+}
+#endif
+
+
 /*----------------------------------------------------------------------*/
 /* Harness                                                              */
 /*----------------------------------------------------------------------*/
@@ -1034,6 +1120,9 @@ main(void)
 	.bitrate  = DW1000_BITRATE_6800KBPS,
 	.tx_power = DW1000_TX_POWER_AUTO,
 	.proprietary.sfd = 0,
+#if DW1000_WITH_PROPRIETARY_LONG_FRAME
+	.proprietary.long_frames = 1,
+#endif
     };
 
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1092,6 +1181,9 @@ main(void)
     step("three frames overrun",    step_overrun(&dw, &stub));
     step("single buffered",         step_single_buffered(&dw, &stub));
     step("dblbuff needs rx_error",  step_dblbuff_needs_rx_error(&dw, &stub));
+#if DW1000_WITH_PROPRIETARY_LONG_FRAME
+    step("errata RX-1 long send",   step_errata_rx1(&dw, &stub));
+#endif
     step("frame held across txrx_off",
                                     step_hold_survives_txrx_off(&dw, &stub));
 

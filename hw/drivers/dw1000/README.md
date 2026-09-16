@@ -203,11 +203,18 @@ TX-done event, so the driver reported success for a frame that never left.
 The driver now forces the TX clock on before `TXDLYS|TXSTRT` and releases it
 on completion. Nothing for a caller to do.
 
-**RX-1, not handled.** A TX buffer write past offset 127, issued before the
-second RX buffer has been read out, corrupts byte 128 of that buffer. This
-bites a double-buffered node answering with a frame longer than 127 bytes.
-The driver neither rejects nor splits such a write. If that is your traffic
-pattern, keep the reply under 128 bytes or write it after the read-out.
+**RX-1, handled, and unreachable by default anyway.** A TX buffer write past
+index 127, followed by a send, while a frame sits unread in the second
+receive buffer, corrupts that frame's 129th octet. The send functions refuse
+such a transmit while a frame is held, so an ordinary caller cannot hit it.
+
+Two things worth knowing if you drive the transmitter yourself.
+`dw1000_tx_write_frame_data()` does **not** enforce it: it returns void and
+cannot know a send will follow, so a caller using it with
+`dw1000_tx_fctrl()` and `dw1000_tx_start()` owns the constraint. And it
+cannot arise at all without proprietary long frames, since
+`dw1000_tx_get_frame_maxsize()` is otherwise 127, which caps the payload at
+125 and the highest index written at 124.
 
 ## Receiving
 
