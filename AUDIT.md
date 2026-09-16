@@ -64,14 +64,14 @@ half is closed, but still not enforced:
 and the header says nothing. The only erratum item still uncovered; see
 the Errata 1.4 table.
 
-### Channel 5 RF_TXCTRL and TC_PGDELAY are the pre-2.16 values
+### Settled: channel 5 now carries the current manual's values
 
 - **Location**: `src/dw1000.c`, `channel_tunning[]`, the channel 5 row.
-- **Bug**: the manual changed both of that row's analogue values after
-  2.12, and the driver still carries the old ones.
+- **Was**: the manual changed both of that row's analogue values after
+  2.12, and the driver carried the old ones.
 
-  | Register | driver | 2.12 | current | changed in |
-  | :------- | :----- | :--- | :------ | :--------- |
+  | Register | was | 2.12 | now, per the manual | changed in |
+  | :------- | :-- | :--- | :------------------ | :--------- |
   | RF_TXCTRL (0x28:0C) | `0x001E3FE0` | `0x001E3FE0` | `0x001E3FE3` (Table 38) | 2.16 |
   | TC_PGDELAY (0x2A:0B) | `0xC0` | `0xC0` | `0xB5` (Table 40) | 2.18 |
 
@@ -86,13 +86,34 @@ the Errata 1.4 table.
 - **Impact**: the transmit spectrum on channel 5 only. Nothing else in
   the driver depends on either value, and channels 1, 2, 3, 4 and 7 are
   unchanged in both tables.
-- **Fix**: *not applied; your call.* uwb-dw1000 (September 2020, well
-  after both manual revisions) still has `RF_TXCTRL_CH5 0x001E3FE0` and
-  `TC_PGDELAY_CH5 0xC0`, so adopting the new values puts this driver
-  alone among DW1000 drivers, and TC_PGDELAY is the one value the manual
-  warns "may need to be tuned for spectral regulation compliance
-  depending on external circuitry". Following the current manual argues
-  for changing both; matching every deployed driver argues for neither.
+- **Adopted 2026-09-16**, both values. What decided it was that the old
+  RF_TXCTRL is a defect rather than a preference: Decawave's own issue
+  tracker carries it (uwb-dw1000 issue 2), reporting that the old
+  setting produces about 2 dB of spurs in the channel 5 transmit
+  spectrum, which "can cause regulatory issues when using channel 5,
+  meaning a lower TX power has to be used to meet regulation". That
+  issue is still open and its pull request unmerged, so uwb-dw1000
+  carrying `0x001E3FE0` is neglect and not a considered choice; the
+  earlier argument here, that adopting would put this driver alone among
+  DW1000 drivers, was weighing a bug as though it were a convention.
+- **Measured** when adopted, rpi-c to rpi-d on channel 5, matched runs
+  interleaved:
+
+  | | signal power | SDS-TWR distance |
+  | :-- | -----------: | ---------------: |
+  | `0x001E3FE0` / `0xC0` | -80.98 dBm | 73.2 cm |
+  | `0x001E3FE3` / `0xB5` | -81.59 dBm | 68.6 cm |
+
+  Power over three runs a side, spread 0.02 dB; distance over two runs a
+  side of 60 exchanges, every new run below every old one.
+- **Consequence, and it is not optional.** The distance is a bias shift,
+  not an accuracy gain: there is no ground truth in that measurement.
+  TC_PGDELAY sets the pulse width, and pulse width sets the effective
+  antenna delay, so every `tx_antenna_delay` and `rx_antenna_delay`
+  calibrated against `0xC0` is now wrong by roughly 4 cm on channel 5.
+  Re-calibrate every node before trusting a distance, and treat
+  measurements taken across this change as different configurations.
+  Nothing in the tree does this for you.
 
 ### Settled: the proprietary SFD is honoured at 6.8 Mbps
 
@@ -357,9 +378,9 @@ channel values (FS_PLLCFG, FS_PLLTUNE, RF_TXCTRL, RF_RXCTRLH,
 TC_PGDELAY), 12 manual TX power words, 24 LDE_REPC values, the PRF, PAC,
 bitrate and preamble tables, and the five RXPACC adjustments. Against
 2.12 all match, apart from the channel 4 and 7 calibration power, since
-corrected. Against **2.18** two more differ, both in the channel 5 row —
-RF_TXCTRL and TC_PGDELAY, and are under **Open**; no other table moved
-between 2.12 and 2.18.
+corrected. Against **2.18** two more differed, both in the channel 5 row,
+RF_TXCTRL and TC_PGDELAY; both were adopted on 2026-09-16 and the table
+now matches 2.18 throughout. No other table moved between 2.12 and 2.18.
 
 ## Errata 1.4 coverage
 
@@ -400,10 +421,12 @@ the late delayed receive).
 | Clock drift sign | `-RXTOFS / interval` | `RXTOFS / interval`, the §7.2.22 worked example |
 | Frame filtering across reconfigure | reset to the config default | preserved |
 
-Two rows the vendor and this driver share, and the current manual does
-not: `RF_TXCTRL_CH5` (`0x001E3FE0`) and `TC_PGDELAY_CH5` (`0xC0`) are
-uwb-dw1000's values too, though it postdates both manual revisions that
-changed them. Neither driver tracked the change; see **Open**.
+Two rows where this driver now follows the current manual and
+uwb-dw1000 does not: `RF_TXCTRL_CH5` and `TC_PGDELAY_CH5`. Both were
+changed after 2.12 and uwb-dw1000 kept the old values, the RF_TXCTRL one
+against an open issue of its own; ours took the new ones on 2026-09-16.
+See the channel 5 entry above, including the antenna-delay
+re-calibration it obliges.
 
 **Where ours follows deca_device.c rather than uwb-dw1000**: the SAR
 temperature read (RF_CONF 0x80, 0x0A, 0x0F then TC_SARC; uwb-dw1000 only
@@ -453,15 +476,15 @@ down:
 
 | Rev | Edit | Bearing on the driver |
 | :-- | :--- | :-------------------- |
-| 2.16 | Table 38, channel 5 default | **RF_TXCTRL `0x001E3FE0` → `0x001E3FE3`**; see **Open** |
+| 2.16 | Table 38, channel 5 default | **RF_TXCTRL `0x001E3FE0` → `0x001E3FE3`**; adopted 2026-09-16 |
 | 2.16 | PRES_SLEEP defined (AON_WCFG) | None: the driver defines only the two ONW_* bits, and has no sleep path |
 | 2.16 | PART/CHIP/LOT ID scheme, Appendix 4 | None; OTP decoding the driver does not do |
 | 2.17 | HIRQ_POL "as part of 0x04" | A correction to §2.2.2, which had said 0x0D. The register map was right all along, and so is the driver |
 | 2.18 | Fig 10, PHR 21 bits → 19 | None; the driver's "7-bit length" statement is about TFLEN, untouched |
-| 2.18 | §7.2.31.1 coarse gain 3 dB → 2.5 dB, range 33.5 → 30.5 dB | **The manual TX power encoding**; see **Open** |
+| 2.18 | §7.2.31.1 coarse gain 3 dB → 2.5 dB, range 33.5 → 30.5 dB | **The manual TX power encoding**; see **Fixed** |
 | 2.18 | 0x19 SYS_STATE described | An opportunity, not a defect: the driver defines the register, never reads it, and documents IDLE preconditions it cannot check. APS022 §4.3-4.6 tabulates the values |
-| 2.18 | §7.2.40.9 preamble timeout comment | **The PTO is suspendable**; see **Open** |
-| 2.18 | Table 40, TC_PGDELAY channel 5 → `0xB5` | **The other half of the channel 5 row**; see **Open** |
+| 2.18 | §7.2.40.9 preamble timeout comment | **The PTO is suspendable**; see **Fixed** |
+| 2.18 | Table 40, TC_PGDELAY channel 5 → `0xB5` | **The other half of the channel 5 row**; adopted 2026-09-16 |
 | 2.18 | NLOS note removed from LDE_CFG1/CFG2 | None: `lde_cfg2` comes from the PRF table and is never the 0x0003 the note named |
 
 APS022 v1.4 (Qorvo, 2024, 23 pages) was read in the same round. It

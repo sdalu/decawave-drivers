@@ -202,12 +202,48 @@ struct _channel_tunning {
     uint8_t  rf_rxctrlh;      // RF configuration for RX
     uint8_t  tc_pgdelay;      // Pulse Generator Delay
 };
+/* Channel 5 carries the values of the CURRENT manual, which are not the
+ * ones every other DW1000 driver ships. Both were changed after UM 2.12
+ * and both changes are deliberate here:
+ *
+ *   RF_TXCTRL  0x001E3FE0 -> 0x001E3FE3   UM 2.16, table 38
+ *   TC_PGDELAY       0xC0 -> 0xB5         UM 2.18, table 40
+ *
+ * The first is a real defect in the old value, not a preference.
+ * Decawave's own issue tracker carries it (uwb-dw1000 issue 2): the old
+ * setting produces about 2 dB of spurs in the channel 5 transmit
+ * spectrum, which "can cause regulatory issues when using channel 5,
+ * meaning a lower TX power has to be used to meet regulation". That
+ * issue is still open and its pull request unmerged, so uwb-dw1000
+ * carrying 0x001E3FE0 is neglect rather than a considered choice, and
+ * matching it would be matching a bug. Note 2.18 still draws the old
+ * ...E0 in the bit diagram below table 38, and typesets the table cell
+ * as "0x00 1E3FE3" with a stray space; the table is the normative one.
+ *
+ * The second comes with 2.18's change log entry, "TC_PGDELAY setting for
+ * channel 5 updated to 0xB5, maximising power in CH B/W". TC_PGDELAY
+ * sets the pulse width and so the occupied bandwidth.
+ *
+ * Measured on the bench when they were adopted (2026-09-16, rpi-c to
+ * rpi-d, channel 5, matched runs):
+ *
+ *   received signal power   -80.98 dBm -> -81.59 dBm   (-0.61 dB)
+ *   SDS-TWR distance         73.2 cm   ->  68.6 cm     (-4.5 cm)
+ *
+ * The distance is a BIAS shift, not an accuracy gain: there is no ground
+ * truth in that measurement. Changing the pulse width changes the
+ * effective antenna delay, so cfg->tx_antenna_delay and
+ * cfg->rx_antenna_delay calibrated against 0xC0 no longer hold, and a
+ * node keeping its old calibration reads about 4 cm short on channel 5.
+ * Re-calibrate after taking this driver, and do not compare distances
+ * measured across the change.
+ */
 static const struct _channel_tunning channel_tunning[] = {
     { 0x09000407, 0x1E, 0x00005C40, 0xD8, 0xC9 }, // Channel 1
     { 0x08400508, 0x26, 0x00045CA0, 0xD8, 0xC2 }, // Channel 2
     { 0x08401009, 0x56, 0x00086CC0, 0xD8, 0xC5 }, // Channel 3
     { 0x08400508, 0x26, 0x00045C80, 0xBC, 0x95 }, // Channel 4
-    { 0x0800041D, 0xBE, 0x001E3FE0, 0xD8, 0xC0 }, // Channel 5
+    { 0x0800041D, 0xBE, 0x001E3FE3, 0xD8, 0xB5 }, // Channel 5 (UM 2.16/2.18)
     { 0x0800041D, 0xBE, 0x001E7DE0, 0xBC, 0x93 }, // Channel 7
 };
 
