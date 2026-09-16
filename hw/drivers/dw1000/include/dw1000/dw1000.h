@@ -1187,6 +1187,43 @@ dw1000_txrx_idle(dw1000_t *dw)
 void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay);
 
 /**
+ * @brief Read the TX_POWER register back from the chip
+ *
+ * Not @p dw->tx_power, which is the word this driver last WROTE. The two
+ * agree in every ordinary case: dw1000_configure() clamps, encodes, and
+ * resolves the automatic setting out of the power table before caching,
+ * so the cache is the applied value and not the request.
+ *
+ * What this answers is whether the chip is in the state the driver
+ * believes -- a write that never landed, a reset, a radio that came up
+ * wrong. None of that shows in the cache, and for a measurement all of
+ * it invalidates the run.
+ *
+ * @param dw   driver context
+ * @return     the TX_POWER word (UM 2.18 7.2.31)
+ */
+uint32_t dw1000_tx_get_power(dw1000_t *dw);
+
+/**
+ * @brief Decode a TX_POWER word to half-dB steps
+ *
+ * The exact inverse of the encoding _dw1000_radio_tuning() applies: a
+ * 3-bit coarse (DA gain) field holding (6 - coarse) and a 5-bit fine
+ * (mixer gain) field, for 61 half-dB steps over 30.5 dB.
+ *
+ * Being the exact inverse, it cannot detect an error in that encoding --
+ * a wrong encoder round-trips cleanly through this. It exists so that a
+ * consumer needs no second copy of the field layout.
+ *
+ * Pure: it touches no chip, so it decodes a word from anywhere.
+ *
+ * @param txpower  a TX_POWER word
+ * @return         applied power in half-dB steps, 0 .. 61
+ */
+uint8_t dw1000_tx_power_to_05db(uint32_t txpower);
+
+
+/**
  * @brief Set context for sending frame
  *
  * @details The length, is the total length of the frame (including

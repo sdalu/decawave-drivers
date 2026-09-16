@@ -1953,6 +1953,26 @@ void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay) {
 }
 
 
+uint32_t dw1000_tx_get_power(dw1000_t *dw) {
+    return _dw1000_reg_read32(dw, DW1000_REG_TX_POWER, DW1000_OFF_NONE);
+}
+
+uint8_t dw1000_tx_power_to_05db(uint32_t txpower) {
+    // dw1000_configure() writes the same byte into bits 23..16 and 15..8;
+    // either answers, so take the first. The coarse field holds
+    // (6 - coarse) in 3 bits and the fine field 5 bits, which is what the
+    // encoder in _dw1000_radio_tuning() builds -- see its UM 7.2.31.1 note.
+    uint8_t byte   = (txpower >> 16) & 0xFF;
+    uint8_t coarse = 6 - ((byte >> 5) & 0x07);
+    uint8_t fine   = byte & 0x1F;
+    uint8_t power  = coarse * 5 + fine;
+
+    // The encoder clamps at 61; a word from elsewhere need not have been
+    // built by it, and 61 is the top of the range either way.
+    return power > 61 ? 61 : power;
+}
+
+
 void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
 		     int tx_mode) {
     /* The standard PHR carries a 7-bit length, so a frame longer than
