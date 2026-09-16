@@ -277,6 +277,9 @@ tag: $(VERSIONHDR)				## tag this release, from the version header
 ports:						## print the OSAL ports this tree ships
 	@echo '$(OSAL_PORTS)'
 
+state:						## print the optional radio-state source
+	@$(MANIFEST) state
+
 options:					## print the compile-time options and their defaults
 	@echo 'Undefined takes the default below, which is not always off:'
 	@echo ''
