@@ -679,7 +679,27 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
                         rec.status   = DW1000_PROBE_STATUS_NO_REPORT;
 
                         struct rx_capture report;
-                        rx_arm(dw, PROBE_EXCHANGE_FRAME_TIMEOUT_US);
+                        /* Deliberately NO rx_arm() here.
+                         *
+                         * rx_arm() is unconditionally txrx_off() ->
+                         * set_timeout() -> rx_start(). Under cfg->dblbuff
+                         * the driver has already re-enabled the receiver
+                         * before the rx_ok callback ran, and the frame
+                         * timeout is already armed from the RESPONSE
+                         * send, so arming again achieves nothing and its
+                         * txrx_off() opens a deaf window exactly where
+                         * the peer's REPORT arrives.
+                         *
+                         * That window cost a day. It is positioned by how
+                         * long this responder's own event processing held
+                         * the bus, so it caught a Unix initiator (REPORT
+                         * ~110 us after its FINAL) with dblbuff off and a
+                         * board initiator (~244 us) with it on -- one
+                         * pairing at 0 of 20 either way, and which one
+                         * changed when the bus timing did. Keeping the
+                         * receiver *more* enabled never helped, because
+                         * this line switched it off again a moment
+                         * later. */
                         dw1000_probe_time_t report_deadline =
                             dw1000_probe_port_now() + PROBE_EXCHANGE_FRAME_TIMEOUT_US;
 

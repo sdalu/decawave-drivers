@@ -128,6 +128,7 @@ static const dw1000_config_t dw1000_config = {
     .leds_blink_time  = 3,
     .lde_loading      = 1,
     .rxauto           = 1,
+    .dblbuff          = 1, /* EXPERIMENT 2026-09-16 */
     .tx_antenna_delay = PROBE_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
     .rx_antenna_delay = PROBE_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
     .cb.tx_done       = dw1000_cb_tx_done,
@@ -180,7 +181,6 @@ dw1000_cb_rx_ok(dw1000_t *dw, uint32_t status, size_t length, bool ranging)
     (void)ranging;
 
     dw1000_probe_rx_capture(dw, length);
-    dw1000_rx_start(&dw0, DW1000_RX_IMMEDIATE);
 }
 
 static void
