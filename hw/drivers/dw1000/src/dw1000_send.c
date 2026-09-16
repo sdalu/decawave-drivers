@@ -16,6 +16,35 @@
 /* Local functions                                                           */
 /*===========================================================================*/
 
+/* Whether the transmitter is free for another frame.
+ *
+ * Errata 1.4 §3.3 (TX-2): writing the TX buffer while a transmission is
+ * in progress corrupts what is being transmitted, and the write happens
+ * before anything here could refuse it. So the question is asked first,
+ * before a single byte goes to the chip.
+ *
+ * The send functions document "the DW1000 is in IDLE state" as a
+ * precondition and used to take the caller's word for it. A caller that
+ * sent faster than the air allows was accepted every time and lost
+ * nearly every frame: measured on the bench at 6.8 Mbps, sending a 27
+ * byte frame every 0.15 ms against 0.17 ms of airtime delivered 1 frame
+ * out of 20000, silently, with every call returning success.
+ *
+ * dw->tx_pending is the driver's own record of a send it started and has
+ * not seen reported done, so this costs no SPI at all. It is cleared
+ * wherever a transmission ends: the TXFRS branch of
+ * dw1000_process_events(), dw1000_tx_clear_status_done() for a host that
+ * polls instead, _dw1000_txrx_off() which stops the transmitter outright,
+ * the late path of dw1000_tx_start(), and the soft reset. A host that
+ * uses none of those never learns its frames went out either, and is the
+ * host this refusal exists to tell.
+ */
+static inline bool
+_dw1000_tx_idle(const dw1000_t *dw)
+{
+    return dw->tx_pending == 0;
+}
+
 static inline size_t
 _dw1000_tx_prepare_data_sendv(
 	dw1000_t *dw, struct iovec *iovec, int iovcnt)
@@ -228,6 +257,10 @@ int
 dw1000_tx_sendv(
 	dw1000_t *dw, struct iovec *iovec, int iovcnt, int tx_mode)
 {
+    // Nothing is written until the transmitter is known free (TX-2)
+    if (! _dw1000_tx_idle(dw))
+	return -1;
+
     // Prepare data and frame control
     //   The payload is written to the chip before the length is checked;
     //   a refusal leaves it there, unsent, as an unusable tx_mode does.
@@ -242,6 +275,10 @@ int
 dw1000_tx_send(
 	dw1000_t *dw, uint8_t *data, size_t length, int tx_mode)
 {
+    // Nothing is written until the transmitter is known free (TX-2)
+    if (! _dw1000_tx_idle(dw))
+	return -1;
+
     // Prepare data and frame control
     _dw1000_tx_prepare_data_send(dw, data, length);
     if (! _dw1000_tx_prepare_fctrl(dw, length, tx_mode))
@@ -259,6 +296,10 @@ dw1000_tx_extended_vsendv(
 	dw1000_t *dw, struct iovec *iovec, int iovcnt, int tx_mode,
 	va_list ap)
 {
+    // Nothing is written until the transmitter is known free (TX-2)
+    if (! _dw1000_tx_idle(dw))
+	return -1;
+
     // Prepare data and frame control
     size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt);
     if (! _dw1000_tx_prepare_fctrl(dw, length, tx_mode))

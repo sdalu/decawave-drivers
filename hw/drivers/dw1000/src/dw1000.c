@@ -578,6 +578,7 @@ void _dw1000_softreset(dw1000_t *dw) {
     // Reset internal flags
     dw->wait4resp     = 0;
     dw->tx_clk_forced = 0;
+    dw->tx_pending    = 0;
 }
 
 
@@ -1877,8 +1878,10 @@ bool dw1000_process_events(dw1000_t *dw) {
         _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
 			   DW1000_MSK_SYS_STATUS_ALL_TX);
 
-	// The frame is out: if a delayed send forced the TX clock on
-	// (Errata 1.4 §3.1), return it to automatic sequencing
+	// The frame is out: the transmitter is free for the next one, and
+	// if a delayed send forced the TX clock on (Errata 1.4 §3.1) it
+	// returns to automatic sequencing
+	dw->tx_pending = 0;
 	_dw1000_tx_clock_release(dw);
 
 	// HOTFIX: UM §5.4: Transmit and automatically wait for response
@@ -2028,7 +2031,10 @@ void _dw1000_txrx_off(dw1000_t *dw, uint32_t clear) {
 	dw1000_rx_sync_dblbuf(dw);
 
     // Reset internal flags
-    dw->wait4resp = 0;
+    //   The transceiver is off, so whatever was being transmitted is
+    //   over one way or the other and the next send may go ahead.
+    dw->wait4resp  = 0;
+    dw->tx_pending = 0;
 
     // A delayed send may have been armed and is being cancelled here, so
     // the TX clock it forced on (Errata 1.4 §3.1) has to be released too
@@ -2140,6 +2146,23 @@ void dw1000_tx_write_frame_data(dw1000_t *dw,
 int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
     uint8_t sys_ctrl  = DW1000_FLG_SYS_CTRL_TXSTRT;
 
+    // Errata 1.4 §3.3 (TX-2): "When preparing the transmission of the
+    // next frame, by writing to a part of the TX buffer which is not
+    // used for the current transmission, the new data written is written
+    // erroneously at offset 0, thus corrupting the data currently being
+    // transmitted." The send functions refuse before they write, which
+    // is what actually prevents that; this catches the caller driving
+    // the transmitter by hand, too late to save the frame in flight but
+    // in time to say so rather than start a second one on top of it.
+    //
+    // dw->tx_pending is the driver's own record, so this costs no SPI:
+    // the alternatives are a SYS_STATE read on every send, which comes
+    // straight out of the delayed-send lead budget, or a TRXOFF before
+    // every TXSTRT as the vendor does, which pays a write to hide the
+    // caller's mistake.
+    if (dw->tx_pending)
+	return -1;
+
     // Set wait for response flag
     if (tx_mode & DW1000_TX_RESPONSE_EXPECTED) {
 	sys_ctrl |= DW1000_FLG_SYS_CTRL_WAIT4RESP;
@@ -2166,6 +2189,7 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
 
     // Write to SYS_CTRL register, which will trigger transmit
     _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL, sys_ctrl);
+    dw->tx_pending = 1;
 
     // Perform extra check for delayed transmit
     if (tx_mode & DW1000_TX_DELAYED_START) {
@@ -2193,7 +2217,8 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
 	// as well other flags
 	_dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL,
 			   DW1000_FLG_SYS_CTRL_TRXOFF);
-	dw->wait4resp = 0;
+	dw->wait4resp  = 0;
+	dw->tx_pending = 0;
 
 	// Nothing is pending anymore: let the TX clock be sequenced again
 	// (Errata 1.4 §3.1)

@@ -135,6 +135,30 @@ from its callback is not in IDLE and has to stop the transceiver first.
 out. The frame itself survives (the driver holds its buffer against exactly
 this), but there is no reason to ask for the loss.
 
+### One frame at a time, and you must consume the completion
+
+A send issued while a previous one has not been reported done is refused
+with `-1`, and nothing is written to the chip. Errata 1.4 §3.3 (TX-2) is
+the reason: writing the transmit buffer while a transmission is in
+progress corrupts what is on the air, and that write happens before any
+later check could stop it.
+
+So every completion has to be consumed, by one of:
+
+| | |
+| :--- | :--- |
+| `dw1000_process_events()` | the ordinary path; its TXFRS branch releases the transmitter |
+| `dw1000_tx_clear_status_done()` | for a host that polls rather than processes events |
+| `dw1000_txrx_idle()` or `dw1000_txrx_off()` | abandoning the transmission outright |
+
+A host that does none of these will see every send after its first
+refused. That is not a new restriction so much as a newly visible one:
+such a host never learned whether its frames left, and they mostly did
+not. Measured on the bench at 6.8 Mbps, sending a 27 byte frame every
+0.15 ms against 0.17 ms of airtime delivered **1 frame out of 20000**,
+with every call returning success. The check costs no SPI: it is a flag
+the driver already maintains.
+
 ### A delayed-send delay is the whole lead, airtime included
 
 Both `DW1000_TX_DELAYED_DELAY` and the pair held by

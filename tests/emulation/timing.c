@@ -708,6 +708,74 @@ step_tx_delayed_after_late(dw1000_t *dw, struct stub *s)
     return step_tx_delayed(dw, s);
 }
 
+/* A send issued while the previous one is still in flight is refused.
+ *
+ * The send functions have always documented "the DW1000 is in IDLE
+ * state" as a precondition and never checked it. Errata 1.4 3.3 (TX-2)
+ * is what that costs: "the new data written is written erroneously at
+ * offset 0, thus corrupting the data currently being transmitted". So a
+ * caller sending faster than the air allows was accepted every time and
+ * lost nearly every frame. Measured on the bench at 6.8 Mbps, a 27 byte
+ * frame every 0.15 ms against 0.17 ms of airtime: 1 frame of 20000
+ * arrived, every call having returned success.
+ *
+ * The refusal is on dw->tx_pending, the driver's own record, so it costs
+ * no SPI. What this step pins down is the release as much as the
+ * refusal: a flag that were never cleared would pass the middle check
+ * here and fail the last one.
+ *
+ * Runs after the receive steps on purpose. With the guard removed the
+ * sends here go out on top of one another and leave the transmitter
+ * busy, which fails whatever follows; put earlier, a regression reports
+ * as four receive failures with the real one buried first.
+ */
+static const char *
+step_tx_while_busy(dw1000_t *dw, struct stub *s)
+{
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0)
+	return "the first send was refused with an idle transmitter";
+
+    /* Straight away, before anything has processed the completion. */
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) == 0)
+	return "a second send was accepted while the first was in flight:"
+	       " its buffer write would have corrupted the frame on air";
+
+    /* The completion releases the transmitter. */
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "no completion for the first send";
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0)
+	return "the transmitter was still held after its completion was"
+	       " reported: the flag is set somewhere and cleared nowhere";
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "no completion for the send after the release";
+
+    /* And dw1000_txrx_idle() releases it too, for a caller that abandons
+     * a transmission rather than waiting for it.
+     */
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0)
+	return "the third send was refused";
+    dw1000_txrx_idle(dw);
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0)
+	return "dw1000_txrx_idle() did not release the transmitter";
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "no completion for the send after the idle";
+
+    return NULL;
+}
+
 /* A frame the chip cannot carry is refused, not truncated.
  *
  * dw1000_tx_fctrl() clamps an over-long length, which is right for a
@@ -1662,6 +1730,7 @@ main(void)
     step("rx delayed",           step_rx_delayed(&dw, &stub));
     step("rx delayed, late",     step_rx_delayed_late(&dw, &stub));
     step("wait4resp auto-rx",    step_wait4resp(&dw, &stub));
+    step("tx while busy",        step_tx_while_busy(&dw, &stub));
     step("create/destroy cycles",step_lifecycle(&dw, &stub));
     step("medium vanishes",      step_medium_vanishes(&dw, &stub));
 

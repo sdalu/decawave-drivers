@@ -466,6 +466,9 @@ struct dw1000 {
     uint32_t wait4resp;     // WAIT4RESP armed, cleared on RXFCG
     uint32_t sleep_mode;    // Accumulated, never written: no sleep path
     uint8_t  tx_clk_forced; // TX clock forced on (errata 1.4 3.1, TX-1)
+    uint8_t  tx_pending;    // A transmission was started and has not been
+                            //  reported done. Errata 1.4 3.3 (TX-2): the
+                            //  next frame's buffer write would corrupt it
     uint32_t tx_ton;        // Preamble+SFD airtime, ticks (APS022 5.4)
     uint32_t tx_delay;      // Whole delayed-send lead, tx_ton included,
     uint32_t tx_retry_delay; // and that of its retry; 0 until the host
@@ -1405,6 +1408,12 @@ static inline uint32_t dw1000_tx_is_status_done(dw1000_t *dw)
 static inline void
 dw1000_tx_clear_status_done(dw1000_t *dw)
 {
+    // Acknowledging the completion is what releases the transmitter for
+    // the next frame, for a host that polls instead of calling
+    // dw1000_process_events(). Without this a polling host would see
+    // every send after its first refused.
+    dw->tx_pending = 0;
+
     // Trigger clearing of TX frame sent event by setting it 1
     // UM §7.2.17: System Event Status Register
     _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,

@@ -190,6 +190,15 @@ dw1000_tx_set_default_delay(dw1000_t *dw, uint32_t initial, uint32_t retry)
  *
  * @pre    The DW1000 is in IDLE state.
  *         The dw1000_txrx_off() function need to be called if necessary.
+ *         The transmitter half of that is enforced, not assumed: a send
+ *         issued while a previous one has not been reported done is
+ *         refused, nothing being written to the chip. Errata 1.4 §3.3
+ *         (TX-2) is why, the buffer write corrupting the frame in
+ *         flight. So a caller must consume each completion before
+ *         sending again, through @p dw1000_process_events() or
+ *         @p dw1000_tx_clear_status_done(), or abandon it with
+ *         @p dw1000_txrx_idle(). A caller that does none of those never
+ *         learns its frames went out either.
  *         In double buffered mode, from inside the rx_ok callback, that
  *         call is dw1000_txrx_idle(): dw1000_txrx_off() also drops the
  *         receive status, which releases the buffer the callback is
@@ -237,6 +246,15 @@ int dw1000_tx_send(dw1000_t *dw,
  *
  * @pre    The DW1000 is in IDLE state.
  *         The dw1000_txrx_off() function need to be called if necessary.
+ *         The transmitter half of that is enforced, not assumed: a send
+ *         issued while a previous one has not been reported done is
+ *         refused, nothing being written to the chip. Errata 1.4 §3.3
+ *         (TX-2) is why, the buffer write corrupting the frame in
+ *         flight. So a caller must consume each completion before
+ *         sending again, through @p dw1000_process_events() or
+ *         @p dw1000_tx_clear_status_done(), or abandon it with
+ *         @p dw1000_txrx_idle(). A caller that does none of those never
+ *         learns its frames went out either.
  *         In double buffered mode, from inside the rx_ok callback, that
  *         call is dw1000_txrx_idle(): dw1000_txrx_off() also drops the
  *         receive status, which releases the buffer the callback is
@@ -282,6 +300,15 @@ int dw1000_tx_sendv(dw1000_t *dw,
  *
  * @pre    The DW1000 is in IDLE state.
  *         The dw1000_txrx_off() function need to be called if necessary.
+ *         The transmitter half of that is enforced, not assumed: a send
+ *         issued while a previous one has not been reported done is
+ *         refused, nothing being written to the chip. Errata 1.4 §3.3
+ *         (TX-2) is why, the buffer write corrupting the frame in
+ *         flight. So a caller must consume each completion before
+ *         sending again, through @p dw1000_process_events() or
+ *         @p dw1000_tx_clear_status_done(), or abandon it with
+ *         @p dw1000_txrx_idle(). A caller that does none of those never
+ *         learns its frames went out either.
  *         In double buffered mode, from inside the rx_ok callback, that
  *         call is dw1000_txrx_idle(): dw1000_txrx_off() also drops the
  *         receive status, which releases the buffer the callback is
