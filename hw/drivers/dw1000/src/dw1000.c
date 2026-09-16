@@ -747,25 +747,35 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
     //   proprietary | 16         | -18         |  850k
     //               | 64         | -82         |  110k
 #if DW1000_WITH_PROPRIETARY_SFD
-    /* UNSETTLED at 6.8 Mbps. The DWSFD field text (UM §7.2.32) ends
-     * "(For 6.8 Mbps the standard 8-symbol SFD)", which read one way
-     * makes the standard-8 adjustment (-5) the right one there. Against
-     * that: table 18 does carry a Decawave 8-symbol row (-6+1-5 = -10),
-     * untagged by bitrate, and both Decawave drivers program a Decawave
-     * SFD of length 8 at 6.8 Mbps (uwb-dw1000 DW_NS_SFD_LEN_6M8 = 8),
-     * so their own code reads the parenthetical as "the Decawave SFD is
-     * 8 symbols long at 6.8 Mbps", not as "DWSFD is ignored".
+    /* SETTLED at 6.8 Mbps, by measurement. The DWSFD field text
+     * (UM §7.2.32) ends "(For 6.8 Mbps the standard 8-symbol SFD)",
+     * which read one way would make the standard-8 adjustment (-5) the
+     * right one there, and the Decawave-8 row of table 18 (-10) wrong.
      *
-     * The second reading is also the only one consistent with setting
-     * TNSSFD/RNSSFD alongside DWSFD below: were DWSFD ignored at
-     * 6.8 Mbps, those two would select the user-configured SFD of
-     * table 22, whose sequence bytes this driver never programs.
+     * It is the other reading: the Decawave SFD is 8 symbols long at
+     * 6.8 Mbps, and DWSFD still selects it. Measured on the bench
+     * (2026-09-16, rpi-c to rpi-d, 6.8 Mbps, 40 frames per run, the
+     * matched runs interleaved with the crossed ones so a dead link
+     * could not be mistaken for a result):
      *
-     * So keep the Decawave adjustment, which is what the driver has
-     * always applied. Measuring RXPACC against RXPACC_NOSAT with and
-     * without DWSFD at 6.8 Mbps settles which SFD the chip really uses;
-     * until then, do not move a power estimate on a reading the manual
-     * does not make plainly.
+     *   transmitter  receiver   frames heard
+     *   DWSFD set    set        40, 40
+     *   DWSFD clear  clear      40, 40
+     *   DWSFD set    clear       0
+     *   DWSFD clear  set         0, 0
+     *
+     * Setting DWSFD changes the sequence on the air at 6.8 Mbps: a node
+     * with it set cannot hear a node without it, either way round. And
+     * UM 2.15 §7.2.32 says DWSFD takes precedence, TNSSFD and RNSSFD
+     * being ignored while it is set, so the sequence it selects cannot
+     * be the user-defined SFD of table 22 (whose bytes this driver never
+     * programs anyway). What is left is the Decawave SFD, so the
+     * Decawave-8 adjustment is the correct one and the driver keeps it.
+     *
+     * This does not measure RXPACC itself, which would have been the
+     * direct check; the binding exposes no raw register read. It
+     * measures which sequence goes on the air, which is the fact the
+     * adjustment depends on.
      */
     if (radio->proprietary.sfd) {
 	switch(usr_sfd_len) {

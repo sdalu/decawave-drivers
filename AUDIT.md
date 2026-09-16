@@ -23,13 +23,22 @@ another. Recorded here so the next reader does not repeat the work.
 
 ## Status
 
-Every finding the first round raised has been fixed (`3a6a44f`) except
-the proprietary SFD at 6.8 Mbps. The 2.18/APS022 round added five more,
+Every finding the first round raised has been fixed (`3a6a44f`); the
+last of them, the proprietary SFD at 6.8 Mbps, was settled by
+measurement on 2026-09-16 in favour of the driver, which needed no
+change. The 2.18/APS022 round added five more,
 of which four are fixed and one (the channel 5 analogue values, which
 is a decision rather than a defect) is under **Open** below, with the
 rest of what remains. Fixed findings are kept as a one-line ledger
 under **Fixed**; their reasoning now lives in the code, at the sites
 named there.
+
+A third round on 2026-09-16 was not a manual audit but a bug hunt over
+the double-buffer and embedded-transmit paths. It found six defects, all
+fixed and all carrying a regression test against `port/emulation`, and
+one that is open and unexplained. None of them is a place where the
+manual had been read wrong; every one is a gap between the driver and
+its own documented contract.
 
 The first round's patch was verified against the manual, the errata and
 the vendor driver independently of the person who wrote it; `make lib
@@ -44,14 +53,16 @@ now, `DW1000_WITH_DWM1000_EVK_COMPATIBILITY` having been dropped in
 What this audit did not cover in the first place is the **Not audited**
 bullet above; it is still uncovered.
 
-### Errata RX-1 is neither enforced nor documented
+### Errata RX-1 is documented but not enforced
 
 A TX buffer write past offset 127, issued before the second RX buffer is
-read out, corrupts byte 128 of that buffer. Nothing in the driver
-mentions it. It bites a double-buffered node answering with a frame
-longer than 127 bytes. Either reject or split such a write in
-`dw1000_tx_write_frame_data()`, or state the constraint in the header.
-The only erratum item still uncovered; see the Errata 1.4 table.
+read out, corrupts byte 128 of that buffer. It bites a double-buffered
+node answering with a frame longer than 127 bytes. Stated in
+`hw/drivers/dw1000/README.md` since 2026-09-16, so the "nor documented"
+half is closed, but still not enforced:
+`dw1000_tx_write_frame_data()` neither rejects nor splits such a write,
+and the header says nothing. The only erratum item still uncovered; see
+the Errata 1.4 table.
 
 ### Channel 5 RF_TXCTRL and TC_PGDELAY are the pre-2.16 values
 
@@ -83,36 +94,67 @@ The only erratum item still uncovered; see the Errata 1.4 table.
   depending on external circuitry". Following the current manual argues
   for changing both; matching every deployed driver argues for neither.
 
-### Proprietary SFD at 6.8 Mbps uses the Decawave RXPACC adjustment
+### Settled: the proprietary SFD is honoured at 6.8 Mbps
 
 - **Location**: `src/dw1000.c`, `_dw1000_radio_tuning()`, the
   `rxpacc_adj` selection.
-- **Bug**: the DWSFD field text (§7.2.32, p. 112) ends "For 6.8 Mbps the
-  standard 8-symbol SFD", and no table defines DWSFD=1 at 6.8 Mbps. The
-  driver applies the Decawave-8 adjustment (-10) where the standard-8
-  value is -5 (Table 18, p. 96). The manual is ambiguous on what the
-  chip does. The cost is a five-symbol error in the RXPACC used by the
-  power estimate when no saturation occurred, about 0.3 dB at N = 128;
-  interoperation between nodes running this driver is unaffected.
-- **Fix**: *not applied.* Two facts cut the other way. Table 18 does
-  carry a Decawave 8-symbol row (-6+1-5 = -10), untagged by bitrate, so
-  "no table defines DWSFD=1 at 6.8 Mbps" above is too strong; and both
-  Decawave drivers program a Decawave SFD of length 8 at 6.8 Mbps
-  (uwb-dw1000 `DW_NS_SFD_LEN_6M8` = 8), reading the parenthetical as
-  "the Decawave SFD is 8 symbols long there" rather than "DWSFD is
-  ignored". That reading is also the only one consistent with setting
-  TNSSFD/RNSSFD alongside DWSFD: were DWSFD ignored at 6.8 Mbps, those
-  two would select the user-configured SFD of Table 22, whose sequence
-  bytes this driver never programs. Until the measurement below, the
-  driver keeps -10 and says why in the code.
+- **The doubt**: the DWSFD field text (§7.2.32, p. 112) ends "For 6.8
+  Mbps the standard 8-symbol SFD". Read as "DWSFD is ignored there",
+  the driver was applying the Decawave-8 adjustment (-10) where the
+  standard-8 value is -5 (Table 18, p. 96). What it would have cost, had
+  the reading been right: a five-symbol error in the RXPACC used by the
+  power estimate when no saturation occurred, about 0.3 dB at N = 128,
+  with interoperation between nodes running this driver unaffected.
+- **Settled 2026-09-16, in favour of the driver**: no change needed,
+  `-10` is correct. Measured rpi-c to rpi-d at 6.8 Mbps, 40 frames a
+  run, matched runs interleaved with crossed ones so a dead link could
+  not pass for a result:
 
-### The vendor policy differences are not documented anywhere but here
+  | transmitter | receiver | frames heard |
+  | :---------- | :------- | -----------: |
+  | DWSFD set   | set      | 40, 40 |
+  | DWSFD clear | clear    | 40, 40 |
+  | DWSFD set   | clear    | 0 |
+  | DWSFD clear | set      | 0, 0 |
 
-The six entries under *Policy differences, to document rather than
-change* exist only in this file. `README.md` says nothing about
-DIS_STXP, the FCS included in the reported frame length, the
-IDLE-before-TXSTRT precondition, or who re-enables the receiver after a
-frame or an error.
+  Setting DWSFD changes the sequence on the air at 6.8 Mbps: a node with
+  it set cannot hear one without it, either way round, so the
+  parenthetical is not "DWSFD is ignored". And UM 2.15 §7.2.32 says
+  DWSFD takes precedence, TNSSFD and RNSSFD being ignored while it is
+  set, so what it selects cannot be the user-defined SFD of Table 22.
+  What is left is the Decawave SFD, and with it the Decawave-8 row of
+  Table 18.
+
+  This is not the RXPACC measurement asked for below, which the binding
+  cannot do (no raw register read). It measures which sequence goes on
+  the air, which is the fact the adjustment depends on.
+
+### An overrun leaves the receiver deaf, and nothing explains why
+
+- **Location**: `_dw1000_rx_overrun_recover()`, or whatever the host is
+  expected to do after it.
+- **Bug**: a node that takes one receiver overrun stops receiving for
+  good. Measured on rpi-d through ruby-dw1000's two-node suite,
+  `test_an_overrun_does_not_leave_the_receiver_deaf`, which reports
+  `received=0 after=0 overruns=1 dblbuff=true`: the overrun is counted,
+  the recovery runs to completion, and no frame ever arrives afterwards.
+- **Not** either overrun gap closed on 2026-09-16. ruby-dw1000 registers
+  an `rx_error` callback, so this is not the missing-callback case
+  `dw1000_initialise()` now refuses; and it unmasks `MRXOVRR` itself
+  (`ext/dw1000.c:277`), so it is not the missing interrupt either.
+- **Reproduction**, one command, from rpi-a:
+
+  ```sh
+  cd /root/ruby-dw1000-ci && \
+    DW1000_HOST_A=rpi-c.citi.insa-lyon.fr \
+    DW1000_HOST_B=rpi-d.citi.insa-lyon.fr \
+    ruby -w -Ilib -Itest test/pair/test_stress.rb \
+         -n test_an_overrun_does_not_leave_the_receiver_deaf
+  ```
+
+- **Status**: reproduces identically against `e9191ec`, with none of the
+  2026-09-16 fixes applied, so it is not a regression from them.
+  Unexplained, and the only item in this file currently costing frames.
 
 ### Settled: the delayed-send floor is airtime, not power-up
 
@@ -134,7 +176,7 @@ hardware boundary to a constant within 0.3 µs in four configurations.
 The residual holds the host's register writes and the power-up together;
 this cannot separate them, but bounds both at about 35 µs on that host.
 
-### Two measurements would settle two claims
+### One measurement would settle one claim
 
 - **The TX-1 band.** The ruby-dw1000 binding exposes no raw register
   read, so HPDWARN and TXPUTE cannot be told apart in a refusal;
@@ -142,8 +184,6 @@ this cannot separate them, but bounds both at about 35 µs on that host.
   later, reported region is open. The erratum's wording argues for
   removal, and either way the driver no longer claims success for an
   unsent frame.
-- **The SFD at 6.8 Mbps.** RXPACC against RXPACC_NOSAT, with and
-  without DWSFD, decides between -10 and -5.
 
 ### Latent, not defects
 
@@ -196,6 +236,34 @@ Then, from the 2.18 and APS022 round:
 | Low | The preamble timeout documented as a hard deadline, which 2.18 §7.2.40.9 says it is not | `dw1000_rx_set_timeout_preamble()` |
 | Low | The LDECLK "reserved in the UM, and unnamed" comment covered seven documented bits | `dw1000_reg.h` |
 | Med | The delayed-send lead ignored the preamble and SFD airtime (Ton) that must precede the RMARKER | `_dw1000_radio_tuning()` caches `dw->tx_ton` and `dw1000_tx_get_preamble_airtime()` exports it; the default lead is taken on top of it, an explicit one is used as given, and either is refused with -1 if it cannot be met |
+
+Then, from the 2026-09-16 bug hunt over the double-buffer and
+embedded-transmit paths:
+
+| Sev | Defect | Where it was fixed |
+| :-- | :----- | :----------------- |
+| High | `dw1000_txrx_off()` called from inside `rx_ok` handed the held buffer back to the chip mid-read-out, then left the pointers inverted for every frame after it. The send functions' own `@pre` asked callers to do exactly that | `dw1000_rx_sync_dblbuf()` honours the new `dw->rx_held`; the three `@pre` blocks in `dw1000_send.h` name `dw1000_txrx_idle()` for the double-buffered case |
+| Med | An embedded timestamp that did not fit inside the frame was written past its end, where nothing transmits it, and the send returned 0 | `_dw1000_tx_prepare_delayed_embed_timestamp()` |
+| Med | `dblbuff` with no `rx_error` callback recovered an overrun and then left the receiver off for good, silently and permanently | `dw1000_initialise()` refuses the pairing |
+| Med | `MRXOVRR` was never unmasked, so the documented overrun recovery ran only when some other event happened to bring the driver in | `dw1000_initialise()` |
+| Med | A payload over the frame ceiling was clamped and transmitted truncated, reporting success; the assert beside the clamp is compiled out on four of the five ports | `_dw1000_tx_prepare_fctrl()`, with `dw1000_tx_get_frame_maxsize()` exported so the rule lives in one place |
+| Low | `dw1000_tx_get_power()`'s comment claimed the chip could disagree with the cache. TX_POWER is a plain read/write register, so it cannot; the read is worth one thing only, noticing a chip that reset since it was configured | `dw1000.h` |
+| Low | The vendor policy differences were documented nowhere but in this file | `hw/drivers/dw1000/README.md`, which covers DIS_STXP, the FCS in the reported length, the IDLE-before-TXSTRT precondition and who re-arms the receiver |
+
+Each of the first five carries a regression test against `port/emulation`
+and each was cycled (failing before, passing after, failing again
+reverted): `tests/emulation/dblbuf.c` gained "frame held across
+txrx_off" and "dblbuff needs rx_error", `tests/emulation/timing.c`
+gained "tx embed timestamp" and "tx frame too long". Worth recording
+that `dblbuff.c` had never called `dw1000_process_events()` before this
+round: the driver's double-buffer event path had no test at all, which
+is how a defect of that severity survived two audits.
+
+Verified on hardware as well, rpi-a driving rpi-c and rpi-d: the
+embedded-timestamp path passes over the air, ranging is unchanged (60/60
+exchanges, 60.76 cm symmetric, 59.55 cm asymmetric), and four
+consecutive runs of the single-node suite are clean in both receive
+modes.
 
 **The TX-1 measurement**, the only one taken on hardware. ruby-dw1000
 `errata-tx1/` counts delayed sends the driver accepts (`tx_start()`
@@ -255,8 +323,13 @@ Kept here so they are not raised again.
 - **Transceiver off and event handling.** The mask, TRXOFF, clear,
   unmask order of Figure 15 holds everywhere, once the redundant RXFCE
   write was dropped. The double-buffer pointer sync is gated on dropping
-  the good-frame bits, so a reported but unread frame is never handed
-  back to the chip.
+  the good-frame bits, which this entry used to call sufficient to keep
+  a reported but unread frame from being handed back to the chip. It is
+  not, and was not when that was written: `dw1000_txrx_off()` passes
+  those very bits, so a host calling it from inside `rx_ok`, which the
+  send functions asked it to do, handed back the buffer it was still
+  reading. What holds the invariant is `dw->rx_held`, checked in
+  `dw1000_rx_sync_dblbuf()` since 2026-09-16.
 - **Delayed send.** DX_TIME is the raw RMARKER time with its low nine
   bits zeroed, the embedded value is DX_TIME plus TX_ANTD, and that
   equals what TX_STAMP reports (§3.3, §7.2.25). The retry path rewrites
@@ -293,7 +366,7 @@ between 2.12 and 2.18.
 | Item | Status in this driver |
 | :--- | :-------------------- |
 | TX-1 delayed TX may not complete | Worked around: the TX clock is forced on for a delayed send. Measured on hardware, 85 silent losses before against 0 after; see **Fixed**. |
-| RX-1 byte 128 of the second RX buffer corrupted by a TX write past offset 127 before readout | **Not enforced or documented**; see **Open**. |
+| RX-1 byte 128 of the second RX buffer corrupted by a TX write past offset 127 before readout | **Not enforced**, though documented in `hw/drivers/dw1000/README.md` since 2026-09-16; see **Open**. |
 | TX-2 TX buffer index reset at TXSTRT | Not applicable; the driver offers no fast-turnaround write during transmission. |
 | IRQ-1 IRQ glitch in double-buffered mode | Mitigated by the masked clears; `dw1000_pending_interrupt()` supports the poll-the-line workaround. |
 | PMSC-1 wake-up event longer than 500 µs | Not applicable; no sleep entry point. `dw1000_hardreset()` holds WAKEUP high. |
@@ -349,9 +422,12 @@ per-frame TR bit, and the OTP read with no delay before OTP_RDAT.
   smart TX power on. The frame length ours reports includes the FCS; the
   vendor's excludes it. Both say so.
 - LDEERR is an RX error in ours (as in deca_regs.h) but only cleared in
-  uwb-dw1000, which puts RXOVRR in that group instead. Our default
-  SYS_MASK therefore never unmasks RXOVRR; an overrun always coincides
-  with a pending RXFCG, so the IRQ line is asserted anyway.
+  uwb-dw1000, which puts RXOVRR in that group instead. Ours unmasks
+  RXOVRR on its own account, whenever `cfg->dblbuff` is set. It did not
+  until 2026-09-16, on the reasoning recorded here that an overrun
+  always coincides with a pending RXFCG so the IRQ line is asserted
+  anyway. That was never verified, and it is wrong often enough that a
+  double-buffered host with no other pending event wedged.
 - The vendor reads the frame, the timestamps and the diagnostics into
   its own buffers inside the ISR, then toggles HRBPT, then calls the
   user; ours calls the user first and expects the callback to read the
@@ -416,9 +492,10 @@ exists is still unchecked.
   little-endian and two pointers that could be `const`.
 - **Would widen the hunt**: `port/emulation` now carries a register
   model and `make check` runs its smoke test, which is most of the
-  register-write recorder this audit asked for. What is left is turning
-  findings into regression tests against it; `tests/` otherwise checks
-  only the manifest and the option matrix.
+  register-write recorder this audit asked for. The 2026-09-16 round
+  turned each of its findings into a regression test against it, which
+  is the practice this entry asked for; the manual-audit findings above
+  still have none.
 
 ## Method
 
