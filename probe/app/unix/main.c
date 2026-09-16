@@ -538,6 +538,8 @@ main(int argc, char *argv[])
         /* Only worth a line when it happened: an unconfirmed REPORT send
          * is the difference between "the peer did not hear us" and "we
          * never got it out", and the peer cannot tell them apart. */
+        INFO("twr_init: FINAL->REPORT turnaround %" PRIu32 "-%" PRIu32 " us",
+             result.turnaround_min_us, result.turnaround_max_us);
         if (result.report_failed > 0)
             INFO("twr_init: %" PRIu32 " REPORT send(s) unconfirmed",
                  result.report_failed);

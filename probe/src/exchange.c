@@ -746,7 +746,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
 {
     uint8_t  wire_seq  = 0;
     long     total     = warmup + count;
-    struct dw1000_probe_twr_init_result result = { 0, 0, 0 };
+    struct dw1000_probe_twr_init_result result = { 0, 0, 0, 0, 0 };
     long i;
 
     /* The initiator has no STATS line to report an account on, so these
@@ -773,6 +773,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
             struct rx_capture response;
             if (frame_wait(FRAME_TYPE_RESPONSE, wire_seq, own_addr, 0,
                           deadline, &response)) {
+                dw1000_probe_time_t t_after_final = 0;
                 uint64_t t_rr = response.rx_time;
 
                 uint8_t final_buf[FRAME_HDR_LEN + 3 * FRAME_WORD_LEN];
@@ -787,6 +788,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
                 uint64_t t_sf;
                 if (frame_send(dw, final_buf, sizeof(final_buf), &t_sf, false)) {
                     got_final = true;
+                    t_after_final = dw1000_probe_port_now();
 
                     if (!ss) {
                         int16_t  temp;
@@ -819,6 +821,20 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
                          * initiator against a board responder: 10 of 20
                          * exchanges "reached REPORT" while the responder
                          * heard 38 frames and matched no REPORT at all. */
+                        /* The interval the exchange has a minimum on.
+                         * See turnaround_min_us in <probe/exchange.h>:
+                         * an initiator quicker than the responder's own
+                         * turnaround loses every REPORT, and nothing
+                         * else on either side reports why. */
+                        uint32_t turn = (uint32_t)(dw1000_probe_port_now()
+                                                   - t_after_final);
+                        if (result.turnaround_max_us == 0 ||
+                            turn > result.turnaround_max_us)
+                            result.turnaround_max_us = turn;
+                        if (result.turnaround_min_us == 0 ||
+                            turn < result.turnaround_min_us)
+                            result.turnaround_min_us = turn;
+
                         uint64_t unused_tx_time;
                         if (!frame_send(dw, report_buf, sizeof(report_buf),
                                         &unused_tx_time, false))
