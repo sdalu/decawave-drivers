@@ -92,6 +92,9 @@ version)  hdrversion ;;
 incdir)   cmvar DW1000_INCLUDE_DIR ;;
 core)     cmvar DW1000_SOURCES_CORE ;;
 send)     cmvar DW1000_SOURCES_SEND ;;
+# Optional, and absent from `sources` for that reason: a consumer asks
+# for it by name or does not compile it. See dw1000/dw1000_state.h.
+state)    cmvar DW1000_SOURCES_STATE ;;
 # DW1000_SOURCES is composed of the two in cmake syntax the Makefile
 # cannot expand, so compose it here from the same two pieces.
 sources)  echo "`cmvar DW1000_SOURCES_CORE` `cmvar DW1000_SOURCES_SEND`" ;;

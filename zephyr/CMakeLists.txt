@@ -32,6 +32,13 @@ zephyr_include_directories(${DW1000_OSAL_ZEPHYR_INCLUDE_DIR})
 zephyr_library_sources(${DW1000_SOURCES})
 zephyr_library_sources(${DW1000_OSAL_ZEPHYR_SOURCES})
 
+# The radio-state readback: optional, diagnostic, and the only source
+# here that formats strings -- so it is a Kconfig choice and not part of
+# DW1000_SOURCES. See dw1000/dw1000_state.h.
+if (CONFIG_DW1000_STATE)
+zephyr_library_sources(${DW1000_SOURCES_STATE})
+endif()
+
 endif()
 
 # The probe is a separate library from the driver and a separate option,

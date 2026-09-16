@@ -14,6 +14,16 @@ menuconfig DW1000
 
 if DW1000
 
+config DW1000_STATE
+        bool "Read the radio configuration back off the chip"
+	default n
+	help
+	  Adds dw1000_get_radio_state() and its formatter, for comparing
+	  what a chip actually holds against what it was asked for --
+	  between two nodes, or across a driver change. Diagnostic: no
+	  operational code needs it, and it is the only part of this
+	  driver that formats strings, so it is off by default.
+
 config DW1000_PROPRIETARY_PREAMBLE_LENGTH
         bool "Add support for proprietary preamble length"
 	default y

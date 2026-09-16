@@ -47,6 +47,7 @@
 #include <bitters/version.h>
 
 #include <dw1000/dw1000.h>
+#include <dw1000/dw1000_state.h>
 #include <dw1000/dw1000_version.h>
 #include <dw1000/probe/port.h>
 #include <dw1000/probe/record.h>
@@ -479,6 +480,25 @@ main(int argc, char *argv[])
     probe_radio.tx_power = power;
     if (dw1000_configure(&dw0, &probe_radio) < 0)
         DIE("DW1000 radio configuration rejected");
+
+    /* Read back off the chip, not echoed from the config: the two are
+     * the same only when the chip honoured what it was asked. Printed
+     * once at start-up, never inside an exchange -- it is SPI traffic.
+     * The identical lines come out of the Zephyr shell's `probe config`,
+     * so the two platforms diff directly. */
+    {
+        dw1000_radio_state_t st;
+        char                 line[DW1000_RADIO_STATE_MAX];
+
+        dw1000_get_radio_state(&dw0, &st);
+        dw1000_radio_state_format(line, sizeof(line), &st);
+        for (char *p = line, *nl; p; p = nl) {
+            nl = strchr(p, '\n');
+            if (nl) *nl++ = '\0';
+            INFO("%s", p);
+        }
+    }
+
 
     if (bitters_gpio_irq_callback(&dw1000_irq, dw1000_irq_cb, NULL) < 0)
         DIE_ERRNO("failed to attach DW1000 IRQ callback");

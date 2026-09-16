@@ -21,7 +21,10 @@ cflags=${CFLAGS:--Wall -Wextra}
 m="sh $top/scripts/manifest.sh"
 inc="-I$top/`$m incdir` -I$top/`$m inc null`"
 src=
-for f in `$m sources` `$m src null`; do src="$src $top/$f"; done
+# `state` is optional and absent from `sources`, so nothing else would
+# ever compile it -- which is exactly how an optional file stops
+# compiling without anyone noticing. Named here on purpose.
+for f in `$m sources` `$m state` `$m src null`; do src="$src $top/$f"; done
 
 tmp=`mktemp -d`
 trap 'rm -rf "$tmp"' EXIT INT TERM

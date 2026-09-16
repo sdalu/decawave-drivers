@@ -104,6 +104,13 @@ set(DW1000_SOURCES_CORE
 set(DW1000_SOURCES_SEND
     ${CMAKE_CURRENT_LIST_DIR}/hw/drivers/dw1000/src/dw1000_send.c)
 
+# Deliberately NOT part of DW1000_SOURCES: reading the radio
+# configuration back off the chip is diagnostic, not operational, and it
+# is the only file here that formats strings. A consumer that wants it
+# names DW1000_SOURCES_STATE itself. See dw1000/dw1000_state.h.
+set(DW1000_SOURCES_STATE
+    ${CMAKE_CURRENT_LIST_DIR}/hw/drivers/dw1000/src/dw1000_state.c)
+
 set(DW1000_SOURCES
     ${DW1000_SOURCES_CORE}
     ${DW1000_SOURCES_SEND})
