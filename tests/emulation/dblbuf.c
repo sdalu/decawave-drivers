@@ -406,6 +406,43 @@ buffered_frame_id(dw1000_t *dw)
     return byte;
 }
 
+/* What the rx_ok callback of step_hold_survives_txrx_off() records.
+ *
+ * Inactive for every other step: dw1000_initialise() only unmasks the
+ * events it has a callback for, so the config must carry an rx_ok
+ * whether or not a step wants one, and the steps that do not must not
+ * have it touching the chip underneath them.
+ */
+static struct {
+    bool   active;
+    bool   called;
+    int    id_before;           /* frame the callback was handed */
+    int    id_after;            /* and what it held afterwards */
+    int    host_in, ic_in;      /* the pointers, as the callback saw them */
+} rx_probe;
+
+static void
+cb_rx_probe(dw1000_t *dw, uint32_t status, size_t len, bool rng)
+{
+    (void)status; (void)len; (void)rng;
+
+    if (! rx_probe.active)
+	return;
+    rx_probe.called = true;
+
+    buffer_pointers(dw, &rx_probe.host_in, &rx_probe.ic_in);
+    rx_probe.id_before = buffered_frame_id(dw);
+
+    /* What a responder answering from here has to do first: the send
+     * functions require IDLE, and in double buffered mode the driver
+     * re-enabled the receiver before this callback was entered. This is
+     * the call their @pre names.
+     */
+    dw1000_txrx_off(dw);
+
+    rx_probe.id_after = buffered_frame_id(dw);
+}
+
 /* Put the chip back to a known state.
  *
  * The steps below each make claims about which buffer holds what, and a
@@ -766,6 +803,125 @@ step_bad_crc_keeps_buffer(dw1000_t *dw, struct stub *s)
 }
 
 
+/* Double buffering with nowhere to report an overrun is refused.
+ *
+ * The overrun recovery re-arms nothing by itself: it puts the chip back
+ * in order and reports a receive error, and the host's rx_error callback
+ * is what enables the receiver again, as it does for any other error.
+ * With no callback registered the recovery still runs and the receiver
+ * stays off for good, which is silent and permanent -- so
+ * dw1000_initialise() refuses the pairing instead.
+ *
+ * Refused before any SPI traffic, which is why this step can run a
+ * second driver context against the same model without disturbing it.
+ */
+static const char *
+step_dblbuff_needs_rx_error(dw1000_t *dw, struct stub *s)
+{
+    dw1000_config_t cfg = *g_config;
+    dw1000_t        other;
+
+    (void)dw; (void)s;
+
+    cfg.cb.rx_error = NULL;
+    dw1000_init(&other, &cfg);
+    if (dw1000_initialise(&other) == 0)
+	return "dblbuff with no rx_error callback was accepted";
+
+    /* And it is that pairing that is refused, not double buffering: the
+     * same configuration with the callback back is accepted. Every other
+     * step in this file relies on that, restart() included.
+     */
+    cfg.cb.rx_error = cb_nothing;
+    dw1000_init(&other, &cfg);
+    if (dw1000_initialise(&other) != 0)
+	return "dblbuff with an rx_error callback was refused";
+
+    /* Single buffered, still with no callback: not this check's business,
+     * and a check that refused it would break every host that receives
+     * into one buffer and ignores errors.
+     */
+    cfg.dblbuff     = 0;
+    cfg.cb.rx_error = NULL;
+    dw1000_init(&other, &cfg);
+    if (dw1000_initialise(&other) != 0)
+	return "a single buffered configuration with no rx_error callback"
+	       " was refused";
+
+    return NULL;
+}
+
+/* A host that turns the transceiver off from inside rx_ok keeps its frame.
+ *
+ * In double buffered mode the two pointers are misaligned on purpose
+ * while a frame is read out: ICRBP is on the buffer the chip is filling,
+ * HSRBP on the one being read. dw1000_txrx_off() drops the receive
+ * status, and that used to take dw1000_rx_sync_dblbuf() with it --
+ * aligning the pointers there issues HRBPT (UM 4.3.3, figure 14), which
+ * hands the buffer being read straight back to the chip. The rest of the
+ * read-out then came from the other buffer and the driver's own toggle
+ * afterwards left the pointers inverted, so the next frame was read from
+ * the wrong one too. Nothing reported any of it.
+ *
+ * A responder reaches this by doing exactly what the send functions ask:
+ * they require IDLE, and the driver has already re-enabled the receiver
+ * by the time rx_ok runs.
+ */
+static const char *
+step_hold_survives_txrx_off(dw1000_t *dw, struct stub *s)
+{
+    unsigned    first;
+    int         host, ic;
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
+
+    pthread_mutex_lock(&s->lock);
+    first = s->next_id;
+    pthread_mutex_unlock(&s->lock);
+
+    deliver(dw, s, 1);
+
+    memset(&rx_probe, 0, sizeof(rx_probe));
+    rx_probe.active = true;
+    bool processed  = dw1000_process_events(dw);
+    rx_probe.active = false;
+
+    if (! processed)
+	return "dw1000_process_events() reported nothing for the frame";
+    if (! rx_probe.called)
+	return "the rx_ok callback never ran";
+
+    /* The premise: a frame is held, so the pointers differ on entry.
+     * Without that this step proves nothing, whichever way it ends.
+     */
+    if (rx_probe.host_in == rx_probe.ic_in)
+	return REASON("HSRBP and ICRBP were both %d inside the callback:"
+		      " no frame was being held, so nothing was at risk",
+		      rx_probe.host_in);
+
+    if (rx_probe.id_before != (int)first)
+	return REASON("the callback was handed frame %d, want %u",
+		      rx_probe.id_before, first);
+
+    if (rx_probe.id_after != rx_probe.id_before)
+	return REASON("the frame read %d before dw1000_txrx_off() and %d"
+		      " after: the buffer was handed back mid-read-out",
+		      rx_probe.id_before, rx_probe.id_after);
+
+    /* And the driver's own toggle still lands the pointers together,
+     * which is where UM 4.3.1 wants them before the next frame. A sync
+     * that fired inside the callback leaves them inverted instead.
+     */
+    buffer_pointers(dw, &host, &ic);
+    if (host != ic)
+	return REASON("HSRBP is %d and ICRBP is %d after the read-out:"
+		      " the host pointer moved twice", host, ic);
+    return NULL;
+}
+
+
 /*----------------------------------------------------------------------*/
 /* Harness                                                              */
 /*----------------------------------------------------------------------*/
@@ -863,7 +1019,7 @@ main(void)
 	 * unmasked to have an IRQS worth checking.
 	 */
 	.cb.tx_done       = cb_nothing,
-	.cb.rx_ok         = cb_rx_nothing,
+	.cb.rx_ok         = cb_rx_probe,
 	.cb.rx_error      = cb_nothing,
 	.cb.rx_timeout    = cb_nothing,
     };
@@ -935,6 +1091,9 @@ main(void)
     step("bad crc keeps buffer",    step_bad_crc_keeps_buffer(&dw, &stub));
     step("three frames overrun",    step_overrun(&dw, &stub));
     step("single buffered",         step_single_buffered(&dw, &stub));
+    step("dblbuff needs rx_error",  step_dblbuff_needs_rx_error(&dw, &stub));
+    step("frame held across txrx_off",
+                                    step_hold_survives_txrx_off(&dw, &stub));
 
     dw1000_txrx_off(&dw);
     /* The three steps, in the order dw1000/emulation.h insists on:

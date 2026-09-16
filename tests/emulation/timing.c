@@ -708,6 +708,200 @@ step_tx_delayed_after_late(dw1000_t *dw, struct stub *s)
     return step_tx_delayed(dw, s);
 }
 
+/* A frame the chip cannot carry is refused, not truncated.
+ *
+ * dw1000_tx_fctrl() clamps an over-long length, which is right for a
+ * caller writing TX_FCTRL itself but wrong underneath the send
+ * functions: there the length came from the caller's own payload, and
+ * the automatic CRC is added to it before the ceiling applies. A payload
+ * two bytes under the limit therefore produced a frame two bytes over,
+ * which was clamped back to the limit and transmitted with its last
+ * bytes missing, while the send reported success. The assert beside the
+ * clamp catches nothing on four of the five ports.
+ *
+ * This port is the fifth, so what a regression looks like HERE is the
+ * abort that assert raises, not the silent truncation the shipping ports
+ * show: with the refusal removed the suite dies on
+ * "Assertion failed: (length <= max_length)" instead of failing a step.
+ * Either way the step is what notices. It is also the point of putting
+ * the refusal in _dw1000_tx_prepare_fctrl() rather than in
+ * dw1000_tx_fctrl(): the send returns -1 before the assert can fire, so
+ * the behaviour is the same on all five ports.
+ */
+static const char *
+step_tx_frame_too_long(dw1000_t *dw, struct stub *s)
+{
+    const size_t max = dw1000_tx_get_frame_maxsize(dw);
+    uint8_t      big[DW1000_FRAME_MAXSIZE];
+    unsigned     before, after;
+
+    memset(big, 0x5A, sizeof(big));
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    before     = s->tx_count;
+    pthread_mutex_unlock(&s->lock);
+
+    /* One byte of payload too many: with the CRC it is one over the
+     * ceiling. This is the case that used to go out truncated.
+     */
+    if (dw1000_tx_send(dw, big, max - DW1000_CRC_LENGTH + 1,
+		       DW1000_TX_IMMEDIATE) == 0)
+	return REASON("a %zu byte payload was accepted, and with the CRC"
+		      " that is %zu over the %zu byte ceiling",
+		      max - DW1000_CRC_LENGTH + 1, (size_t)1, max);
+
+    /* And refused means nothing was sent. */
+    pthread_mutex_lock(&s->lock);
+    after = s->tx_count;
+    pthread_mutex_unlock(&s->lock);
+    if (after != before)
+	return "the refused frame went out anyway";
+
+    /* Exactly the ceiling, CRC included, is still accepted: the check
+     * must not cost a byte of the usable frame.
+     */
+    evt_reset();
+    if (dw1000_tx_send(dw, big, max - DW1000_CRC_LENGTH,
+		       DW1000_TX_IMMEDIATE) != 0)
+	return REASON("a %zu byte payload, exactly the ceiling once the"
+		      " CRC is added, was refused",
+		      max - DW1000_CRC_LENGTH);
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "the largest legal frame did not complete";
+
+    /* Without the automatic CRC the whole frame is the caller's, so the
+     * same payload that was refused above is legal here.
+     */
+    evt_reset();
+    if (dw1000_tx_send(dw, big, max,
+		       DW1000_TX_IMMEDIATE | DW1000_TX_NO_AUTO_CRC) != 0)
+	return REASON("a %zu byte payload with DW1000_TX_NO_AUTO_CRC was"
+		      " refused, though nothing is added to it", max);
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "the largest legal uncrc'd frame did not complete";
+
+    /* Leave a frame the medium can replay. The stub holds the last one
+     * transmitted, and step_rx_frame_beats_timeout() turns delivery on
+     * to get it back; the DW1000_TX_NO_AUTO_CRC frame just sent carries
+     * filler where its FCS should be, so the model would reject it on
+     * receive and that step would wait for a frame that never comes.
+     * Send the ordinary payload last, as the other transmit steps
+     * happen to leave behind.
+     */
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0)
+	return "the closing frame was refused";
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "the closing frame did not complete";
+
+    return NULL;
+}
+
+/* The embedded transmit timestamp, and the frame it has to fit in.
+ *
+ * DW1000_TX_DELAYED_EMBED_TIMESTAMP writes the programmed send time into
+ * the frame at the caller's offset, into the chip's transmit buffer and
+ * into the caller's own copy alike, so that the host knows when the
+ * frame leaves without waiting for the completion. Two halves are
+ * asserted here: the value really is the one TX_STAMP reports
+ * afterwards, and an offset leaving no room for it is refused instead of
+ * written past the end of the frame.
+ *
+ * The refusal is the half that was missing.
+ * dw1000_tx_write_frame_data() clamps to the 1024 byte transmit buffer,
+ * not to the frame length already in TX_FCTRL, so bytes past the end
+ * were written where nothing transmits them; _dw1000_iovec_write()
+ * dropped the very same bytes from the caller's copy, so a host checking
+ * its copy against TX_STAMP agreed with the truncation; and the send
+ * returned 0. A frame went out carrying a partial timestamp and nothing
+ * anywhere said so.
+ */
+static const char *
+step_tx_embed_timestamp(dw1000_t *dw, struct stub *s)
+{
+    const uint32_t lead = MSEC(5);
+    const int      mode = DW1000_TX_DELAYED_EMBED_TIMESTAMP             |
+			  DW1000_TX_DELAYED_EMBED_TIMESTAMP_40BIT       |
+			  DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN |
+			  DW1000_TX_DELAYED_DELAY;
+    uint8_t   frame[PAYLOAD_LEN], untouched[PAYLOAD_LEN];
+    unsigned  before, after;
+    uint64_t  embedded = 0, stamp;
+    int       rc;
+
+    memcpy(frame,     payload, PAYLOAD_LEN);
+    memcpy(untouched, payload, PAYLOAD_LEN);
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    before     = s->tx_count;
+    pthread_mutex_unlock(&s->lock);
+
+    /* Five bytes asked for two bytes from the end: three of them have
+     * nowhere to go.
+     */
+    rc = dw1000_tx_extended_send(dw, frame, PAYLOAD_LEN, mode,
+				 (size_t)(PAYLOAD_LEN - 2), lead);
+    if (rc == 0)
+	return "a 5 byte timestamp 2 bytes from the end of the frame was"
+	       " accepted";
+    if (memcmp(frame, untouched, PAYLOAD_LEN) != 0)
+	return "the refused send wrote into the caller's frame anyway";
+
+    /* And one that starts past the end entirely. */
+    rc = dw1000_tx_extended_send(dw, frame, PAYLOAD_LEN, mode,
+				 (size_t)(PAYLOAD_LEN + 4), lead);
+    if (rc == 0)
+	return "a timestamp offset past the end of the frame was accepted";
+    if (memcmp(frame, untouched, PAYLOAD_LEN) != 0)
+	return "the refused send wrote into the caller's frame anyway";
+
+    /* Refused means refused: nothing was handed to the chip to send. */
+    pthread_mutex_lock(&s->lock);
+    after = s->tx_count;
+    pthread_mutex_unlock(&s->lock);
+    if (after != before)
+	return REASON("%u frame(s) went out for the two refused sends",
+		      after - before);
+
+    /* An offset that fits. DW1000_TX_DELAYED_START is deliberately not
+     * passed: the extended send sets it itself for an embedded
+     * timestamp, since the value embedded is a programmed time.
+     */
+    evt_reset();
+    rc = dw1000_tx_extended_send(dw, frame, PAYLOAD_LEN, mode,
+				 (size_t)4, lead);
+    if (rc != 0)
+	return REASON("a 5 byte timestamp at offset 4 of a %d byte frame"
+		      " was refused (%d)", PAYLOAD_LEN, rc);
+
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS))
+	return "no interrupt for the embedded-timestamp send";
+    if (!evt.tx_done)
+	return "the tx_done callback was not called";
+
+    /* It landed in its five bytes and nowhere else... */
+    if ((memcmp(frame, untouched, 4) != 0) ||
+	(memcmp(frame + 9, untouched + 9, PAYLOAD_LEN - 9) != 0))
+	return "the embedded timestamp landed outside its five bytes";
+
+    for (int i = 4 ; i >= 0 ; i--)
+	embedded = (embedded << 8) | frame[4 + i];
+
+    /* ...and it is the time the frame actually left, antenna delay
+     * included, which is what the caller is promised it can rely on
+     * without waiting for the completion.
+     */
+    stamp = dw1000_tx_get_rmarker_time(dw);
+    if (embedded != stamp)
+	return REASON("the frame carries 0x%010" PRIx64 " but TX_STAMP"
+		      " reports 0x%010" PRIx64, embedded, stamp);
+
+    return NULL;
+}
+
 /* The frame wait timeout: receiver on, nothing delivered, RXRFTO. */
 static const char *
 step_rx_frame_wait_timeout(dw1000_t *dw, struct stub *s)
@@ -1459,6 +1653,8 @@ main(void)
     step("tx delayed",           step_tx_delayed(&dw, &stub));
     step("tx delayed, late",     step_tx_delayed_late(&dw, &stub));
     step("tx delayed after late",step_tx_delayed_after_late(&dw, &stub));
+    step("tx embed timestamp",   step_tx_embed_timestamp(&dw, &stub));
+    step("tx frame too long",    step_tx_frame_too_long(&dw, &stub));
     step("rx frame wait timeout",step_rx_frame_wait_timeout(&dw, &stub));
     step("rx preamble timeout",  step_rx_preamble_timeout(&dw, &stub));
     step("rx frame beats timeout", step_rx_frame_beats_timeout(&dw, &stub));

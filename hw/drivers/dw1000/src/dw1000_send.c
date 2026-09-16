@@ -40,14 +40,28 @@ _dw1000_tx_prepare_data_send(
     return length;
 }
 
-static inline void
+static inline bool
 _dw1000_tx_prepare_fctrl(dw1000_t *dw, size_t length, int tx_mode)
 {
     // Adjust data length if CRC is automatically appended
     if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
 	length += DW1000_CRC_LENGTH;
+
+    // Refuse a frame the chip cannot carry, rather than let
+    // dw1000_tx_fctrl() clamp it. That clamp is the right behaviour for
+    // a caller writing TX_FCTRL itself, which has already decided what
+    // it means; here the length came from the caller's own payload, and
+    // clamping silently drops its last bytes. The assert beside the
+    // clamp does not help: it is compiled out on four of the five ports.
+    // The frame the chip appends the CRC to is the one that must fit, so
+    // the test is on the padded length, which is why it is here and not
+    // before the padding above.
+    if (length > dw1000_tx_get_frame_maxsize(dw))
+	return false;
+
     // Set frame control parameters
     dw1000_tx_fctrl(dw, length, 0, tx_mode);
+    return true;
 }
 
 #if DW1000_WITH_EXTENDED_SEND
@@ -82,7 +96,7 @@ _dw1000_iovec_write(struct iovec *iovec, int iovcnt,
 static inline bool
 _dw1000_tx_prepare_delayed_embed_timestamp(
 	dw1000_t *dw, struct iovec *iovec, int iovcnt,
-	size_t offset, uint32_t delay, int tx_mode)
+	size_t offset, size_t length, uint32_t delay, int tx_mode)
 {
     // Sanity check
     DW1000_ASSERT(((tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_ENDIAN_MASK)
@@ -114,6 +128,22 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
 	break;
     default: return false;
     }
+
+    /* The timestamp has to fit inside the frame the caller described.
+     * Neither write below says otherwise if it does not:
+     * dw1000_tx_write_frame_data() clamps to the 1024 byte transmit
+     * buffer, not to the frame length already in TX_FCTRL, so bytes
+     * past the end are written where nothing transmits them, and
+     * _dw1000_iovec_write() drops the same bytes from the caller's copy
+     * by design. The frame would go out carrying a truncated timestamp,
+     * the caller's copy would be truncated identically -- so comparing
+     * it against TX_STAMP would agree -- and the send would report
+     * success. Refuse instead, the way an unusable tx_mode above is
+     * refused, and before anything is written to the chip.
+     * Computed without overflow: offset alone can exceed the frame.
+     */
+    if ((offset > length) || ((length - offset) < size))
+	return false;
 
     uint8_t  data[8] = { 0 };
     uint64_t time;
@@ -169,8 +199,11 @@ dw1000_tx_sendv(
 	dw1000_t *dw, struct iovec *iovec, int iovcnt, int tx_mode)
 {
     // Prepare data and frame control
+    //   The payload is written to the chip before the length is checked;
+    //   a refusal leaves it there, unsent, as an unusable tx_mode does.
     size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt);
-    _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
+    if (! _dw1000_tx_prepare_fctrl(dw, length, tx_mode))
+	return -1;
     // Start trasmit
     return dw1000_tx_start(dw, tx_mode);
 }
@@ -181,7 +214,8 @@ dw1000_tx_send(
 {
     // Prepare data and frame control
     _dw1000_tx_prepare_data_send(dw, data, length);
-    _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
+    if (! _dw1000_tx_prepare_fctrl(dw, length, tx_mode))
+	return -1;
     // Start trasmit
     return dw1000_tx_start(dw, tx_mode);
 }
@@ -197,7 +231,8 @@ dw1000_tx_extended_vsendv(
 {
     // Prepare data and frame control
     size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt);
-    _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
+    if (! _dw1000_tx_prepare_fctrl(dw, length, tx_mode))
+	return -1;
 
     // If not embedding timestamp, send it now
     if (! (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP)) {
@@ -275,7 +310,8 @@ dw1000_tx_extended_vsendv(
 	
     // Prepare embedded timestamp and start transmit
     if (! _dw1000_tx_prepare_delayed_embed_timestamp(dw, iovec, iovcnt,
-						     offset, delay, tx_mode))
+						     offset, length, delay,
+						     tx_mode))
 	return -1;
     rc = dw1000_tx_start(dw, tx_mode);
     if ((rc < 0) && !last_try) {

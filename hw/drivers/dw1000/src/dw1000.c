@@ -939,6 +939,20 @@ uint16_t dw1000_rx_get_pacc_count(dw1000_t *dw) {
  */
 static
 void dw1000_rx_sync_dblbuf(dw1000_t *dw) {
+    // Never while the host still holds a reported frame. Between the
+    // RXENAB of the double buffered RXFCG branch and the HRBPT that
+    // follows the rx_ok callback the two pointers are misaligned on
+    // purpose: ICRBP is on the buffer the chip is filling, HSRBP on the
+    // one being read out. Aligning them there issues HRBPT and hands
+    // that buffer back to the chip, so the rest of the read-out returns
+    // the other buffer (wrong payload, wrong timestamp, no error), and
+    // the driver's own toggle afterwards leaves the pointers inverted.
+    // A host reaches this from inside its callback by doing what the
+    // send functions ask of it, dw1000_txrx_off() before a transmit, so
+    // the guard belongs here rather than in each caller.
+    if (dw->rx_held)
+	return;
+
     // UM §7.2.17: System Event Status Register
     //  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
     //     we will read the 1 byte at offset 3
@@ -1128,6 +1142,28 @@ int dw1000_initialise(dw1000_t *dw) {
 
     const dw1000_config_t *cfg = dw->config;
 
+    // Double buffering with nowhere to report an overrun is a receiver
+    // that stops for good on the first one. dw1000_process_events()
+    // recovers the chip (transceiver off, receiver reset, pointers
+    // re-aligned) but leaves the re-arming to the host, as it does for
+    // every other receive error, and the rx_error callback is how the
+    // host is asked to do it. With none registered the recovery runs to
+    // completion and nothing ever enables the receiver again.
+    //
+    // Refused rather than papered over. A driver that re-armed by itself
+    // here would hide the frames an overrun means were lost, which is
+    // exactly what a host measuring distances cannot afford not to know.
+    // And refused at initialisation rather than at the overrun, because
+    // it is a property of the configuration: this is the cheapest moment
+    // to say so, and it is before any SPI traffic.
+    //
+    // It is also what lets the MRXOVRR line below be conditioned on
+    // cfg->dblbuff alone and still match the rest of that block, every
+    // other line of which is conditioned on the callback that consumes
+    // the event.
+    if (cfg->dblbuff && (cfg->cb.rx_error == NULL))
+	return -1;
+
     // Start SPI at low speed
     _dw1000_spi_low_speed(cfg->spi);
     
@@ -1302,6 +1338,13 @@ int dw1000_initialise(dw1000_t *dw) {
     if (cfg->cb.rx_timeout) { sys_mask |= DW1000_MSK_SYS_MASK_ALL_RX_TO;  }
     if (cfg->cb.rx_error  ) { sys_mask |= DW1000_MSK_SYS_MASK_ALL_RX_ERR; }
     if (cfg->cb.rx_ok     ) { sys_mask |= DW1000_FLG_SYS_MASK_MRXFCG;     }
+    // Double buffering holds one frame while the next lands in the other
+    // buffer; a third arriving before the host has freed one is an
+    // overrun. dw1000_process_events() recovers from it, but only gets
+    // the chance if the overrun raises an interrupt: RXOVRR is absent
+    // from ALL_RX_ERR, so a double buffered host that does not unmask it
+    // here stays in the errored state of UM §4.3.5 instead of recovering.
+    if (cfg->dblbuff      ) { sys_mask |= DW1000_FLG_SYS_MASK_MRXOVRR;    }
     dw1000_interrupt(dw, sys_mask, true);
 
     return 0;
@@ -1578,6 +1621,11 @@ static
 void _dw1000_rx_overrun_recover(dw1000_t *dw, uint32_t status) {
     const dw1000_config_t *cfg = dw->config;
 
+    // Both buffers are being dropped, so nothing is held any more and
+    // the re-align below must not be suppressed. Cleared first, before
+    // the first thing that syncs.
+    dw->rx_held = 0;
+
     // RXOVRR is deliberately absent from the bits cleared here: UM
     // §7.2.17 makes it READ ONLY, so writing 1 to it does nothing.
     _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
@@ -1680,6 +1728,11 @@ bool dw1000_process_events(dw1000_t *dw) {
 
 	    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
 				DW1000_FLG_SYS_CTRL_RXENAB);
+
+	    // From here to the toggle below the host side buffer belongs
+	    // to this frame and to whoever reads it out, the rx_ok
+	    // callback included. dw1000_rx_sync_dblbuf() honours this.
+	    dw->rx_held = 1;
 	}
 
         // Read frame info
@@ -1735,6 +1788,10 @@ bool dw1000_process_events(dw1000_t *dw) {
 
         // Toggle the Host side Receive Buffer Pointer
         if (cfg->dblbuff) {
+	    // The read-out is over: the buffer may be released, and the
+	    // pointers may be aligned again by whoever needs to.
+	    dw->rx_held = 0;
+
 	    // UM §4.3.3 (figure 14): RXOVRR is tested *after* the frame has
 	    // been read out and before the toggle, not only on entry. The
 	    // receiver was re-enabled above, so while the callback ran a
@@ -1988,13 +2045,7 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
      * behaviour, and cppcheck reacts to one by refusing to expand the
      * macro and abandoning the rest of the file.
      */
-    const size_t max_length =
-#if DW1000_WITH_PROPRIETARY_LONG_FRAME
-	dw->radio.proprietary.long_frames
-	? (DW1000_MSK_TX_FCTRL_TFLE_TFLEN >> DW1000_SFT_TX_FCTRL_TFLEN)
-	:
-#endif
-	  127;
+    const size_t max_length = dw1000_tx_get_frame_maxsize(dw);
     DW1000_ASSERT(length <= max_length, "bad frame length");
 
     // TXBOFFS is a 10-bit field; a larger offset would corrupt the

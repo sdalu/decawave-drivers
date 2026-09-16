@@ -190,6 +190,12 @@ dw1000_tx_set_default_delay(dw1000_t *dw, uint32_t initial, uint32_t retry)
  *
  * @pre    The DW1000 is in IDLE state.
  *         The dw1000_txrx_off() function need to be called if necessary.
+ *         In double buffered mode, from inside the rx_ok callback, that
+ *         call is dw1000_txrx_idle(): dw1000_txrx_off() also drops the
+ *         receive status, which releases the buffer the callback is
+ *         still reading out. The driver holds the buffer against it
+ *         either way, so the frame survives; what is lost is the status
+ *         of a frame already reported.
  *
  * @note   According to the @p DW1000_TX_NO_AUTO_CRC flag, if unset
  *         transmitted frame will have the CRC automatically computed
@@ -200,6 +206,12 @@ dw1000_tx_set_default_delay(dw1000_t *dw, uint32_t initial, uint32_t retry)
  * @note   If using @p DW1000_TX_DELAYED_START, the transmission time
  *         should have been previously set using @p dw1000_txrx_set_time
  *
+ * @note   The frame must fit: with the CRC appended automatically the
+ *         payload may be at most @p dw1000_tx_get_frame_maxsize() less
+ *         @p DW1000_CRC_LENGTH, and the whole of it with
+ *         @p DW1000_TX_NO_AUTO_CRC. A longer one is refused, not
+ *         truncated.
+ *
  * @param dw        driver context
  * @param data      data to send
  * @param length    length of the data
@@ -208,7 +220,8 @@ dw1000_tx_set_default_delay(dw1000_t *dw, uint32_t initial, uint32_t retry)
  *                  DW1000_TX_RANGING, DW1000_TX_NO_AUTO_CRC
  *
  * @retval  0        Transmission started
- * @retval -1        It was not possible to start transmission.
+ * @retval -1        It was not possible to start transmission, or the
+ *                   frame is longer than the chip can carry.
  *                   (Can happen when @p DW1000_TX_DELAYED_START is set:
  *                   the chip reported the time as already past, or the
  *                   requested lead was at or below the preamble and
@@ -224,6 +237,12 @@ int dw1000_tx_send(dw1000_t *dw,
  *
  * @pre    The DW1000 is in IDLE state.
  *         The dw1000_txrx_off() function need to be called if necessary.
+ *         In double buffered mode, from inside the rx_ok callback, that
+ *         call is dw1000_txrx_idle(): dw1000_txrx_off() also drops the
+ *         receive status, which releases the buffer the callback is
+ *         still reading out. The driver holds the buffer against it
+ *         either way, so the frame survives; what is lost is the status
+ *         of a frame already reported.
  *
  * @note   According to the @p DW1000_TX_NO_AUTO_CRC flag, if unset
  *         transmitted frame will have the CRC automatically computed
@@ -234,6 +253,12 @@ int dw1000_tx_send(dw1000_t *dw,
  * @note   If using @p DW1000_TX_DELAYED_START, the transmission time
  *         should have been previously set using @p dw1000_txrx_set_time
  *
+ * @note   The frame must fit: with the CRC appended automatically the
+ *         payload may be at most @p dw1000_tx_get_frame_maxsize() less
+ *         @p DW1000_CRC_LENGTH, and the whole of it with
+ *         @p DW1000_TX_NO_AUTO_CRC. A longer one is refused, not
+ *         truncated.
+ *
  * @param dw        driver context
  * @param iovec     io vector
  * @param iovcnt    number of elements in vector
@@ -242,7 +267,8 @@ int dw1000_tx_send(dw1000_t *dw,
  *                  DW1000_TX_RANGING, DW1000_TX_NO_AUTO_CRC
  *
  * @retval  0        Transmission started
- * @retval -1        It was not possible to start transmission.
+ * @retval -1        It was not possible to start transmission, or the
+ *                   frame is longer than the chip can carry.
  *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
  */
 int dw1000_tx_sendv(dw1000_t *dw,
@@ -256,6 +282,12 @@ int dw1000_tx_sendv(dw1000_t *dw,
  *
  * @pre    The DW1000 is in IDLE state.
  *         The dw1000_txrx_off() function need to be called if necessary.
+ *         In double buffered mode, from inside the rx_ok callback, that
+ *         call is dw1000_txrx_idle(): dw1000_txrx_off() also drops the
+ *         receive status, which releases the buffer the callback is
+ *         still reading out. The driver holds the buffer against it
+ *         either way, so the frame survives; what is lost is the status
+ *         of a frame already reported.
  *
  * @note   According to the @p DW1000_TX_NO_AUTO_CRC flag, if unset
  *         transmitted frame will have the CRC automatically computed
@@ -331,7 +363,9 @@ int dw1000_tx_sendv(dw1000_t *dw,
  *                  described above, packed in a @p va_list
  *
  * @retval  0        Transmission started
- * @retval -1        It was not possible to start transmission.
+ * @retval -1        It was not possible to start transmission, or the
+ *                   frame is longer than the chip can carry, or the
+ *                   embedded timestamp does not fit inside it.
  *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
  */
 int dw1000_tx_extended_vsendv(dw1000_t *dw,

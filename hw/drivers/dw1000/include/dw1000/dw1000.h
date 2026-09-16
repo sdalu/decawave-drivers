@@ -317,13 +317,18 @@ typedef struct dw1000_config {
      * has been toggled those registers show the other buffer, and a
      * host that defers the read-out to a later step gets the previous
      * frame's data with the current frame's length. A receiver overrun
-     * (RXOVRR,
-     * both buffers held while a third frame arrived) is recovered
-     * (transceiver off, receiver reset, pointers re-aligned) and
-     * reported through the rx_error callback with RXOVRR set in the
+     * (RXOVRR: both buffers held while a third frame arrived) is
+     * recovered (transceiver off, receiver reset, pointers re-aligned)
+     * and reported through the rx_error callback with RXOVRR set in the
      * status, which is expected to re-enable the receiver as for any
-     * error. Interrupts on RXOVRR (DW1000_FLG_SYS_MASK_MRXOVRR) should
-     * be enabled along with the receive ones.
+     * error. dw1000_initialise() unmasks the RXOVRR interrupt
+     * (DW1000_FLG_SYS_MASK_MRXOVRR) along with the receive ones when
+     * this flag is set; the recovery would otherwise run only when some
+     * other event happened to bring the driver in. That callback is
+     * required: the recovery re-arms nothing by itself, so
+     * dw1000_initialise() refuses this flag without an rx_error
+     * callback rather than leave the receiver to stop for good on the
+     * first overrun.
      */
     uint8_t    dblbuff:1;
     /**
@@ -462,6 +467,10 @@ struct dw1000 {
     int8_t   rxpacc_adj;    // RXPACC SFD correction (UM table 18)
     uint16_t rxpacc_nosat;  // Sampled for the frame being reported:
     uint16_t lde_thresh;    // neither is in the swinging set, UM table 7
+    uint8_t  rx_held;       // Double buffered: a reported frame is still
+                            //  in the host side buffer, being read out
+                            //  by the rx_ok callback. Releasing it now
+                            //  would hand it back to the chip mid-read.
 
     struct {
 	uint32_t sys_cfg;   // Shadow of SYS_CFG,  UM 7.2.6
@@ -832,7 +841,10 @@ void dw1000_hardreset(dw1000_t *dw);
  * @param[in]  dw       driver context
  *
  * @retval  0           DW1000 successfully initialized
- * @retval -1           Chip not identified as DW1000
+ * @retval -1           Chip not identified as DW1000, or @p dblbuff is
+ *                      set with no rx_error callback to report a
+ *                      receiver overrun to, which would leave the
+ *                      receiver off for good on the first one
  */
 int dw1000_initialise(dw1000_t *dw);
 
@@ -1189,15 +1201,30 @@ void dw1000_tx_set_rx_activation_delay(dw1000_t *dw, uint32_t delay);
 /**
  * @brief Read the TX_POWER register back from the chip
  *
- * Not @p dw->tx_power, which is the word this driver last WROTE. The two
- * agree in every ordinary case: dw1000_configure() clamps, encodes, and
- * resolves the automatic setting out of the power table before caching,
- * so the cache is the applied value and not the request.
+ * The applied transmit power: what @p DW1000_TX_POWER_AUTO resolved to
+ * out of the calibration table, or what a manual setting was clamped and
+ * encoded to. @p dw1000_tx_power_to_05db() decodes it.
  *
- * What this answers is whether the chip is in the state the driver
- * believes -- a write that never landed, a reset, a radio that came up
- * wrong. None of that shows in the cache, and for a measurement all of
- * it invalidates the run.
+ * It is read from the chip rather than from @p dw->tx_power, the word the
+ * driver last wrote, but do not read more into that than it carries.
+ * TX_POWER is a plain read/write register with no status field, so it
+ * returns what was written; and dw1000_configure() clamps, encodes and
+ * resolves the automatic setting before caching, so the cache is already
+ * the applied value and not the request. The chip is not a second opinion
+ * here, and an earlier version of this comment said it was.
+ *
+ * What the read adds over the cache is one thing only: it is what would
+ * notice the chip having reset since it was configured. The identity
+ * check in dw1000_initialise() would not, a reset chip reporting the same
+ * DEV_ID with every configuration register back at its default. Anything
+ * else it could catch, a write that never landed or a chip that never
+ * left reset, that identity check catches already and for every register.
+ *
+ * And it is a one field proxy even for that. A chip that reset has also
+ * lost the channel, the PRF and the antenna delays, each of which
+ * invalidates a measurement at least as thoroughly. A caller that needs
+ * to know the chip still holds its configuration wants all of them
+ * checked, not this one.
  *
  * @param dw   driver context
  * @return     the TX_POWER word (UM 2.18 7.2.31)
@@ -1221,6 +1248,36 @@ uint32_t dw1000_tx_get_power(dw1000_t *dw);
  * @return         applied power in half-dB steps, 0 .. 61
  */
 uint8_t dw1000_tx_power_to_05db(uint32_t txpower);
+
+
+/**
+ * @brief Largest frame the chip can carry, CRC included
+ *
+ * @details 127 in standard mode, and 1023 only when the build has
+ *          proprietary long frames AND the radio is configured for them
+ *          (UM §7.2.10, §3.4). Both conditions, which is why this is a
+ *          run time value and not @p DW1000_FRAME_MAXSIZE.
+ *
+ * @note  This is the whole frame. With the CRC appended automatically
+ *        (that is, without @p DW1000_TX_NO_AUTO_CRC) the largest payload
+ *        a caller may pass to the send functions is this less
+ *        @p DW1000_CRC_LENGTH.
+ *
+ * @param[in]  dw       driver context
+ *
+ * @return the maximum frame length, in bytes
+ */
+static inline size_t
+dw1000_tx_get_frame_maxsize(dw1000_t *dw)
+{
+#if DW1000_WITH_PROPRIETARY_LONG_FRAME
+    if (dw->radio.proprietary.long_frames)
+	return DW1000_FRAME_MAXSIZE;
+#else
+    (void)dw;
+#endif
+    return 127;
+}
 
 
 /**
