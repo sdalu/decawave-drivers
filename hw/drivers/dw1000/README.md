@@ -1,0 +1,319 @@
+# Writing an application against this driver
+
+Every entry below is something that has actually gone wrong: in this tree,
+in one of the applications built on it, or on the bench. Each says what
+bites, why, and where the behaviour is prescribed, so that a reader can
+check it against the User Manual rather than take it on trust.
+
+This is not the API reference. `../../../README.md` describes the
+architecture, the build and the public API; `../../../AUDIT.md` records the
+audit of the driver against the User Manual and the Errata, including what
+is still open. The headers are the contract, and they are the place to
+settle a detail this file only summarises.
+
+## Four facts that shape everything else
+
+**Asserts are not validation.** `DW1000_ASSERT` maps to `assert()`,
+`__ASSERT` or `osalDbgAssert` and vanishes under `NDEBUG`, without
+`CONFIG_ASSERT`, or without `CH_DBG_ENABLE_ASSERTS`: four of the five ports,
+and exactly the builds that ship. Anything the driver must reject in a
+release build is checked separately and reported through a return value.
+Never rely on an assert to catch a bad argument in production.
+
+**The configuration must outlive the driver; the radio settings need not.**
+`dw1000_init()` stores the `dw1000_config_t *` you hand it and reads it for
+the life of the context, callbacks and SPI handle included, so it cannot be
+a local. `dw1000_radio_t` is different: it is copied by value into the
+context, so a local struct passed to `dw1000_configure()` is fine. It was
+not always so, and a stack-allocated radio config used to leave a dangling
+pointer that only AddressSanitizer caught.
+
+**Return values are not decoration.** `dw1000_initialise()`,
+`dw1000_configure()`, `dw1000_tx_send()`, the extended sends and
+`dw1000_rx_start()` all report failure, and in each case the failure is one
+you can provoke with an ordinary mistake. `dw1000_configure()` in particular
+used to be `void`: transmitting after it returns `-1` is a programming
+error, because the radio keeps whatever configuration it had, which on a
+first call is none.
+
+**The reported frame length includes the FCS, and so does the buffer.** Two
+bytes of every length `rx_ok` is given, and of every
+`dw1000_rx_get_frame_length()`, are the CRC, and the bytes are really there:
+`RX_BUFFER` holds the payload followed by the FCS, little endian, at offset
+`length - 2`. Decawave's own driver excludes them from the length it
+reports, so code ported from it is off by two. Subtract `DW1000_CRC_LENGTH`
+for the payload.
+
+The driver computes no CRC of its own, in either direction. On transmit it
+adds `DW1000_CRC_LENGTH` to the length it writes to `TX_FCTRL`, and the chip
+appends the FCS itself; with `DW1000_TX_NO_AUTO_CRC` it does not, and the
+frame you supply must already carry a CRC-16-CCITT. On receive the chip has
+already checked the FCS, and a bad one raises `RXFCE` and never reaches
+`rx_ok`, so re-checking it is redundant. It is exposed for a sniffer or a
+log, not for validation.
+
+That makes the two directions opposite conventions, deliberately, and it is
+the single easiest thing to get wrong here:
+
+| Direction | What the length means |
+| :-------- | :-------------------- |
+| Send | payload only; the driver adds the two |
+| Receive | payload **plus** FCS; you subtract the two |
+
+Receive reports what the chip reports (`RXFLEN`), which is what the rest of
+the driver does with every register. Send is the one that is helpful. A
+round trip written symmetrically is wrong at one end.
+
+Measured rather than assumed, rpi-c to rpi-d on 2026-09-16: a 19 byte
+payload was reported as length 21, with the last two bytes `f4 6c` against a
+computed FCS of `0x6cf4`.
+
+## Bring-up and configuration
+
+### Call `dw1000_tx_set_default_delay()` after `dw1000_configure()`, and again after every reconfiguration
+
+The delayed-send lead includes the preamble and SFD airtime, which is only
+known once the radio is configured, and which changes with the preamble
+length: about 138 µs at 128 symbols and 4.2 ms at 4096. A lead left over
+from a shorter preamble is refused with `-1` rather than silently lost.
+
+### Double buffering requires an `rx_error` callback
+
+`dw1000_initialise()` refuses `cfg->dblbuff` when `cfg->cb.rx_error` is
+`NULL`, and returns `-1`. The overrun recovery puts the chip back in order
+and then reports a receive error; re-arming the receiver is the host's job,
+as it is for every other error. With no callback the recovery would run to
+completion and nothing would ever enable the receiver again, silently and
+permanently. The driver refuses the pairing rather than re-arm by itself,
+which would hide the frames an overrun means were lost.
+
+### The interrupt mask is derived from the callbacks you register
+
+`dw1000_initialise()` unmasks `MTXFRS`, `ALL_RX_TO`, `ALL_RX_ERR` and
+`MRXFCG` only for the callbacks that are present, plus `MRXOVRR` when
+`dblbuff` is set. If you unmask more with `dw1000_interrupt()`, unmask only
+bits `dw1000_process_events()` handles. It clears the status bits it reports
+on and no others, so a bit it does not handle stays set, the IRQ line stays
+asserted, and the host spins. `CPLOCK`, `GPIOIRQ`, `TXBERR`, `RFPLL_LL`,
+`CLKPLL_LL` and any intermediate TX or RX bit without its terminal bit are
+all in that category.
+
+### Guard against the version you need
+
+The release is written in one place and is usable from the preprocessor:
+
+```c
+#include <dw1000/dw1000.h>          /* or <dw1000/dw1000_version.h> alone */
+
+#if !DW1000_VERSION_AT_LEAST(1, 1, 0)
+#error this application needs dw1000 1.1.0 or newer
+#endif
+```
+
+### Smart transmit power is off
+
+The driver sets `DIS_STXP` at initialisation, where Decawave's leaves smart
+power on, because it perturbs the ranging bias correction. Transmit power is
+named outright through `DW1000_TX_POWER(dB)` in `dw1000_radio_t`; start from
+`manual_tx_power[]` and UM §7.2.31.4 for a value. There is no board
+compensation flag, and a board calibration is not the driver's business.
+
+## Transmitting
+
+### The chip must be IDLE before a send, and which call gets you there matters
+
+| Situation | Call | Why |
+| :-------- | :--- | :-- |
+| Shutting the radio down, abandoning an operation | `dw1000_txrx_off()` | Clears every pending TX and RX event along with stopping the transceiver |
+| Transmitting while events you still care about are pending | `dw1000_txrx_idle()` | Stops the transceiver and leaves the status untouched |
+| From inside `rx_ok`, double buffered | `dw1000_txrx_idle()` | `dw1000_txrx_off()` drops the receive status of a frame already reported |
+
+The third row is the one that has bitten. In double buffered mode the driver
+re-enables the receiver before calling `rx_ok`, so a responder answering
+from its callback is not in IDLE and has to stop the transceiver first.
+`dw1000_txrx_off()` there throws away the status of the frame being read
+out. The frame itself survives (the driver holds its buffer against exactly
+this), but there is no reason to ask for the loss.
+
+### A delayed-send delay is the whole lead, airtime included
+
+Both `DW1000_TX_DELAYED_DELAY` and the pair held by
+`dw1000_tx_set_default_delay()` are the lead to the programmed RMARKER, used
+exactly as given, with nothing added. The RMARKER is the *end* of the SFD
+(APS022 §5.4), so the chip must already be transmitting before it: a lead at
+or below `dw1000_tx_get_preamble_airtime()` cannot be met and is refused
+with `-1`.
+
+Measured lead figures reported by the estimators in `spank` and in the Ruby
+gem are **totals**, not the host term. Do not add the airtime to them a
+second time. On rpi-a, across a thirty-fold range of preamble length, the
+minimum workable lead tracked the computed airtime with a flat residual of
+about 35 µs for the host's own register writes and the transmit power-up.
+
+A lead of `0` means "no default set", and every send that carries no delay
+of its own is then refused.
+
+### The retry gets one and a half times the delay, unless you name it
+
+When you pass `DW1000_TX_DELAYED_DELAY` without
+`DW1000_TX_DELAYED_RETRY_DELAY`, the retry is scaled from *your* delay, not
+from the configured default. A retry must never get less lead than the
+attempt the chip just called too late, which is what used to happen: a 10 ms
+send retried at the 4 ms default, failing precisely on the slow hosts that
+raised the delay. An explicit retry delay is honoured as given, and a
+configured retry of `0` disables retries.
+
+### Embedding a transmit timestamp
+
+- It implies `DW1000_TX_DELAYED_START`, whether or not you pass it. The
+  value embedded is a programmed time, so sending immediately would put a
+  future instant in a frame already gone.
+- The timestamp must fit inside the frame. An offset leaving fewer than 5
+  bytes (or 8, at `_64BIT`) is refused with `-1`. It used to be written past
+  the end of the frame, where nothing transmits it, and the send reported
+  success.
+- The frame you hand in is **written in place**, at the same offset, so it
+  must be writable. A Ruby string or any shared or frozen buffer needs a
+  copy first.
+- The embedded value equals what `TX_STAMP` reports on completion, antenna
+  delay included. Comparing the two is a genuine self-check, and it is what
+  lets a receiver learn the transmit instant without a second exchange.
+
+### The payload ceiling is the frame ceiling less the CRC
+
+`dw1000_tx_get_frame_maxsize()` gives the largest frame the chip can carry:
+127, or 1023 only when the build has proprietary long frames *and* the radio
+is configured for them. With the automatic CRC the largest payload you may
+pass is that less `DW1000_CRC_LENGTH`, because the driver adds the two bytes
+before the ceiling applies.
+
+A longer payload is refused with `-1`. It used to be clamped instead: a
+126-byte payload became a 128-byte frame, was clamped back to 127, and went
+out one byte short with the send reporting success. The assert beside that
+clamp is no help, being compiled out on four of the five ports. The refusal
+sits in the send path rather than in `dw1000_tx_fctrl()`, which still clamps
+for a caller writing `TX_FCTRL` itself and having already decided what it
+means.
+
+### Two errata worth knowing
+
+**TX-1, handled.** A delayed send whose time falls just after the TXPUTE
+window used to be dropped with neither `HPDWARN` nor `TXPUTE` raised and no
+TX-done event, so the driver reported success for a frame that never left.
+The driver now forces the TX clock on before `TXDLYS|TXSTRT` and releases it
+on completion. Nothing for a caller to do.
+
+**RX-1, not handled.** A TX buffer write past offset 127, issued before the
+second RX buffer has been read out, corrupts byte 128 of that buffer. This
+bites a double-buffered node answering with a frame longer than 127 bytes.
+The driver neither rejects nor splits such a write. If that is your traffic
+pattern, keep the reply under 128 bytes or write it after the read-out.
+
+## Receiving
+
+### The driver does not re-arm the receiver for you
+
+After an error or a timeout the receiver is left off. Re-enabling it is the
+callback's job, or `RXAUTR`'s if you set `cfg->rxauto`. Decawave's driver
+re-enables inside its ISR; this one does not, deliberately, so that a host
+decides when to listen again.
+
+### `dw1000_process_events()` returns whether anything was handled
+
+Not whether the status word was non-zero. An overrun is handled, reported
+through `rx_error`, and stripped from the status, and the call still returns
+`true`. A host driving its interrupt acknowledgement off that value gets the
+overrun case right.
+
+### The preamble timeout is not a hard deadline
+
+UM 2.18 §7.2.40.9: an unconfirmed preamble detection suspends the countdown
+by at least one PAC plus 32 symbols. Back
+`dw1000_rx_set_timeout_preamble()` with the SFD and frame-wait timeouts
+rather than relying on it alone.
+
+### `-INFINITY` means "no estimate", not "very weak"
+
+`dw1000_rx_get_power_estimate()` divides by the preamble accumulation count,
+which can legitimately be zero, and which a failed SPI read also produces.
+Both outputs are then set to `-INFINITY`: it cannot be mistaken for a
+reading, it orders correctly against any threshold, and it survives
+`dw1000_rx_power_correction()` unchanged. Returning a plausible number
+instead would hand you a believable lie.
+
+## Double buffered receive
+
+Worth reading as a whole before turning `cfg->dblbuff` on. It shifted
+SDS-TWR distances by 6 to 10 cm on every pair when it was measured, with
+half the spread; which mode carries the bias is not established.
+
+### The `rx_ok` contract changes
+
+Two obligations, both absolute:
+
+1. **Do not re-enable the receiver.** The driver already did, before calling
+   you, so that the next frame lands in the other buffer while you read this
+   one out.
+2. **Read everything you need before returning.** `RX_BUFFER`, `RX_TIME`,
+   `RX_FQUAL`, `RX_TTCKI` and `RX_TTCKO` all swing with the buffer pointer,
+   which the driver toggles as soon as the callback returns. A host that
+   only queues the event and reads the frame later gets the previous frame's
+   data with the current frame's length. This was found with the Ruby gem,
+   in exactly that shape.
+
+### Two registers the read-out needs do not swing
+
+`DRX_RXPACC_NOSAT` and `LDE_THRESH` are absent from UM table 7, so there is
+one live instance of each and the next frame's LDE run overwrites them. The
+driver samples both for the frame being reported and
+`dw1000_rx_get_pacc_count()` and `dw1000_rx_get_info()` use the sampled
+values. Nothing for a caller to do, but it explains why `max_noise` is not a
+live read in this mode.
+
+### An overrun is reported as a receive error
+
+A third frame arriving while both buffers are held is an overrun. The driver
+turns the transceiver off, resets the receiver, re-aligns the pointers,
+issues `HRBPT` (which is the only thing that clears `RXOVRR`, UM §4.3.5) and
+calls `rx_error` with `RXOVRR` in the status. Re-arm as you would for any
+other error.
+
+> [!WARNING]
+> A live defect sits here. On the bench, a node that takes one overrun stops
+> receiving for good, with an `rx_error` callback registered and the
+> recovery running. It reproduces on rpi-d through ruby-dw1000's
+> `test_an_overrun_does_not_leave_the_receiver_deaf`, and it is not the
+> missing-callback case described above. Unexplained as of 2026-09-16.
+
+### `dw1000_rx_start()` syncs the buffer pointers
+
+Pass `DW1000_RX_NO_DBLBUF_SYNC` when you are enabling the receiver under a
+frame you still hold. The driver suppresses the sync by itself for the
+window between reporting a frame and releasing it, so the ordinary paths are
+safe; the flag is for a host doing its own sequencing.
+
+## What the driver does not do
+
+Absences worth knowing before you design around them, and traps for whoever
+implements one:
+
+- **No sleep or deep sleep.** The pieces that look like support are inert:
+  `dw->sleep_mode` is accumulated and never written to `AON_WCFG`,
+  `AON_CFG1` is cleared but never uploaded with `UPL_CFG`, and `TX_ANTD` is
+  not preserved across a sleep (§7.2.26). Adding an entry point means
+  finishing all three.
+- **No carrier-integrator clock offset** (`DRX_CAR_INT`), no frame-duration
+  helpers, no event counters (0x2F). Decawave's driver has all three.
+- **`SYS_STATE` (0x19) is mapped and never read.** The IDLE preconditions
+  this file states in prose could be checked against it (`PMSC_STATE` reads
+  `0x1` for IDLE) rather than asserted.
+
+## Where the reasons live
+
+| Question | Look in |
+| :------- | :------ |
+| What a register write is for | The comment beside it, citing the UM section |
+| Why the driver differs from Decawave's | `AUDIT.md`, "Comparison with the Decawave driver" |
+| What is still wrong or unverified | `AUDIT.md`, "Open" and "Latent, not defects" |
+| Why a behaviour was chosen | The commit that introduced it; the messages carry the measurements |
+| What the API promises | The header, which is the contract |
