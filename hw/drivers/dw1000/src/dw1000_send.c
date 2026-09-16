@@ -69,7 +69,7 @@ _dw1000_tx_prepare_data_send(
     return length;
 }
 
-static inline bool
+static inline int
 _dw1000_tx_prepare_fctrl(dw1000_t *dw, size_t length, int tx_mode)
 {
     /* Errata 1.4 §3.2 (RX-1). "The 129th octet (i.e. buffer offset
@@ -100,7 +100,7 @@ _dw1000_tx_prepare_fctrl(dw1000_t *dw, size_t length, int tx_mode)
      * which is what "before reading the received frame" means here.
      */
     if (dw->config->dblbuff && dw->rx_held && (length > 128))
-	return false;
+	return DW1000_TX_ERR_BUFFER_HELD;
 
     // Adjust data length if CRC is automatically appended
     if (! (tx_mode & DW1000_TX_NO_AUTO_CRC))
@@ -116,11 +116,11 @@ _dw1000_tx_prepare_fctrl(dw1000_t *dw, size_t length, int tx_mode)
     // the test is on the padded length, which is why it is here and not
     // before the padding above.
     if (length > dw1000_tx_get_frame_maxsize(dw))
-	return false;
+	return DW1000_TX_ERR_FRAME_SIZE;
 
     // Set frame control parameters
     dw1000_tx_fctrl(dw, length, 0, tx_mode);
-    return true;
+    return 0;
 }
 
 #if DW1000_WITH_EXTENDED_SEND
@@ -152,7 +152,7 @@ _dw1000_iovec_write(struct iovec *iovec, int iovcnt,
     }
 }
 
-static inline bool
+static inline int
 _dw1000_tx_prepare_delayed_embed_timestamp(
 	dw1000_t *dw, struct iovec *iovec, int iovcnt,
 	size_t offset, size_t length, uint32_t delay, int tx_mode)
@@ -179,13 +179,13 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
     switch(tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_SIZE_MASK) {
     case DW1000_TX_DELAYED_EMBED_TIMESTAMP_40BIT: size = 5; break;
     case DW1000_TX_DELAYED_EMBED_TIMESTAMP_64BIT: size = 8; break;
-    default: return false;
+    default: return DW1000_TX_ERR_MODE;
     }
     switch(tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP_ENDIAN_MASK) {
     case DW1000_TX_DELAYED_EMBED_TIMESTAMP_LITTLE_ENDIAN:
     case DW1000_TX_DELAYED_EMBED_TIMESTAMP_BIG_ENDIAN:
 	break;
-    default: return false;
+    default: return DW1000_TX_ERR_MODE;
     }
 
     /* The timestamp has to fit inside the frame the caller described.
@@ -202,7 +202,7 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
      * Computed without overflow: offset alone can exceed the frame.
      */
     if ((offset > length) || ((length - offset) < size))
-	return false;
+	return DW1000_TX_ERR_TIMESTAMP;
 
     uint8_t  data[8] = { 0 };
     uint64_t time;
@@ -233,7 +233,7 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
 	for (size_t i = 0 ; i < size ; i++)
 	    data[i] = (time >> ((size - 1 - i) * 8)) & 0xff;
 	break;
-    default: return false; // unreachable, validated above
+    default: return DW1000_TX_ERR_MODE; // unreachable, validated above
     }
     
     // Embed timestamp, in the chip's transmit buffer and in the caller's
@@ -243,7 +243,7 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
     dw1000_tx_write_frame_data(dw, data, size, offset);
     _dw1000_iovec_write(iovec, iovcnt, offset, data, size);
 
-    return true;
+    return 0;
 }
 #endif
 
@@ -259,14 +259,15 @@ dw1000_tx_sendv(
 {
     // Nothing is written until the transmitter is known free (TX-2)
     if (! _dw1000_tx_idle(dw))
-	return -1;
+	return DW1000_TX_ERR_BUSY;
 
     // Prepare data and frame control
     //   The payload is written to the chip before the length is checked;
     //   a refusal leaves it there, unsent, as an unusable tx_mode does.
     size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt);
-    if (! _dw1000_tx_prepare_fctrl(dw, length, tx_mode))
-	return -1;
+    int    rc     = _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
+    if (rc < 0)
+	return rc;
     // Start trasmit
     return dw1000_tx_start(dw, tx_mode);
 }
@@ -277,12 +278,13 @@ dw1000_tx_send(
 {
     // Nothing is written until the transmitter is known free (TX-2)
     if (! _dw1000_tx_idle(dw))
-	return -1;
+	return DW1000_TX_ERR_BUSY;
 
     // Prepare data and frame control
     _dw1000_tx_prepare_data_send(dw, data, length);
-    if (! _dw1000_tx_prepare_fctrl(dw, length, tx_mode))
-	return -1;
+    int rc = _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
+    if (rc < 0)
+	return rc;
     // Start trasmit
     return dw1000_tx_start(dw, tx_mode);
 }
@@ -298,12 +300,13 @@ dw1000_tx_extended_vsendv(
 {
     // Nothing is written until the transmitter is known free (TX-2)
     if (! _dw1000_tx_idle(dw))
-	return -1;
+	return DW1000_TX_ERR_BUSY;
 
     // Prepare data and frame control
     size_t length = _dw1000_tx_prepare_data_sendv(dw, iovec, iovcnt);
-    if (! _dw1000_tx_prepare_fctrl(dw, length, tx_mode))
-	return -1;
+    int    prep   = _dw1000_tx_prepare_fctrl(dw, length, tx_mode);
+    if (prep < 0)
+	return prep;
 
     // If not embedding timestamp, send it now
     if (! (tx_mode & DW1000_TX_DELAYED_EMBED_TIMESTAMP)) {
@@ -377,15 +380,19 @@ dw1000_tx_extended_vsendv(
     // caller passed. A host that reconfigured the radio to a longer
     // preamble without revisiting its default finds out here.
     if ((delay == 0) || (delay <= dw->tx_ton))
-	return -1;
-	
+	return DW1000_TX_ERR_LEAD;
+
     // Prepare embedded timestamp and start transmit
-    if (! _dw1000_tx_prepare_delayed_embed_timestamp(dw, iovec, iovcnt,
-						     offset, length, delay,
-						     tx_mode))
-	return -1;
+    prep = _dw1000_tx_prepare_delayed_embed_timestamp(dw, iovec, iovcnt,
+						      offset, length, delay,
+						      tx_mode);
+    if (prep < 0)
+	return prep;
     rc = dw1000_tx_start(dw, tx_mode);
-    if ((rc < 0) && !last_try) {
+    // Only a refusal more lead time can cure is worth another attempt:
+    // the chip having found the time already past is exactly that, and
+    // nothing else dw1000_tx_start() reports is.
+    if ((rc == DW1000_TX_ERR_TOO_LATE) && !last_try) {
 	delay    = retry_delay;
 	last_try = true;
 	goto retry;

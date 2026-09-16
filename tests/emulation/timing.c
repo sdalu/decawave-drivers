@@ -742,10 +742,13 @@ step_tx_while_busy(dw1000_t *dw, struct stub *s)
 	return "the first send was refused with an idle transmitter";
 
     /* Straight away, before anything has processed the completion. */
-    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
-		       DW1000_TX_IMMEDIATE) == 0)
-	return "a second send was accepted while the first was in flight:"
-	       " its buffer write would have corrupted the frame on air";
+    int busy = dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+			      DW1000_TX_IMMEDIATE);
+    if (busy != DW1000_TX_ERR_BUSY)
+	return REASON("a second send while the first was in flight"
+		      " answered %d, not DW1000_TX_ERR_BUSY (%d): its"
+		      " buffer write would have corrupted the frame on air",
+		      busy, DW1000_TX_ERR_BUSY);
 
     /* The completion releases the transmitter. */
     if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
@@ -813,11 +816,14 @@ step_tx_frame_too_long(dw1000_t *dw, struct stub *s)
     /* One byte of payload too many: with the CRC it is one over the
      * ceiling. This is the case that used to go out truncated.
      */
-    if (dw1000_tx_send(dw, big, max - DW1000_CRC_LENGTH + 1,
-		       DW1000_TX_IMMEDIATE) == 0)
-	return REASON("a %zu byte payload was accepted, and with the CRC"
-		      " that is %zu over the %zu byte ceiling",
-		      max - DW1000_CRC_LENGTH + 1, (size_t)1, max);
+    int rc = dw1000_tx_send(dw, big, max - DW1000_CRC_LENGTH + 1,
+			    DW1000_TX_IMMEDIATE);
+    if (rc != DW1000_TX_ERR_FRAME_SIZE)
+	return REASON("a %zu byte payload, one over the %zu byte ceiling"
+		      " once the CRC is added, answered %d and not"
+		      " DW1000_TX_ERR_FRAME_SIZE (%d)",
+		      max - DW1000_CRC_LENGTH + 1, max, rc,
+		      DW1000_TX_ERR_FRAME_SIZE);
 
     /* And refused means nothing was sent. */
     pthread_mutex_lock(&s->lock);
@@ -912,9 +918,10 @@ step_tx_embed_timestamp(dw1000_t *dw, struct stub *s)
      */
     rc = dw1000_tx_extended_send(dw, frame, PAYLOAD_LEN, mode,
 				 (size_t)(PAYLOAD_LEN - 2), lead);
-    if (rc == 0)
-	return "a 5 byte timestamp 2 bytes from the end of the frame was"
-	       " accepted";
+    if (rc != DW1000_TX_ERR_TIMESTAMP)
+	return REASON("a 5 byte timestamp 2 bytes from the end of the"
+		      " frame answered %d, not DW1000_TX_ERR_TIMESTAMP (%d)",
+		      rc, DW1000_TX_ERR_TIMESTAMP);
     if (memcmp(frame, untouched, PAYLOAD_LEN) != 0)
 	return "the refused send wrote into the caller's frame anyway";
 

@@ -36,6 +36,15 @@ used to be `void`: transmitting after it returns `-1` is a programming
 error, because the radio keeps whatever configuration it had, which on a
 first call is none.
 
+The transmit failures are further distinguished, because what you should
+do about them differs. All are negative, so `rc < 0` still works, but
+`DW1000_TX_ERR_TOO_LATE` and `DW1000_TX_ERR_BUSY` are transient and the
+same call may succeed later; `DW1000_TX_ERR_LEAD` is a setup you have to
+fix; and `DW1000_TX_ERR_FRAME_SIZE`, `_MODE`, `_TIMESTAMP` and
+`_BUFFER_HELD` will fail identically however often they are retried. The
+driver itself uses the distinction: the extended send retries only
+`DW1000_TX_ERR_TOO_LATE`, that being the one more lead time can cure.
+
 **The reported frame length includes the FCS, and so does the buffer.** Two
 bytes of every length `rx_ok` is given, and of every
 `dw1000_rx_get_frame_length()`, are the CRC, and the bytes are really there:

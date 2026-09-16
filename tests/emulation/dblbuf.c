@@ -996,9 +996,11 @@ step_errata_rx1(dw1000_t *dw, struct stub *s)
     if (! processed || ! rx_probe.called)
 	return "the rx_ok callback never ran, so nothing was held";
 
-    if (rx_probe.rx1_long_rc == 0)
-	return "a 129 byte payload was accepted while a frame was held:"
-	       " that write reaches TX index 128";
+    if (rx_probe.rx1_long_rc != DW1000_TX_ERR_BUFFER_HELD)
+	return REASON("a 129 byte payload while a frame was held answered"
+		      " %d, not DW1000_TX_ERR_BUFFER_HELD (%d): that write"
+		      " reaches TX index 128",
+		      rx_probe.rx1_long_rc, DW1000_TX_ERR_BUFFER_HELD);
     if (rx_probe.rx1_short_rc != 0)
 	return REASON("a 128 byte payload was refused while a frame was"
 		      " held (%d): the guard is one byte too eager",

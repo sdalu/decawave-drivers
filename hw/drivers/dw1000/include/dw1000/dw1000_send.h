@@ -229,14 +229,15 @@ dw1000_tx_set_default_delay(dw1000_t *dw, uint32_t initial, uint32_t retry)
  *                  DW1000_TX_RANGING, DW1000_TX_NO_AUTO_CRC
  *
  * @retval  0        Transmission started
- * @retval -1        It was not possible to start transmission, or the
- *                   frame is longer than the chip can carry.
- *                   (Can happen when @p DW1000_TX_DELAYED_START is set:
- *                   the chip reported the time as already past, or the
- *                   requested lead was at or below the preamble and
- *                   SFD airtime, reported by
- *                   @p dw1000_tx_get_preamble_airtime(), which no host
- *                   could meet)
+ * @retval <0        Refused, and nothing was handed to the chip to send.
+ *                   The cause is one of @ref TxError, so a caller may
+ *                   tell a transient refusal from one that will never
+ *                   succeed: @p DW1000_TX_ERR_BUSY (a completion of an
+ *                   earlier send has not been consumed),
+ *                   @p DW1000_TX_ERR_FRAME_SIZE,
+ *                   @p DW1000_TX_ERR_BUFFER_HELD (Errata 1.4 §3.2), and
+ *                   with @p DW1000_TX_DELAYED_START also
+ *                   @p DW1000_TX_ERR_TOO_LATE.
  */
 int dw1000_tx_send(dw1000_t *dw,
 		   uint8_t *data, size_t length, int tx_mode);
@@ -285,9 +286,15 @@ int dw1000_tx_send(dw1000_t *dw,
  *                  DW1000_TX_RANGING, DW1000_TX_NO_AUTO_CRC
  *
  * @retval  0        Transmission started
- * @retval -1        It was not possible to start transmission, or the
- *                   frame is longer than the chip can carry.
- *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
+ * @retval <0        Refused, and nothing was handed to the chip to send.
+ *                   The cause is one of @ref TxError, so a caller may
+ *                   tell a transient refusal from one that will never
+ *                   succeed: @p DW1000_TX_ERR_BUSY (a completion of an
+ *                   earlier send has not been consumed),
+ *                   @p DW1000_TX_ERR_FRAME_SIZE,
+ *                   @p DW1000_TX_ERR_BUFFER_HELD (Errata 1.4 §3.2), and
+ *                   with @p DW1000_TX_DELAYED_START also
+ *                   @p DW1000_TX_ERR_TOO_LATE.
  */
 int dw1000_tx_sendv(dw1000_t *dw,
 		    struct iovec *iovec, int iovcnt, int tx_mode);
@@ -390,10 +397,16 @@ int dw1000_tx_sendv(dw1000_t *dw,
  *                  described above, packed in a @p va_list
  *
  * @retval  0        Transmission started
- * @retval -1        It was not possible to start transmission, or the
- *                   frame is longer than the chip can carry, or the
- *                   embedded timestamp does not fit inside it.
- *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
+ * @retval <0        Refused, and nothing was handed to the chip to send.
+ *                   The cause is one of @ref TxError. As well as the
+ *                   ones the plain sends report, this one can answer
+ *                   @p DW1000_TX_ERR_LEAD (no lead configured, or one at
+ *                   or below the preamble and SFD airtime that
+ *                   @p dw1000_tx_get_preamble_airtime() reports),
+ *                   @p DW1000_TX_ERR_MODE and
+ *                   @p DW1000_TX_ERR_TIMESTAMP. Only
+ *                   @p DW1000_TX_ERR_TOO_LATE is retried internally,
+ *                   being the only one more lead time can cure.
  */
 int dw1000_tx_extended_vsendv(dw1000_t *dw,
 			      struct iovec *iovec, int iovcnt,

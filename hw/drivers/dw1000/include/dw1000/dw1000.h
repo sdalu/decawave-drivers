@@ -166,6 +166,49 @@
 #define DW1000_FRAME_MAXSIZE 127
 #endif
 
+/**
+ * @defgroup TxError Why a transmission was refused
+ *
+ * Every one is negative, so a caller testing the sign or comparing
+ * against 0 is unaffected; only a caller that needs to tell the causes
+ * apart has to look. @p DW1000_TX_ERR_TOO_LATE keeps the value -1 it
+ * always had, that being the cause the headers documented when -1 was
+ * the only answer.
+ *
+ * The distinction worth making is what the caller should do next.
+ * @p DW1000_TX_ERR_TOO_LATE and @p DW1000_TX_ERR_BUSY are transient: the
+ * same call may succeed later, with more lead or once the transmitter is
+ * free. @p DW1000_TX_ERR_LEAD is a configuration the host has to fix
+ * (see @p dw1000_tx_set_default_delay()). The rest will fail identically
+ * however often they are retried.
+ * @{
+ */
+/** The chip refused the programmed transmission time */
+#define DW1000_TX_ERR_TOO_LATE      (-1)
+/** A transmission is still in flight; its completion is not consumed */
+#define DW1000_TX_ERR_BUSY          (-2)
+/** The frame is longer than @p dw1000_tx_get_frame_maxsize() allows */
+#define DW1000_TX_ERR_FRAME_SIZE    (-3)
+/** No lead is configured, or the one given is at or below the airtime */
+#define DW1000_TX_ERR_LEAD          (-4)
+/** @p tx_mode names no usable timestamp encoding */
+#define DW1000_TX_ERR_MODE          (-5)
+/** The embedded timestamp does not fit inside the frame */
+#define DW1000_TX_ERR_TIMESTAMP     (-6)
+/** Errata 1.4 §3.2 (RX-1): too long while a received frame is held */
+#define DW1000_TX_ERR_BUFFER_HELD   (-7)
+/** @} */
+
+/**
+ * @defgroup RxError Why a reception was refused
+ * @{
+ */
+/** The programmed receive time had already passed, and
+ *  @p DW1000_RX_IDLE_ON_DELAY_ERROR asked to stay idle rather than
+ *  fall back to an immediate start */
+#define DW1000_RX_ERR_TOO_LATE      (-1)
+/** @} */
+
 
 
 #define DW1000_TX_POWER_FLG_MANUAL  0x80 /**< @internal */
@@ -1357,8 +1400,12 @@ void dw1000_tx_write_frame_data(dw1000_t *dw,
  *                   DW1000_TX_NO_AUTO_CRC
  *
  * @retval  0        Transmission started
- * @retval -1        It was not possible to start transmission.
- *                   (Can happen when @p DW1000_TX_DELAYED_START is set)
+ * @retval <0        Refused; one of @ref TxError.
+ *                   @p DW1000_TX_ERR_BUSY when a previous transmission
+ *                   has not been reported done, and, with
+ *                   @p DW1000_TX_DELAYED_START,
+ *                   @p DW1000_TX_ERR_TOO_LATE when the chip found the
+ *                   programmed time already past.
  */
 int dw1000_tx_start(dw1000_t *dw, int tx_mode);
 
@@ -1543,9 +1590,10 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask);
  * @retval  0        Reception started
  * @retval  1        Reception started, but delayed start was not
  *                   respected.
- * @retval -1        It was not possible to start receiving.
- *                   (Can happen when @p DW1000_RX_DELAYED_START
- *                   and @p DW1000_RX_IDLE_ON_DELAY_ERROR are set)
+ * @retval <0        Refused; @p DW1000_RX_ERR_TOO_LATE, the only one of
+ *                   @ref RxError, when @p DW1000_RX_DELAYED_START and
+ *                   @p DW1000_RX_IDLE_ON_DELAY_ERROR are both set and
+ *                   the programmed time had passed.
  */
 int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode);
 

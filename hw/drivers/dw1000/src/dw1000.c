@@ -2161,7 +2161,7 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
     // every TXSTRT as the vendor does, which pays a write to hide the
     // caller's mistake.
     if (dw->tx_pending)
-	return -1;
+	return DW1000_TX_ERR_BUSY;
 
     // Set wait for response flag
     if (tx_mode & DW1000_TX_RESPONSE_EXPECTED) {
@@ -2224,7 +2224,7 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
 	// (Errata 1.4 §3.1)
 	_dw1000_tx_clock_release(dw);
 
-	return -1;
+	return DW1000_TX_ERR_TOO_LATE;
     }
 
     return 0;
@@ -2307,7 +2307,7 @@ int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
 			         DW1000_MSK_SYS_STATUS_ALL_RX_TO);
 	    // Keep it off on error if requested
             if (rx_mode & DW1000_RX_IDLE_ON_DELAY_ERROR)
-		return -1;
+		return DW1000_RX_ERR_TOO_LATE;
 	    // Fallback to immediate start
 	    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
 				DW1000_FLG_SYS_CTRL_RXENAB);
