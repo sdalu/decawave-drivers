@@ -35,10 +35,16 @@ named there.
 
 A third round on 2026-09-16 was not a manual audit but a bug hunt over
 the double-buffer and embedded-transmit paths. It found six defects, all
-fixed and all carrying a regression test against `port/emulation`, and
-one that is open and unexplained. None of them is a place where the
-manual had been read wrong; every one is a gap between the driver and
-its own documented contract.
+fixed and all carrying a regression test against `port/emulation`. None
+of them is a place where the manual had been read wrong; every one is a
+gap between the driver and its own documented contract. A seventh
+candidate, a receiver going deaf after an overrun, was measured and
+turned out to be two faults in ruby-dw1000's test rather than anything
+here.
+
+**Open** now holds no defect at all. What is left there is settled
+results kept for the next reader, one measurement that would close the
+last uncertainty, and the latent notes.
 
 The first round's patch was verified against the manual, the errata and
 the vendor driver independently of the person who wrote it; `make lib
@@ -139,32 +145,49 @@ bullet above; it is still uncovered.
   cannot do (no raw register read). It measures which sequence goes on
   the air, which is the fact the adjustment depends on.
 
-### An overrun leaves the receiver deaf, and nothing explains why
+### Settled: the overrun recovery works, and the test could not see it
 
-- **Location**: `_dw1000_rx_overrun_recover()`, or whatever the host is
-  expected to do after it.
-- **Bug**: a node that takes one receiver overrun stops receiving for
-  good. Measured on rpi-d through ruby-dw1000's two-node suite,
-  `test_an_overrun_does_not_leave_the_receiver_deaf`, which reports
-  `received=0 after=0 overruns=1 dblbuff=true`: the overrun is counted,
-  the recovery runs to completion, and no frame ever arrives afterwards.
-- **Not** either overrun gap closed on 2026-09-16. ruby-dw1000 registers
-  an `rx_error` callback, so this is not the missing-callback case
-  `dw1000_initialise()` now refuses; and it unmasks `MRXOVRR` itself
-  (`ext/dw1000.c:277`), so it is not the missing interrupt either.
-- **Reproduction**, one command, from rpi-a:
+Carried here on 2026-09-16 as a live defect: ruby-dw1000's
+`test_an_overrun_does_not_leave_the_receiver_deaf` reported
+`received=0 after=0 overruns=1` on rpi-d, reproducing on pristine
+`e9191ec`. It is not a driver defect. Measured the same day on a quiet
+channel, with the flood paced so its frames actually reach the air:
 
-  ```sh
-  cd /root/ruby-dw1000-ci && \
-    DW1000_HOST_A=rpi-c.citi.insa-lyon.fr \
-    DW1000_HOST_B=rpi-d.citi.insa-lyon.fr \
-    ruby -w -Ilib -Itest test/pair/test_stress.rb \
-         -n test_an_overrun_does_not_leave_the_receiver_deaf
-  ```
+```text
+rx_ok=3590 matched=3590 before_ovr=0 after_ovr=3590 rx_error=3 overruns=3
+```
 
-- **Status**: reproduces identically against `e9191ec`, with none of the
-  2026-09-16 fixes applied, so it is not a regression from them.
-  Unexplained, and the only item in this file currently costing frames.
+Three overruns, and 3590 of 4000 flooded frames delivered after the
+first of them, every one carrying the flood's own payload. The receiver
+recovers exactly as documented.
+
+Two faults in the test produced the zero, and both are in ruby-dw1000
+rather than here:
+
+- **The flood is over before the receiver looks.** The role floods 600
+  frames with no gap and the receiver stalls 0.5 s to provoke the
+  overrun, but 600 frames take 88 ms (measured: 6791 frames a second,
+  0.15 ms each). The flood finishes 412 ms before the stall ends, so
+  nothing remains to receive after the recovery and `after` cannot
+  exceed 0. The test could never pass.
+- **The flood barely transmits.** At 0.15 ms a frame against roughly
+  0.17 ms of airtime for a 27 byte frame at 6.8 Mbps, the host issues
+  the next send before the previous transmission has finished. Of 20000
+  frames sent that way, rpi-d heard 1. Its companion test does not catch
+  this because `DW1000_MIN_DELIVERY` defaults to 0, so one frame in
+  twenty thousand passes.
+
+The general lesson is the test's, not the driver's: it counts only
+frames whose payload carries its own prefix, so a recovered receiver
+hearing anything else scores the same zero as a deaf one. The first run
+of this investigation was contaminated by another session's probe
+traffic and showed exactly that, 25 frames received and 0 counted.
+
+Bearing on this driver, one thing: the send functions document
+"the DW1000 is in IDLE state" as a precondition and do not check it, so
+a caller transmitting into a busy transmitter is accepted silently and
+its frame quietly lost. `SYS_STATE` could answer that, and is listed
+under *Latent, not defects* for exactly this.
 
 ### Settled: the delayed-send floor is airtime, not power-up
 
