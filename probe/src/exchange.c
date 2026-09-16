@@ -238,7 +238,7 @@ frame_classify(const uint8_t *buf, size_t len, char want_type,
  * covers that head start with room to spare, and still ends a run that
  * nobody ever answered. */
 #if !defined(PROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US)
-#define PROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US 30000000U
+#define PROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US 60000000U
 #endif
 
 /* And for every POLL after the first, by which time the initiator is
@@ -594,10 +594,24 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
          * where a run of no-poll records would have said which end had
          * gone deaf and what, if anything, it was hearing instead.
          *
-         * The first attempt gets the long budget because the gap it
-         * covers is the harness's head start; every attempt after it
-         * gets the short one, the initiator being known to be running by
-         * then. Both are stated at the top of this file. */
+         * The long budget covers the harness's head start; the short
+         * one applies once the initiator is KNOWN to be running. That is
+         * true after a POLL has been heard, and not merely after the
+         * first attempt -- which is what this used to test, on the
+         * premise that the first attempt would always catch the head
+         * start. When the head start outgrew the budget the premise
+         * failed silently and the responder spent its attempts two
+         * seconds at a time waiting for a peer that had not started.
+         * Keeping the long budget until a POLL is actually heard would
+         * be the robust form, but it would cost an unanswered run
+         * count x this budget, and tests/probe/exchange.c rightly
+         * requires such a run to attempt every exchange and say so.
+         * So the budget stays on the first attempt and is instead large
+         * enough for the head start this harness really has:
+         * measured 2026-09-16, attempts 0-8 all `no-poll` and then every
+         * POLL from 9 to 39 received, 24.8 ms apart, without a gap. Nine
+         * attempts burnt before the first frame, which is why a 5
+         * exchange run scored 0 of 5 and a 40 exchange run scored 29. */
         rx_arm(dw, 0);
         struct rx_capture poll;
         dw1000_probe_time_t poll_deadline = dw1000_probe_port_now() +
