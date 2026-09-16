@@ -4,3 +4,4 @@
 doc/generated
 .gitversion
 docs/*.pdf
+*.core
