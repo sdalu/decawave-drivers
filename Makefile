@@ -112,11 +112,19 @@ help:						## show this help (the default)
 	@echo 'dw1000 -- a driver for the DecaWave DW1000 transceiver'
 	@echo ''
 	@echo 'Targets:'
-	@awk -F':.*## ' '/^[a-z][a-z-]*:.*## /{printf "  %-14s %s\n", $$1, $$2}' \
-	    Makefile
+	@awk -F':.*## ' '/^[a-z][a-z-]*:.*## /{ \
+	    pre = sprintf("  %-16s ", $$1); n = split($$2, w, / /); line = ""; \
+	    for (i = 1; i <= n; i++) { \
+	        cand = (line == "" ? w[i] : line " " w[i]); \
+	        if (length(pre) + length(cand) > 80 && line != "") { \
+	            print pre line; pre = "                   "; line = w[i]; \
+	        } else line = cand; \
+	    } \
+	    if (line != "") print pre line; \
+	}' Makefile
 	@echo ''
 	@echo 'Variables (current value):'
-	@printf '  %-14s %s\n' \
+	@printf '  %-16s %s\n' \
 	    OSAL     '$(OSAL)  (one of: $(OSAL_PORTS))' \
 	    CC       '$(CC)' \
 	    CFLAGS   '$(CFLAGS)  (yours; the project always adds $(WARNINGS))' \
