@@ -353,11 +353,14 @@ size_t dw1000_probe_record_format(char *buf, size_t len,
  * interesting for that:
  *
  *  - `drop_unwatched=` arrived while no wait was running. The exchange
- *    is a sequence of waits with gaps between them, and a peer that
- *    answers inside a gap is not heard. A non-zero count here is the
- *    turnaround being lost to the host, not to the radio;
- *  - `drop_overrun=` arrived and was overwritten before the wait's poll
- *    looked at it, the capture being a single slot.
+ *    is a sequence of waits with gaps between them, and this counts the
+ *    frames that landed in a gap -- a peer answering faster than this
+ *    role gets back into its wait. It is NOT a loss: the ring holds
+ *    them and the next wait examines them. It was a loss once, and the
+ *    day it cost is in exchange.c's comment on the ring;
+ *  - `drop_overrun=` arrived and was overwritten before being examined,
+ *    the consumer having fallen more than RX_RING frames behind. This
+ *    is now the only way a received frame is lost.
  *
  * The other five are the frame-matching predicate's own reasons, in the
  * order it applies them, each one narrower than the last: `drop_foreign=`

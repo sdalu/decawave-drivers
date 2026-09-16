@@ -289,20 +289,39 @@ struct rx_capture {
     double   power_firstpath_dbm;/* ... and first-path, both at capture      */
 };
 
-static struct rx_capture rx_frame;
-static uint32_t          rx_frame_seq;
+/* Frames are held in a ring, not in a single slot.
+ *
+ * The exchange is a sequence of waits with gaps between them, and a peer
+ * that answers during a gap used to be lost: one slot held only the
+ * newest frame, and frame_wait() wrote off everything from the gap
+ * without looking at it. That cost an entire pairing -- a Unix initiator
+ * against a board responder resolved 0 of 20, every run, because its
+ * REPORT arrived about 110 us after its FINAL while the responder took
+ * some 240 us to get back into a wait. The frame had been received
+ * perfectly and was sitting in the slot when it was discarded.
+ *
+ * Four entries is not a tuned number. It is "more than the one frame a
+ * two-node exchange can produce in a gap", with room for a burst, at
+ * ~72 bytes each. */
+#define RX_RING 4u
+
+static struct rx_capture rx_ring[RX_RING];
+static uint32_t          rx_frame_seq;   /* frames captured, monotonic */
 static uint32_t          tx_done_seq;
 
 void
 dw1000_probe_rx_capture(dw1000_t *dw, size_t length)
 {
-    size_t copy_len = length < sizeof(rx_frame.data) ? length : sizeof(rx_frame.data);
+    struct rx_capture *slot = &rx_ring[rx_frame_seq % RX_RING];
+    size_t copy_len = length < sizeof(slot->data) ? length : sizeof(slot->data);
 
-    dw1000_rx_read_frame_data(dw, rx_frame.data, copy_len, 0);
-    rx_frame.length  = length;
-    rx_frame.rx_time = dw1000_rx_get_rmarker_time(dw);
-    dw1000_rx_get_power_estimate(dw, &rx_frame.power_signal_dbm,
-                                 &rx_frame.power_firstpath_dbm);
+    dw1000_rx_read_frame_data(dw, slot->data, copy_len, 0);
+    slot->length  = length;
+    slot->rx_time = dw1000_rx_get_rmarker_time(dw);
+    dw1000_rx_get_power_estimate(dw, &slot->power_signal_dbm,
+                                 &slot->power_firstpath_dbm);
+    /* Published last: a consumer reads the entry only once the count
+     * that indexes it has advanced past it. */
     rx_frame_seq++;
 }
 
@@ -473,13 +492,12 @@ frame_wait(char want_type, int expected_seq, uint16_t own_addr, size_t min_words
     seen = rx_frame_seq;
     dw1000_probe_port_bus_unlock();
 
-    /* Frames captured since the previous wait ended. The exchange is a
-     * sequence of waits with gaps between them and nothing looks at the
-     * capture slot in a gap, so these are gone: the slot holds only the
-     * newest. They are counted rather than examined, because the count
-     * is the one thing that can be said about them, and because a peer
-     * answering faster than this role gets back to waiting lands here.
-     * That would be this instrument losing a frame, not the link. */
+    /* Frames captured since the previous wait ended. They are COUNTED
+     * here and examined below, not discarded: the ring still holds them,
+     * and a peer answering faster than this role gets back into a wait
+     * lands here. So drop_unwatched is no longer a loss -- it is the
+     * measure of how often the peer beat us back to the wait, which is
+     * worth knowing and used to be fatal. */
     heard_bump(&heard.unwatched, seen - heard_upto);
 
     while (dw1000_probe_port_now() < deadline) {
@@ -487,17 +505,24 @@ frame_wait(char want_type, int expected_seq, uint16_t own_addr, size_t min_words
         bool got = false;
 
         dw1000_probe_port_bus_lock();
-        if (rx_frame_seq != seen) {
-            /* Everything but the newest is gone for the same reason: one
-             * slot, so a burst arriving between two polls of this loop
-             * leaves only its last frame behind. */
-            heard_bump(&heard.overrun, rx_frame_seq - seen - 1);
-            seen = rx_frame_seq;
-            /* Single-producer/single-consumer snapshot, taken under the
+        if (heard_upto != rx_frame_seq) {
+            /* Anything the producer has already overwritten is gone for
+             * good: the ring is RX_RING deep, so a consumer that fell
+             * further behind than that has lost the oldest entries. This
+             * is the only remaining way to lose a received frame. */
+            uint32_t oldest = rx_frame_seq > RX_RING ? rx_frame_seq - RX_RING : 0;
+            if (heard_upto < oldest) {
+                heard_bump(&heard.overrun, oldest - heard_upto);
+                heard_upto = oldest;
+            }
+            /* One frame per turn, oldest first, so a burst is examined in
+             * arrival order instead of collapsing to its last member.
+             * Single-producer/single-consumer snapshot, taken under the
              * same lock the producer (dw1000_probe_rx_capture(), called
              * from the application's rx_ok callback) writes under -- so
              * this copy can never observe a torn write. */
-            snap = rx_frame;
+            snap = rx_ring[heard_upto % RX_RING];
+            heard_upto++;
             got  = true;
         }
         dw1000_probe_port_bus_unlock();
@@ -517,10 +542,10 @@ frame_wait(char want_type, int expected_seq, uint16_t own_addr, size_t min_words
         dw1000_probe_port_sleep(PROBE_EXCHANGE_POLL_INTERVAL_US);
     }
 
-    /* Wherever it ended, the account has now followed the capture this
-     * far, so the next wait counts its gap from here and not from the
-     * start of the run. */
-    heard_upto = seen;
+    /* heard_upto advanced as frames were consumed, so it already says
+     * how far the account has followed. What is left unconsumed stays
+     * for the next wait to examine -- which is the whole point of the
+     * ring, and why it must NOT be skipped forward here. */
     return matched;
 }
 
@@ -746,7 +771,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
 {
     uint8_t  wire_seq  = 0;
     long     total     = warmup + count;
-    struct dw1000_probe_twr_init_result result = { 0, 0, 0, 0, 0 };
+    struct dw1000_probe_twr_init_result result = { 0, 0, 0 };
     long i;
 
     /* The initiator has no STATS line to report an account on, so these
@@ -773,7 +798,6 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
             struct rx_capture response;
             if (frame_wait(FRAME_TYPE_RESPONSE, wire_seq, own_addr, 0,
                           deadline, &response)) {
-                dw1000_probe_time_t t_after_final = 0;
                 uint64_t t_rr = response.rx_time;
 
                 uint8_t final_buf[FRAME_HDR_LEN + 3 * FRAME_WORD_LEN];
@@ -788,7 +812,6 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
                 uint64_t t_sf;
                 if (frame_send(dw, final_buf, sizeof(final_buf), &t_sf, false)) {
                     got_final = true;
-                    t_after_final = dw1000_probe_port_now();
 
                     if (!ss) {
                         int16_t  temp;
@@ -821,20 +844,6 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
                          * initiator against a board responder: 10 of 20
                          * exchanges "reached REPORT" while the responder
                          * heard 38 frames and matched no REPORT at all. */
-                        /* The interval the exchange has a minimum on.
-                         * See turnaround_min_us in <probe/exchange.h>:
-                         * an initiator quicker than the responder's own
-                         * turnaround loses every REPORT, and nothing
-                         * else on either side reports why. */
-                        uint32_t turn = (uint32_t)(dw1000_probe_port_now()
-                                                   - t_after_final);
-                        if (result.turnaround_max_us == 0 ||
-                            turn > result.turnaround_max_us)
-                            result.turnaround_max_us = turn;
-                        if (result.turnaround_min_us == 0 ||
-                            turn < result.turnaround_min_us)
-                            result.turnaround_min_us = turn;
-
                         uint64_t unused_tx_time;
                         if (!frame_send(dw, report_buf, sizeof(report_buf),
                                         &unused_tx_time, false))

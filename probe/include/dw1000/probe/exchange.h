@@ -59,27 +59,6 @@ struct dw1000_probe_twr_init_result {
                                  REPORT (four-frame). Reaching the point
                                  is not the same as the frame arriving:
                                  see @p report_failed                     */
-    /**
-     * @brief Observed FINAL-to-REPORT turnaround, microseconds.
-     *
-     * How long this initiator took between its FINAL send returning and
-     * its REPORT send starting, smallest and largest over the run. Kept
-     * because the exchange turns out to have a minimum here and nothing
-     * else reports it: a responder needs roughly 220 us to be back at
-     * its wait, and an initiator faster than that loses every REPORT
-     * while every counter on both sides looks healthy.
-     *
-     * Measured 2026-09-16: nRF52840-MDK 244-244, DWM1001-DEV 244-245,
-     * Raspberry Pi over the unix port 102-115. The boards clear the bar
-     * by about 10%; the Pi does not clear it at all, and against a board
-     * responder it resolved 0 of 20 until its turnaround was raised into
-     * the same range, whereupon it resolved 20 of 20.
-     *
-     * Two constant values here mean an MCU walking a fixed sequence of
-     * SPI transactions. A wide spread means a host that is scheduled.
-     */
-    uint32_t turnaround_min_us;
-    uint32_t turnaround_max_us;
     uint32_t report_failed; /**< of @p reached, how many REPORT sends the
                                  driver did not confirm. Counted because
                                  this send's result used to be discarded,
