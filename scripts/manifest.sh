@@ -147,6 +147,13 @@ vars)
 
     core=$d/`cmvar DW1000_SOURCES_CORE`
     send=$d/`cmvar DW1000_SOURCES_SEND`
+    # Optional, so it is NOT folded into DW1000_SOURCES -- a consumer
+    # opts in by naming DW1000_SOURCES_STATE, and one that does not
+    # simply ignores it. Emitted here rather than left to `make state`
+    # so that a single `eval $(make sources)` gets it: a consumer that
+    # has to ask twice fails differently against a driver too old to
+    # answer, which is exactly what happened to rpi-redskin's build.sh.
+    state=$d/`cmvar DW1000_SOURCES_STATE`
     inc=$d/`cmvar DW1000_INCLUDE_DIR`
     oinc=$d/`portvar "$port" INCLUDE_DIR`
     osrc=$d/`portvar "$port" SOURCES`
@@ -157,6 +164,7 @@ vars)
     printf "DW1000_SOURCES_CORE='%s'\n" "$core"
     printf "DW1000_SOURCES_SEND='%s'\n" "$send"
     printf "DW1000_SOURCES='%s'\n"      "$core $send"
+    printf "DW1000_SOURCES_STATE='%s'\n" "$state"
     printf "DW1000_OSAL='%s'\n"         "$port"
     printf "DW1000_OSAL_SOURCES='%s'\n" "$osrc"
     printf "DW1000_INCLUDE='%s'\n"      "$inc"
