@@ -24,8 +24,8 @@ it without reading the port's C.
 
 There is none in this tree, by design: a register model cannot work out
 a reception timestamp, so the medium is somebody else's program and this
-page is the seam. The one in use is Ruby, in spank --
-`simulation/lib/spank/simulator.rb` -- which is where this port came
+page is the seam. The one in use is Ruby, in spank
+(`simulation/lib/spank/simulator.rb`), which is where this port came
 from in the first place: the C half (the emulation OSAL and its socket
 client) moved here so it could be a port like the others and be
 compiled by `make check`, while the medium server and the spank node
@@ -75,8 +75,8 @@ Two flag bits, both in the last header byte:
 string up to `RSVC_NICKNAME_MAXLEN` (62) bytes, right after the
 header and before the payload; only `RSVC_OPEN` sets it, and the
 server uses the nickname (rather than the socket path) to look the
-node up. `FLG_INTERRUPT` marks a frame the server sends unprompted --
-the `RX` and `TX_DONE` messages described below -- and the node
+node up. `FLG_INTERRUPT` marks a frame the server sends unprompted
+(the `RX` and `TX_DONE` messages described below), and the node
 dispatches those to a registered handler instead of waking a
 caller blocked on a matching reply `id`. The port registers exactly
 one such handler, for `RSVC_UWB_IO`; registering a second for the
@@ -97,15 +97,15 @@ Every service type the protocol defines:
 
 ## Service messages: OPEN, CLOSE, SEED_GET
 
-**RSVC_OPEN** -- sent once, with `FLG_INCLUDE_NICKNAME` set and no
+**RSVC_OPEN**: sent once, with `FLG_INCLUDE_NICKNAME` set and no
 payload, to register the node with the server under its nickname.
 No reply payload.
 
-**RSVC_CLOSE** -- sent once, no payload, no `FLG_INCLUDE_NICKNAME`
+**RSVC_CLOSE**: sent once, no payload, no `FLG_INCLUDE_NICKNAME`
 (the server looks the node up by its socket path instead); tells the
 server to unregister it. No reply payload.
 
-**RSVC_SEED_GET** -- sent with no payload. The reply carries one
+**RSVC_SEED_GET**: sent with no payload. The reply carries one
 4-byte, native-endian `uint32_t`: a random seed for the node to draw
 on.
 
@@ -113,9 +113,9 @@ on.
 ## The UWB channel: UWB_OPEN, UWB_CLOSE, UWB_IO
 
 `RSVC_UWB_OPEN` and `RSVC_UWB_CLOSE` are defined in the protocol, and
-the reference medium server implements handlers for both -- each
+the reference medium server implements handlers for both (each
 takes an 8-byte `drvid` as its only payload field and replies with no
-data -- but nothing in this port ever sends either one. In this
+data), but nothing in this port ever sends either one. In this
 codebase the UWB channel is opened implicitly, by registering the
 `RSVC_UWB_IO` interrupt handler in `dw1000_emulation_create()`.
 
@@ -165,7 +165,7 @@ through on a `TX_DONE` reply (the `RX` interrupt always carries
 `DW1000_WITH_PROPRIETARY_LONG_FRAME=1`; only as many `frame` bytes as
 the actual frame length are put on the wire, the rest of the array is
 never sent. As with the outer header, none of these fields are
-byte-swapped for the wire -- native order throughout.
+byte-swapped for the wire: native order throughout.
 
 **TX** (node -> server, request). `flags` bit `0x02`
 (`DW1000_RSVC_FLG_RANGING`) is set when the frame's `TX_FCTRL.TR` bit
@@ -196,17 +196,17 @@ already including the antenna delay it supplied in its `TX` request.
 Every timestamp is in units of the device clock,
 `DW1000_TIME_CLOCK_HZ = 499200000ull * 128` Hz (~15.65 ps per tick);
 the node's `dw1000.h` and the reference server's Ruby define the same
-number. A DW1000 timestamp is a 40-bit quantity -- the register
+number. A DW1000 timestamp is a 40-bit quantity, the register
 fields it lands in (`RX_TIME.RX_STAMP`, `TX_TIME.TX_STAMP`, and the
-`_RAWST` pair) are written 40 bits at a time -- carried on the wire
-in a full 8-byte field, upper 24 bits unused.
+`_RAWST` pair) being written 40 bits at a time; it is carried on the
+wire in a full 8-byte field, upper 24 bits unused.
 
 For **TX**: the server rounds its own send instant up to the next
 512-tick boundary, adds the `antenna_delay` the node supplied in its
 `TX` request, and returns that sum as the `TX_DONE` timestamp. The
 port writes it straight into `TX_TIME.TX_STAMP`, then derives
 `TX_TIME.TX_RAWST` by subtracting the node's own `TX_ANTD` register
-from it -- recovering exactly the pre-antenna-delay, already-rounded
+from it, recovering exactly the pre-antenna-delay, already-rounded
 value, which the port asserts:
 
 ```c
@@ -228,7 +228,7 @@ calls this "building a fake one": it lands `RX_RAWST` on the right
 derives a raw first-path timestamp.
 
 **Not established**: nothing in the source pins down what `RX_RAWST`
-*should* be instead, beyond "on the 512-tick grid" -- the comment
+*should* be instead, beyond "on the 512-tick grid": the comment
 flags it as needing improvement without saying what a correct value
 would look like.
 
@@ -240,7 +240,7 @@ would look like.
 The model keeps a device clock, and a medium server sharing the host
 must keep the same one or the two halves cannot be compared. It is
 `CLOCK_REALTIME` scaled to `DW1000_TIME_CLOCK_HZ` and truncated to 40
-bits -- in C,
+bits; in C,
 
 ```c
 uint64_t ticks = ((uint64_t)ts.tv_sec * DW1000_TIME_CLOCK_HZ)
@@ -263,7 +263,7 @@ figure to the node.
 ### Delayed send and receive
 
 `DX_TIME` works, for both `TXDLYS` and `RXDLYE`, with `HPDWARN` and
-`TXPUTE` decided the way UM §3.3 describes -- on the internal
+`TXPUTE` decided the way UM §3.3 describes: on the internal
 transmitter start time, which is the programmed time less the preamble
 and SFD airtime, and not on the programmed time itself. Neither flag
 cancels anything; the manual is explicit that a long delay may be
@@ -289,7 +289,7 @@ the model writes both itself and discards the server's stamp.
 **The other nodes' view is not exact.** The server works out every
 receiving node's arrival time from the instant the `TX` request reached
 it, and that instant carries however long the sending node's deadline
-thread took to wake up and get the datagram out -- tens of
+thread took to wake up and get the datagram out, tens of
 microseconds, which is metres. A node's own registers are corrected for
 this and its peers' are not, so a two-way ranging run over delayed
 sends will not close as tightly here as on hardware. Closing it needs
@@ -301,7 +301,7 @@ page defines, and the reference server would have to change with it.
 ### Receive timeouts
 
 `RXRFTO` and `RXPTO` both work, counting from the moment the receiver
-turns on -- which for a delayed receive is when the counter reaches
+turns on, which for a delayed receive is when the counter reaches
 `DX_TIME`, per UM §7.2.40.9. `RX_FWTO`'s unit is exactly 65536 device
 ticks (512 counts of the 499.2 MHz clock, UM §7.2.14) and `DRX_PRETOC`
 is `(value + 1)` PACs, the PAC size recovered by matching `DRX_TUNE2`
@@ -320,7 +320,7 @@ The swinging set of UM table 7 works: `HSRBP` and `ICRBP`, the `HRBPT`
 command, per-buffer `LDEDONE`/`RXDFR`/`RXFCG`/`RXFCE`, a good CRC
 moving the IC pointer and a bad one not, and `RXOVRR` when a frame
 arrives with both buffers still held by the host. `DIS_DRXB` selects it
-and `RXAUTR` re-enables the receiver between frames -- with the two
+and `RXAUTR` re-enables the receiver between frames, with the two
 meanings UM §7.2.6 gives it, which are not the same: double buffered it
 re-enables after "a frame reception event or failure", single buffered
 only after "a frame reception failure". So a *good* frame stops a
@@ -352,7 +352,7 @@ explicitly does send one, even if the receiver was already on.
   estimate computed from this port is meaningless rather than merely
   imprecise.
 - `RX_TIME.RX_RAWST` is still derived by adding the receive antenna
-  delay to `RX_STAMP` and rounding to the 512-tick grid -- on the grid,
+  delay to `RX_STAMP` and rounding to the 512-tick grid: on the grid,
   but not how hardware derives a first-path timestamp.
 - Registers attached as placeholders, with storage but no behaviour:
   `EUI`, `PANADR`, `SYS_STATE`, `RX_SNIFF`, `ACK_RESP_T`, `ACC_MEM`,
@@ -366,7 +366,7 @@ explicitly does send one, even if the receiver was already on.
   nor the RX-1 corruption of the second buffer's 129th octet, nor the
   IRQ-1 glitch.
 - **Overrun corruption.** UM §4.3.5 says an overrun corrupts the frames
-  already received -- `RX_FINFO`, `RX_TIME` and `RX_FQUAL` -- and that
+  already received (`RX_FINFO`, `RX_TIME` and `RX_FQUAL`), and that
   they must be discarded. Here the two buffered frames survive an
   overrun intact, so a host that reads them anyway gets away with it.
 - `SYS_TIME`'s low 9 bits read as zero on the chip (UM §7.2.8); here
@@ -383,7 +383,7 @@ model's own deadline thread, which is what meets a programmed time. All
 three take the model's mutex for register access, and none of them
 holds it across the line callback.
 
-**The line callback must not call the driver.** Not "should not" -- it
+**The line callback must not call the driver.** Not "should not": it
 hangs. The callback runs on the rsvc reader thread, and a driver call
 that enables the receiver or starts a transmit reaches `rsvc_i()`, which
 blocks waiting for a reply datagram. The only thread that reads
@@ -408,7 +408,7 @@ promptly and do the work afterwards.
 **Every request must be answered.** A node sends `TX` and `RX_CONFIG` as
 ordinary request/reply calls and waits for the reply; there is no
 fire-and-forget. A server that does not recognise a service type must
-answer it with a non-zero status rather than ignore it -- the reference
+answer it with a non-zero status rather than ignore it; the reference
 server does, by rescuing the exception its dispatch raises and replying
 with an error. The wait is bounded (five seconds by default,
 `rsvc_set_reply_timeout()` to change it), so silence is now reported
@@ -419,14 +419,14 @@ the model returns to idle, and it says so once until the server answers
 again.
 
 Because the model owns a thread, shutting down has an order, and none of
-it commutes -- the model's thread calls the connection and the
+it commutes: the model's thread calls the connection and the
 connection's thread calls the model:
 
-1. `dw1000_emulation_stop(e)` -- joins the model's deadline thread;
+1. `dw1000_emulation_stop(e)` joins the model's deadline thread;
    after it, the model makes no further calls on the connection.
-2. `rsvc_close(rsvc)` -- joins the reader; after it, no frame can arrive
+2. `rsvc_close(rsvc)` joins the reader; after it, no frame can arrive
    in the model.
-3. `dw1000_emulation_destroy(e)` -- frees it.
+3. `dw1000_emulation_destroy(e)` frees it.
 
 Step 1 is done for you if you skip it, which is safe only when nothing
 is arriving. Step 2 is not, and destroying the model with the connection
@@ -454,7 +454,7 @@ DW0_spi            .emulation = emulation;
 `_dw1000_ioline_set/clear()` and `_dw1000_spi_send/recv()` read that
 field to find which model instance a call is for. `line_cb` is
 called with `DW1000_IOLINE_IRQ` whenever the model sees
-`SYS_STATUS.IRQS` transition low to high -- it stands in for a real IRQ
+`SYS_STATUS.IRQS` transition low to high: it stands in for a real IRQ
 line's edge, and a node is expected to schedule its interrupt
 processing from there rather than do it on the callback's own stack.
 It may arrive on the rsvc reader's thread or on the model's own
@@ -475,15 +475,18 @@ rsvc_o(rsvc, RSVC_SEED_GET, &seed, &seedlen);
 
 `tests/emulation/` holds three programs, each both halves in one:
 
-- `smoke.c` -- a medium that answers every request and loops a node's
+- `smoke.c`: a medium that answers every request and loops a node's
   own frame back at it, and a node that runs the driver against it:
   transmit, receive, a damaged FCS, a ranging frame. The shortest
   worked example of the protocol above.
-- `timing.c` -- a medium that stamps with `dw1000_emulation_clock()`
+- `timing.c`: a medium that stamps with `dw1000_emulation_clock()`
   and holds its frames until asked, for `SYS_TIME`, delayed send and
   receive, and the two receive timeouts.
-- `dblbuf.c` -- a medium that sends a burst of numbered frames on one
+- `dblbuff.c`: a medium that sends a burst of numbered frames on one
   `RX_CONFIG`, for the swinging set and the overrun.
 
-`sh tests/check-emulation.sh` builds and runs all three, needing nothing
-installed and no server started.
+`sh tests/check-emulation.sh` builds and runs four tests out of those
+three files, needing nothing installed and no server started: `dblbuff.c`
+is built twice, the second time with proprietary long frames on, because
+errata 1.4 RX-1 needs a TX write past index 127 and the 127 byte
+standard frame cannot reach it.

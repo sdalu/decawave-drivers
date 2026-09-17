@@ -1,20 +1,23 @@
-Decawave DW1000 driver
-======================
+# Decawave DW1000 driver
 
-A driver for the [DW1000][6] ultra-wideband transceiver, written so that
-the part of it that knows about the chip knows nothing about the system
-it runs on. The register map, the tuning tables and the transmit and
+A driver for the [DW1000][6] ultra-wideband transceiver. It configures a
+radio, transmits and receives frames, and reports the timestamps that
+two-way ranging needs, from an application on Zephyr, ChibiOS, MyNewt,
+FreeRTOS or Linux.
+
+The part that knows about the chip knows nothing about the system it
+runs on. The register map, the tuning tables and the transmit and
 receive sequencing live in one portable core; everything host-specific
 is a small OS abstraction layer (OSAL) behind a fixed contract, and
-there is one of those per supported system.
+there is one of those per supported system. Register accesses cite the
+section or table of the [DW1000 User Manual][7] that prescribes them, so
+the code can be checked against the source it came from.
 
-Register accesses are annotated with the section or table of the
-[DW1000 User Manual][7] that prescribes them, so a reader can check the
-code against the source it came from.
+This file is how to use the driver. [`DESIGN.md`](DESIGN.md) is the
+other half: why it is shaped this way, what the port contract asks of a
+new host, and how the build fits together.
 
-
-Architecture
-============
+## What you supply, and what you get
 
 ```text
         application
@@ -44,81 +47,34 @@ Architecture
                            └─────────────┘
 ```
 
-The core is compiled once per project, against whichever OSAL is on the
-include path. Swapping hosts means swapping `port/`, not touching
-`hw/`.
+Pick the OSAL port for your host and the core compiles against it
+unchanged. Moving to another host means changing `port/`, not `hw/`.
 
+## Supported hosts
 
-Supported hosts
-===============
-
-| Host                    | OSAL             | Notes                                                             |
-| ----------------------- | ---------------- | ----------------------------------------------------------------- |
-| [Zephyr][2] 2 and later | `port/zephyr`    | also a Zephyr module                                              |
-| [Crazyflie][5] 2.x      | `port/cf2`       | FreeRTOS, deck SPI                                                |
-| Unix                    | `port/unix`      | via the [bitters][1] lib                                          |
-| [ChibiOS][3]            | `port/chibios`   | SPI API v1 or v2                                                  |
-| [Apache MyNewt][4]      | `port/mynewt`    | via `hal_spi_txrx()`                                              |
-| Emulation               | `port/emulation` | no chip; see port/emulation/README.md |
-| none                    | `port/null`      | no hardware; see below                                            |
+| Host                    | OSAL             | Notes                    |
+| ----------------------- | ---------------- | ------------------------ |
+| [Zephyr][2] 2 and later | `port/zephyr`    | also a Zephyr module     |
+| [Crazyflie][5] 2.x      | `port/cf2`       | FreeRTOS, deck SPI       |
+| Unix                    | `port/unix`      | via the [bitters][1] lib |
+| [ChibiOS][3]            | `port/chibios`   | SPI API v1 or v2         |
+| [Apache MyNewt][4]      | `port/mynewt`    | via `hal_spi_txrx()`     |
+| Emulation               | `port/emulation` | a chip model, no chip    |
+| none                    | `port/null`      | compiles, does nothing   |
 
 ChibiOS and MyNewt are built against their vendor headers but have not
 been exercised on hardware recently.
 
-`port/null` is not a host. It implements the whole port contract wired to
-nothing, so the core can be compiled where there is no DW1000 and no
-vendor tree -- which is what `make check` does. It is also the shortest
-thing to copy when writing a port of your own. `port/emulation` is not
-the same kind of stand-in: where `null` is wired to nothing and cannot
-run, `emulation` runs the driver against a model of the chip, and needs
-a medium server on the other end of its socket to do it -- see
+Neither `port/null` nor `port/emulation` is a host, and they are not the
+same kind of stand-in. `null` implements the whole port contract wired
+to nothing, so the core compiles where there is no DW1000 and no vendor
+tree; it is what `make check` builds against, and the shortest thing to
+copy when writing a port of your own. `emulation` runs the driver
+against a model of the chip, which needs a medium server on the other
+end of its socket; see
 [`port/emulation/README.md`](port/emulation/README.md).
 
-
-Layout
-======
-
-```text
-decawave-drivers
-├── hw/drivers/dw1000              the portable core
-│   ├── include/dw1000
-│   │   ├── dw1000.h               driver API, config and radio structs
-│   │   ├── dw1000_send.h          frame transmission helpers
-│   │   ├── dw1000_validate.h      human radio values to radio fields
-│   │   ├── dw1000_state.h         read the radio back off the chip
-│   │   ├── dw1000_reg.h           register, field and flag definitions
-│   │   ├── dw1000_otp.h           OTP memory map
-│   │   └── dw1000_bswap.h         endian helpers
-│   ├── src                        dw1000.c, dw1000_send.c,
-│   │                              dw1000_validate.c, and dw1000_state.c
-│   │                              which is the one optional source
-│   └── README.md                  the pitfalls guide, for applications
-│
-├── port                           one OSAL per host, pick one
-│   ├── unix                       through the bitters library
-│   ├── zephyr                     Zephyr 2 and later
-│   ├── chibios                    ChibiOS, SPI API v1 or v2
-│   ├── mynewt                     Apache MyNewt
-│   ├── cf2                        Crazyflie 2.x, on FreeRTOS
-│   ├── emulation                  register model, no chip, see port/emulation/README.md
-│   └── null                       no hardware, for compile checks
-│
-├── probe                          a two-way-ranging instrument, built on
-│                                  the driver rather than part of it
-├── sniffer                        forwards captured frames over ethernet
-│
-├── dw1000.cmake                   the file list, read by both of these
-├── Makefile                       compile checks, vendoring, doxygen
-├── scripts                        reads dw1000.cmake for the Makefile
-├── tests                          what `make check` runs
-├── zephyr                         Kconfig and CMakeLists, as a module
-├── docs                           the vendor shelf: manuals, errata
-└── doc                            generated doxygen output, and bench/
-```
-
-
-Bringing a device up
-====================
+## Bringing a device up
 
 ```text
    call                       does                    returns
@@ -141,16 +97,20 @@ Bringing a device up
    dw1000_rx_start()   or   dw1000_tx_send()
 ```
 
-`dw1000_initialise()` and `dw1000_configure()` both report failure and
-both leave the chip untouched when they do, so a caller that checks
-them never proceeds on a half-configured radio. Most of the radio
+`dw1000_initialise()` and `dw1000_configure()` both report failure, and
+both leave the chip untouched when they do, so a caller that checks them
+never proceeds on a half-configured radio. Most of the radio
 configuration indexes a tuning table, so an out-of-range value would be
 an out-of-range read rather than merely a wrong setting; the check that
 catches it runs in every build, not only where assertions are enabled.
 
+`dw1000_config_t` must outlive the driver (`dw1000_init()` keeps the
+pointer), while `dw1000_radio_t` is copied by value, so a local is
+fine. That and the rest of the traps are in
+[`hw/drivers/dw1000/README.md`](hw/drivers/dw1000/README.md), which is
+worth reading before writing an application, not after.
 
-Handling events
-===============
+## Handling events
 
 Register a callback for what you care about, then call
 `dw1000_process_events()` from a thread woken by the interrupt handler,
@@ -172,138 +132,69 @@ the interrupt handler itself:
      be read          frame rejected   timeout
 ```
 
-In double buffered mode the receiver is re-enabled before the frame is
+The interrupt mask is derived from the callbacks you register, so a
+callback left `NULL` also leaves its event masked.
+
+The receiver is not re-armed for you after an error or a timeout: that
+is the callback's job, or `RXAUTR`'s if you set `cfg->rxauto`. In
+double-buffered mode the receiver *is* re-enabled before the frame is
 read out, so `cb.rx_ok` must consume the frame before returning and must
 not re-enable the receiver itself.
 
+## Compile-time options
 
-Writing a port
-==============
+An option left undefined takes the default below, which is not always
+off. Under Zephyr they are the `CONFIG_DW1000_*` symbols in `Kconfig`
+and under MyNewt they are `syscfg` settings; elsewhere define them on
+the compiler command line. `make options` prints this table.
 
-An OSAL is a header and a source file. The header defines the types and
-the macros, the source implements the SPI transfers:
-
-| Symbol                               | Purpose                       |
-| ------------------------------------ | ----------------------------- |
-| `dw1000_ioline_t`                    | a GPIO line                   |
-| `DW1000_IOLINE_NONE`                 | sentinel for "not wired"      |
-| `_dw1000_ioline_set/clear()`         | drive it high or low          |
-| `_dw1000_delay_usec/msec()`          | busy wait, or sleep           |
-| `DW1000_ASSERT(cond, reason)`        | programming-error trap        |
-| `dw1000_spi_driver_t`                | bus handle, plus `int error`  |
-| `_dw1000_spi_send/recv()`            | header then data, CS around   |
-| `_dw1000_spi_low_speed/high_speed()` | probe slowly, then run fast   |
-
-Two rules the existing ports learned the hard way. A failed read must
-zero the caller's buffer: the core's register helpers return an
-uninitialised local whatever happens, so a buffer left untouched is read
-back as register content. And the first failure is latched in
-`spi->error` and left for the caller to clear, because the core has no
-error path of its own to carry it.
-
-
-Compile-time options
-====================
-
-Undefined takes the default in the table, which is not always off. Under
-Zephyr they are `CONFIG_DW1000_*` in `Kconfig` and under MyNewt they are
-`syscfg` settings; elsewhere define them on the compiler command line.
-`make options` prints the table below.
-
-| Option                                     | Default | Effect         |
-| ------------------------------------------ | ------- | -------------- |
-| `DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH`  | 1 | preamble lengths outside the standard set |
-| `DW1000_WITH_PROPRIETARY_SFD`              | 1 | the Decawave non-standard SFD |
-| `DW1000_WITH_PROPRIETARY_LONG_FRAME`       | 0 | frames up to 1023 bytes, not 127 |
-| `DW1000_WITH_EXTENDED_SEND`                | 1 | delayed send with an embedded timestamp |
-| `DW1000_WITH_SFD_TIMEOUT`                  | 0 | caller-chosen SFD timeout |
-| `DW1000_WITH_SFD_TIMEOUT_DEFAULT`          | 0 | a fixed SFD timeout, not a computed one |
-| `DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011` | 1 | work around a spurious AAT on receive |
+| Option (prefix `DW1000_WITH_`) | Default | Effect                    |
+| ------------------------------ | ------- | ------------------------- |
+| `PROPRIETARY_PREAMBLE_LENGTH`  | 1       | non-standard lengths      |
+| `PROPRIETARY_SFD`              | 1       | the Decawave SFD          |
+| `PROPRIETARY_LONG_FRAME`       | 0       | frames to 1023, not 127   |
+| `EXTENDED_SEND`                | 1       | delayed and stamped sends |
+| `SFD_TIMEOUT`                  | 0       | caller-chosen SFD timeout |
+| `SFD_TIMEOUT_DEFAULT`          | 0       | a fixed, not computed one |
+| `HOTFIX_AAT_IEEE802_15_4_2011` | 1       | works around a stray AAT  |
 
 One more takes a value rather than a flag:
 `DW1000_SFD_TIMEOUT_DEFAULT` (default `DW1000_SFD_TIMEOUT_MAX`).
 
-The lead time of a delayed send is deliberately not among them either,
-and it used to be. It has two parts, and no single build-time number can
-carry both. One part is the airtime of the preamble and SFD: what a
-delayed send programs is the RMARKER, the *end* of the SFD, so the chip
-has to be transmitting well before it (about 138 us at a 128 symbol
-preamble but 1.05 ms at 1024 and 4.2 ms at 4096). That depends on the
-radio configuration, so the driver computes it, at `dw1000_configure()`,
-and `dw1000_tx_get_preamble_airtime()` reports it.
-The second part is the host's own latency between reading the system
-time and writing TXSTRT, which only the host knows. Both parts are the
-caller's to add up: a lead always means the lead to the RMARKER and is
-programmed as given, whether it is the default set once through
-`dw1000_tx_set_default_delay()` or a `DW1000_TX_DELAYED_DELAY` passed
-with one send. Until a default is set there is none, and every delayed
-send has to carry its own. A lead below the airtime is refused with -1,
-so a default left over from a shorter preamble shows up at the next send
-rather than as a lost frame.
+> [!IMPORTANT]
+> These are not internal to the driver. `DW1000_WITH_SFD_TIMEOUT` and
+> `DW1000_WITH_PROPRIETARY_SFD` add fields to `dw1000_config_t`, and
+> `DW1000_WITH_EXTENDED_SEND` adds entry points to
+> `<dw1000/dw1000_send.h>`, so the same set has to reach the driver and
+> every translation unit that includes `<dw1000/dw1000.h>`. Define them
+> in one place your whole build sees, not per file.
 
-Measured leads, for scale. Both spank's `delayed_send_estimator` and the
-gem's `estimate_delayed_send_lead_time` binary-search the delay they
-pass, so what they report is the whole lead and already carries the
-airtime of the preamble in use. At 128 symbols (138 us of airtime) an
-nRF52 at 8 or 16 MHz SPI needed 0.27 ms, a Raspberry Pi 4 over spidev at
-20 MHz 0.16 ms, a Pi 4B 0.173 ms; the host term alone is therefore
-roughly 132 us, 22 us and 35 us. Read such a figure as a lead for that
-preamble, not as something to add the airtime to.
+Two things that look like options and are not. Transmit power is part of
+`dw1000_radio_t`, named outright by `DW1000_TX_POWER(dB)`, so a board
+whose RF path differs from the reference one is corrected where the
+radio is configured. And the lead time of a delayed send is a run-time
+argument, because half of it is the host's own latency and the other
+half changes with the preamble length; `dw1000_tx_get_preamble_airtime()`
+reports the part the driver knows. `DESIGN.md` says why for both.
 
-Transmit power is deliberately not among them: it is part of
-`dw1000_radio_t`, and `DW1000_TX_POWER(dB)` names it outright, so a board
-whose RF path differs from the reference one is corrected where the radio
-is configured rather than by a compile-time switch. The usual case is a
-DWM1000 module driven by software written for the EVB1000 evaluation
-board, which wants roughly 3 dB above the calibrated default for its
-channel and PRF (those defaults are `manual_tx_power[]` in `dw1000.c`,
-encoded as UM 7.2.31.4 describes).
+## Adding it to a build
 
-**These are not internal to the driver.** `DW1000_WITH_SFD_TIMEOUT` and
-`DW1000_WITH_PROPRIETARY_SFD` add fields to `dw1000_config_t`, and
-`DW1000_WITH_EXTENDED_SEND` adds entry points to `<dw1000/dw1000_send.h>`,
-so the same set has to reach the driver and every translation unit that
-includes `<dw1000/dw1000.h>`. Define them in one place your whole build
-sees, not per file.
-
-
-Building
-========
-
-The driver is vendored into a project rather than installed: since the
-options above change the public headers, a shared library and a
-`pkg-config` file that could not carry them would be a trap. So there is
-no `make install`, and the top-level `Makefile` does the other half of
-the job. It works with both GNU make and BSD make.
+The driver is vendored into a project rather than installed, so there is
+no `make install`: the options above change the public headers, and a
+shared library could not carry them. The top-level `Makefile` does the
+other half of the job, with either GNU make or BSD make.
 
 ```text
 make                print the targets; nothing is built by default
-make check          compile the option matrix, check the manifest, run the emulation smoke test
-make sources        print the files and flags to vendor, as shell variables
+make sources        print the files and flags to vendor
 make lib            build libdw1000.a locally, against OSAL=<port>
+make check          run the whole check suite
 make options        print the option table above
-make doc            run doxygen
+make version        print the release
+make doc            run doxygen into doc/generated
 ```
 
-`make check` compiles the core over all 256 combinations of the eight
-boolean options, against `port/null`. Nothing in this tree selects any
-of them -- whoever vendors the driver does -- so without this an option
-that stopped compiling would be found by the one consumer who wanted it,
-which is how `DW1000_WITH_EXTENDED_SEND=0` came to spend an unknown
-length of time broken. `make check WERROR=yes` is the CI form.
-
-It takes about a minute, and prints a row of dots as it goes so that it
-is visibly working. One broken option breaks half the matrix, so failures
-are grouped by the errors they produced and reported once per group, with
-the options every member of the group shares -- which is the option to go
-and look at:
-
-```text
-  FAILED  128 combinations, all with these errors.
-          What they have in common: DW1000_WITH_EXTENDED_SEND=0
-```
-
-To vendor from a shell-driven build:
+From a shell-driven build, ask `make sources` and use what it sets:
 
 ```sh
 eval "$(make -s -C 3rd/decawave-drivers sources OSAL=unix)"
@@ -311,15 +202,9 @@ cc $DW1000_CFLAGS -DDW1000_WITH_PROPRIETARY_LONG_FRAME=1 \
    -c $DW1000_SOURCES $DW1000_OSAL_SOURCES
 ```
 
-That answer comes out of `dw1000.cmake`, which is the one place the file
-list lives. A CMake consumer includes it; the Makefile reads it through
-`scripts/manifest.sh`. Adding a source or a port means editing that file
-and nothing else, and `make check` fails if either side starts keeping a
-list of its own again.
-
-From CMake it is used directly. It defines variables rather than targets,
-for the reason above -- a target would bake in one option set and hide it
-from you:
+From CMake, include `dw1000.cmake` and read its variables. It defines
+variables rather than targets on purpose: a target would bake in one
+option set and hide it from you.
 
 ```cmake
 include(3rd/decawave-drivers/dw1000.cmake)
@@ -333,27 +218,31 @@ target_compile_definitions(dw1000 INTERFACE
 target_link_libraries(ranger PRIVATE dw1000 bitters m)
 ```
 
-`DW1000_SOURCES_CORE` and `DW1000_SOURCES_SEND` are separable --
-`dw1000.c` never calls into `dw1000_send.c` -- so an application that
-only receives can leave the latter out. `dw1000.c` uses `<math.h>`, so a
-hosted link wants `DW1000_LIBS`, which is `m`.
+The variables worth knowing:
+
+| Variable                  | Holds                                     |
+| ------------------------- | ----------------------------------------- |
+| `DW1000_SOURCES`          | core, send and radio-value validation     |
+| `DW1000_SOURCES_CORE`     | `dw1000.c` alone; receive-only builds     |
+| `DW1000_SOURCES_SEND`     | `dw1000_send.c`; nothing in core calls it |
+| `DW1000_SOURCES_VALIDATE` | human radio values to radio fields        |
+| `DW1000_SOURCES_STATE`    | read the radio back; opt-in, see below    |
+| `DW1000_LIBS`             | `m`, for `<math.h>` on a hosted link      |
+| `DW1000_OSAL_<PORT>_*`    | include dir and sources for one port      |
+
+A receive-only application can leave `DW1000_SOURCES_SEND` out;
+`sniffer/app/unix` does exactly that. `DW1000_SOURCES_STATE` is opt-in
+because reading the configuration back off the chip is diagnostic, and
+it is the only source here that formats strings.
 
 Zephyr and MyNewt need none of this: `zephyr/CMakeLists.txt` is a module
 that reads `dw1000.cmake` itself, and `hw/drivers/dw1000/pkg.yml` is a
 MyNewt package.
 
+## Asking for a version
 
-Version
-=======
-
-`<dw1000/dw1000_version.h>` carries the release, and is the one place it
-is written -- a C header can read no other file, so a consumer must be
-able to have the version without running anything. `dw1000.cmake` parses
-those three lines for `DW1000_VERSION`, and the Makefile asks
-`scripts/manifest.sh`, which parses them too, so nothing can disagree
-with the header.
-
-`<dw1000/dw1000.h>` includes it, so a consumer of the driver API already
+`<dw1000/dw1000_version.h>` carries the release and is the one place it
+is written. `<dw1000/dw1000.h>` includes it, so an application already
 has these; include it directly if the version is all you want.
 
 ```c
@@ -366,32 +255,28 @@ has these; include it directly if the version is all you want.
 printf("dw1000 %s\n", DW1000_VERSION_FULL);
 ```
 
-| **Macro** | **What it says** |
-|---|---|
-| `DW1000_VERSION_MAJOR` / `_MINOR` / `_PATCH` | the release, as numbers |
-| `DW1000_VERSION_STRING` | the release, as `"1.1.0"` |
-| `DW1000_VERSION_NUMBER` | the release as one comparable integer -- 1.2.3 is `10203` |
-| `DW1000_VERSION_AT_LEAST(maj, min, pat)` | for `#if` |
-| `DW1000_VERSION_FULL` | the release, plus the commit a build between releases came from |
+| Macro                            | What it says                  |
+| -------------------------------- | ----------------------------- |
+| `DW1000_VERSION_MAJOR`           | the release's major number    |
+| `DW1000_VERSION_MINOR`           | its minor                     |
+| `DW1000_VERSION_PATCH`           | its patch                     |
+| `DW1000_VERSION_STRING`          | the release, as `"1.1.0"`     |
+| `DW1000_VERSION_NUMBER`          | one integer; 1.2.3 is `10203` |
+| `DW1000_VERSION_AT_LEAST(m,n,p)` | for `#if`                     |
+| `DW1000_VERSION_FULL`            | the release, plus the commit  |
 
-All macros, and no function: there is no library here to have been
-replaced underneath you -- the driver is vendored, so its headers and its
-sources are compiled together out of one tree -- and a call would cost an
-MCU a symbol and a string it may not want.
+All macros and no function, so a version costs an MCU neither a symbol
+nor a string it may not want.
 
 A release is the release alone, `1.1.0`. Anything else appends SemVer
-build metadata: `1.1.0+58.g3403fe0`, fifty-eight commits past the tag,
-plus `.dirty` for uncommitted changes. `scripts/gitversion.sh` works that
-out, and it is empty when the answer would be somebody else's -- a tarball
-has no repository, and a tree copied into your repository rather than
-cloned would otherwise report *your* tags and dirt as the driver's. An
-empty answer is never wrong, only less precise.
+build metadata: `1.1.0+58.g3403fe0` is fifty-eight commits past the tag,
+plus `.dirty` for uncommitted changes. That part is empty when the
+answer would be somebody else's. A tarball has no repository, and a
+tree copied into your repository would otherwise report *your* tags as
+the driver's. An empty answer is never wrong, only less precise.
 
-`make version` prints the release, `make version-full` what this tree
-builds as, the two being equal exactly when it is a release tree. The git
-part reaches the code only through `-DDW1000_VERSION_GIT`, which this
-tree's `make lib` passes and `make sources` hands over for a vendoring
-build to pass on:
+To get the git part into a vendoring build, pass what `make sources`
+hands you:
 
 ```sh
 eval "$(make -s -C 3rd/decawave-drivers sources OSAL=unix)"
@@ -400,60 +285,38 @@ cc $DW1000_CFLAGS -DDW1000_VERSION_GIT="\"$DW1000_VERSION_GIT\"" \
 ```
 
 Unlike the `DW1000_WITH_*` options it changes no structure and no entry
-point, so it is the one define that need not reach every translation unit.
+point, so it is the one define that need not reach every translation
+unit.
 
-Bumping a release is editing the three numbers in the header, committing,
-and `make tag`, which reads the number out of the header rather than
-having it typed again -- so the tag and the header cannot end up saying
-different things. It refuses on an uncommitted worktree or an existing
-tag, and pushes nothing.
+## Documentation
 
-```sh
-$EDITOR hw/drivers/dw1000/include/dw1000/dw1000_version.h
-git commit -am 'Bump the version to 1.1.1.'
-make tag                             # v1.1.1, from the header
-git push origin v1.1.1
-```
+Each part of the tree is documented beside itself. This is the index:
 
-`make tag` refuses an unclean worktree or an existing tag, then asks, then
-runs the whole check suite before it tags — so declining costs nothing and
-nothing gets tagged that the suite has not passed. `YES=1` answers yes for
-a script; a non-interactive run without it declines.
-
-A tag made by hand can still disagree, so `make check` gates the other
-direction (`scripts/checktag.sh`): on a tag with a clean worktree -- a
-release build, which has no later chance to be wrong -- the header must
-say what the tag says, and anywhere else it must be at or ahead of the
-nearest tag. Bumped-but-not-yet-tagged is the normal state between
-releases and passes; behind a tag that exists does not. It says nothing at
-all where the answer would be somebody else's: no git, a tarball, or a
-tree copied into another project's repository.
-
-
-Documentation
-=============
-
-Each part of the tree is documented beside itself, not here. This is the
-index:
-
-| Read | For |
-| :--- | :-- |
-| [`hw/drivers/dw1000/README.md`](hw/drivers/dw1000/README.md) | Traps an application built on this driver falls into -- the `rx_ok` contract, double buffering, what the driver does *not* do. Read before writing one. |
-| [`port/emulation/README.md`](port/emulation/README.md) | The wire protocol between a node and a medium server, for running the driver with no chip. |
-| [`probe/README.md`](probe/README.md) | Building and running the two-way-ranging instrument, and how to read its lines. Its reasoning is in [`probe/DESIGN.md`](probe/DESIGN.md). |
-| [`sniffer/README.md`](sniffer/README.md) | Building and running the UWB sniffer, which forwards captured frames over ethernet. |
-| [`AUDIT.md`](AUDIT.md) | What was checked against the manual, what was wrong, what was measured, and what is still open. Every claim here that came from the bench has its numbers there. |
+- [`DESIGN.md`](DESIGN.md): why the driver is shaped this way, the
+  port contract, and how the build and the checks fit together.
+- [`hw/drivers/dw1000/README.md`](hw/drivers/dw1000/README.md): the
+  traps an application falls into: the `rx_ok` contract, double
+  buffering, what the driver does *not* do.
+- [`hw/drivers/dw1000/DESIGN.md`](hw/drivers/dw1000/DESIGN.md): how
+  the core works inside, and where it departs from Decawave's driver.
+- [`port/emulation/README.md`](port/emulation/README.md): the wire
+  protocol between a node and a medium server, for running the driver
+  with no chip.
+- [`probe/README.md`](probe/README.md): building and running the
+  two-way-ranging instrument, and how to read its lines.
+- [`probe/DESIGN.md`](probe/DESIGN.md): the probe's exchange, record
+  contract and split line.
+- [`sniffer/README.md`](sniffer/README.md): building and running the
+  UWB sniffer, which forwards captured frames over ethernet.
+- [`AUDIT.md`](AUDIT.md): what was checked against the manual, what
+  was wrong, what was measured, and what is still open.
 
 Running `doxygen` at the top of the tree writes HTML and LaTeX into
-`doc/generated`, which is not tracked. The [DW1000 User Manual][7] is the
-reference the code is annotated against, by section and table number at
-the point each register sequence is issued. `docs/` is the vendor shelf:
-the manuals, the errata and the application notes, as published.
-`doc/bench/` holds raw measurement output that AUDIT.md cites.
+`doc/generated`, which is not tracked. `docs/` is the vendor shelf: the
+manuals, the errata and the application notes, as published. `doc/bench/`
+holds raw measurement output that AUDIT.md cites.
 
-
-License
-=======
+## License
 
 Apache-2.0. See `LICENSE`.
 

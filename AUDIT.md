@@ -18,20 +18,24 @@ another. Recorded here so the next reader does not repeat the work.
 - **Dates**: 2026-09-14, against 2.12 and 2.15; same day, a second round
   against 2.18 and APS022 once those PDFs arrived.
 - **Not audited**, and still not: the OSAL ports (seven of them now,
-  `port/emulation` having landed since), the Zephyr and MyNewt glue, any
-  consumer of the driver, and whether an errata past 1.4 exists.
+  `port/emulation` having landed since), the Zephyr and MyNewt glue,
+  `src/dw1000_validate.c` and `src/dw1000_state.c` (both added after
+  this audit; the first is in `DW1000_SOURCES` and so in every build,
+  the second is opt-in), any consumer of the driver, and whether an
+  errata past 1.4 exists.
 
 ## Status
 
 Every finding the first round raised has been fixed (`3a6a44f`); the
 last of them, the proprietary SFD at 6.8 Mbps, was settled by
 measurement on 2026-09-16 in favour of the driver, which needed no
-change. The 2.18/APS022 round added five more,
-of which four are fixed and one (the channel 5 analogue values, which
-is a decision rather than a defect) is under **Open** below, with the
-rest of what remains. Fixed findings are kept as a one-line ledger
-under **Fixed**; their reasoning now lives in the code, at the sites
-named there.
+change. The 2.18/APS022 round added five more, all five now resolved:
+four fixed, and the channel 5 analogue values adopted on 2026-09-16
+after weighing them as a decision rather than a defect. That entry is
+kept under **Open** below, with the rest of what remains, because the
+antenna-delay re-calibration it obliges is still owed. Fixed findings
+are kept as a one-line ledger under **Fixed**; their reasoning now
+lives in the code, at the sites named there.
 
 A third round on 2026-09-16 was not a manual audit but a bug hunt over
 the double-buffer and embedded-transmit paths. It found six defects, all
@@ -48,8 +52,9 @@ last uncertainty, and the latent notes.
 
 The first round's patch was verified against the manual, the errata and
 the vendor driver independently of the person who wrote it; `make lib
-OSAL=null`, `make check-options` and `make check` (including the
-`port/emulation` smoke test) pass, and `clang --analyze` reports nothing.
+OSAL=null` and `make check` pass, the latter now covering the option
+matrix, the manifest, the radio-value validation, four `port/emulation`
+tests and the two probe tests, and `clang --analyze` reports nothing.
 The option matrix was 256 combinations when the audit ran and is 128
 now, `DW1000_WITH_DWM1000_EVK_COMPATIBILITY` having been dropped in
 `c58f953`.
@@ -162,8 +167,8 @@ bullet above; it is still uncovered.
   Every failing record carries `t_sp t_rp t_sr t_rr t_rf` and no `t_sf`,
   with `heard=60` per run of 30 and every `drop_*` at zero: the responder
   heard the POLL and the FINAL, and never the REPORT. Nothing filtered it
-  -- the third frame did not reach the radio, which is the read-out
-  window with the receiver off.
+  the third frame did not reach the radio, which is the read-out window
+  with the receiver off.
 
 - **So the responder must be double buffered.** Not a preference. It is
   the same deafness that cost the pairing in "probe: receive
@@ -195,7 +200,7 @@ bullet above; it is still uncovered.
   largest defensible shift attributable to double buffering is the
   initiator's ~2.3 cm. The earlier figure was presumably taken with both
   ends toggled together, which is the comparison that is no longer
-  available. One pair, one geometry, one session -- it does not
+  available. One pair, one geometry, one session: it does not
   generalise on its own.
 
 ### Settled: the overrun recovery works, and the test could not see it
@@ -236,11 +241,16 @@ hearing anything else scores the same zero as a deaf one. The first run
 of this investigation was contaminated by another session's probe
 traffic and showed exactly that, 25 frames received and 0 counted.
 
-Bearing on this driver, one thing: the send functions document
-"the DW1000 is in IDLE state" as a precondition and do not check it, so
-a caller transmitting into a busy transmitter is accepted silently and
-its frame quietly lost. `SYS_STATE` could answer that, and is listed
-under *Latent, not defects* for exactly this.
+Bearing on this driver, one thing, since fixed: the send functions
+documented "the DW1000 is in IDLE state" as a precondition and did not
+check it, so a caller transmitting into a busy transmitter was accepted
+silently and its frame quietly lost, which is the second fault above met
+from the driver's side. `dw1000_tx_start()` now refuses with
+`DW1000_TX_ERR_BUSY` while `dw->tx_pending` says a transmission has not
+been reported done (`06cee4f`); the flag is the driver's own record, so
+the check costs no SPI. `SYS_STATE` would answer the same question with
+a bus read and is still listed under *Latent, not defects*, now only for
+the receive-side precondition.
 
 ### Settled: the delayed-send floor is airtime, not power-up
 
@@ -281,10 +291,12 @@ this cannot separate them, but bounds both at about 35 µs on that host.
   offset (DRX_CAR_INT), frame duration helpers, sleep and wake, the
   event counters (0x2F).
 - SYS_STATE (0x19) is defined in the register map and never read. 2.18
-  documents its fields and APS022 §4.3-4.6 tabulates them, so the IDLE
-  preconditions the driver can currently only assert in prose
-  (`dw1000_rx_set_timeout()`, TXSTRT) could be checked: PMSC_STATE
-  reads 0x1 for IDLE.
+  documents its fields and APS022 §4.3-4.6 tabulates them, so the one
+  IDLE precondition the driver still only asserts in prose
+  (`dw1000_rx_set_timeout()`) could be checked against it: PMSC_STATE
+  reads 0x1 for IDLE. TXSTRT no longer needs it, being enforced since
+  `06cee4f` by `dw->tx_pending`, which costs no SPI where a SYS_STATE
+  read would cost one per send.
 - The `wait4resp` clear in the RXFCG branch makes the §5.4 workaround in
   the TXFRS branch dead code, now a second time over through the AUTOACK
   gate. Deliberately left undocumented in the code, as moot.
@@ -328,22 +340,22 @@ embedded-transmit paths:
 
 | Sev | Defect | Where it was fixed |
 | :-- | :----- | :----------------- |
-| High | `dw1000_txrx_off()` called from inside `rx_ok` handed the held buffer back to the chip mid-read-out, then left the pointers inverted for every frame after it. The send functions' own `@pre` asked callers to do exactly that | `dw1000_rx_sync_dblbuf()` honours the new `dw->rx_held`; the three `@pre` blocks in `dw1000_send.h` name `dw1000_txrx_idle()` for the double-buffered case |
+| High | `dw1000_txrx_off()` called from inside `rx_ok` handed the held buffer back to the chip mid-read-out, then left the pointers inverted for every frame after it. The send functions' own `@pre` asked callers to do exactly that | `_dw1000_rx_sync_dblbuff()` honours the new `dw->rx_held`; the three `@pre` blocks in `dw1000_send.h` name `dw1000_txrx_idle()` for the double-buffered case |
 | Med | An embedded timestamp that did not fit inside the frame was written past its end, where nothing transmits it, and the send returned 0 | `_dw1000_tx_prepare_delayed_embed_timestamp()` |
 | Med | `dblbuff` with no `rx_error` callback recovered an overrun and then left the receiver off for good, silently and permanently | `dw1000_initialise()` refuses the pairing |
 | Med | `MRXOVRR` was never unmasked, so the documented overrun recovery ran only when some other event happened to bring the driver in | `dw1000_initialise()` |
-| Med | A payload over the frame ceiling was clamped and transmitted truncated, reporting success; the assert beside the clamp is compiled out on four of the five ports | `_dw1000_tx_prepare_fctrl()`, with `dw1000_tx_get_frame_maxsize()` exported so the rule lives in one place |
+| Med | A payload over the frame ceiling was clamped and transmitted truncated, reporting success; the assert beside the clamp is compiled out on six of the seven ports, `port/cf2` alone trapping unconditionally | `_dw1000_tx_prepare_fctrl()`, with `dw1000_tx_get_frame_maxsize()` exported so the rule lives in one place |
 | Low | `dw1000_tx_get_power()`'s comment claimed the chip could disagree with the cache. TX_POWER is a plain read/write register, so it cannot; the read is worth one thing only, noticing a chip that reset since it was configured | `dw1000.h` |
 | Low | Errata RX-1 neither enforced nor documented. It is the last erratum item that was uncovered, and it turns out to be unreachable without proprietary long frames: the standard 127 byte ceiling means the largest payload is 125 and no host can write past TX index 124 | `_dw1000_tx_prepare_fctrl()` refuses a payload past index 127 while a frame is held; documented on `dw1000_tx_write_frame_data()` and the `dblbuff` field |
 | Low | The vendor policy differences were documented nowhere but in this file | `hw/drivers/dw1000/README.md`, which covers DIS_STXP, the FCS in the reported length, the IDLE-before-TXSTRT precondition and who re-arms the receiver |
 
 The RX-1 guard is covered by a second build of
-`tests/emulation/dblbuf.c` with proprietary long frames turned on, the
+`tests/emulation/dblbuff.c` with proprietary long frames turned on, the
 only configuration in which the erratum can be reached at all; the
 default build compiles that step out. Each of the other five carries a
 regression test against `port/emulation`
 and each was cycled (failing before, passing after, failing again
-reverted): `tests/emulation/dblbuf.c` gained "frame held across
+reverted): `tests/emulation/dblbuff.c` gained "frame held across
 txrx_off" and "dblbuff needs rx_error", `tests/emulation/timing.c`
 gained "tx embed timestamp" and "tx frame too long". Worth recording
 that `dblbuff.c` had never called `dw1000_process_events()` before this
@@ -381,6 +393,13 @@ The clock-rate excess measured while a send is pending
 (ruby-dw1000, `delayed-send/README.md`) is unchanged with TXCLKS forced
 on (2.57-3.01 ppm against 2.58-3.35 ppm), so the two effects are
 unrelated.
+
+Then, from driver work after that round, neither one an audit finding:
+
+| Sev | Defect | Where it was fixed |
+| :-- | :----- | :----------------- |
+| Med | The send functions documented "the DW1000 is in IDLE state" as a precondition and took the caller's word for it, so a host sending faster than the air allows was accepted every time and lost nearly every frame | `_dw1000_tx_idle()` refuses before a byte is written, and `dw1000_tx_start()` re-checks for a caller driving the transmitter by hand, both with `DW1000_TX_ERR_BUSY` (`06cee4f`) |
+| Low | Every transmit failure answered -1, so a caller could not tell a refusal worth retrying from one that never would be | seven `DW1000_TX_ERR_*` codes in `dw1000.h`, all negative so `rc < 0` still works; the extended send retries only `_TOO_LATE` (`28125d7`) |
 
 ## Refuted candidates
 
@@ -420,7 +439,7 @@ Kept here so they are not raised again.
   those very bits, so a host calling it from inside `rx_ok`, which the
   send functions asked it to do, handed back the buffer it was still
   reading. What holds the invariant is `dw->rx_held`, checked in
-  `dw1000_rx_sync_dblbuf()` since 2026-09-16.
+  `_dw1000_rx_sync_dblbuff()` since 2026-09-16.
 - **Delayed send.** DX_TIME is the raw RMARKER time with its low nine
   bits zeroed, the embedded value is DX_TIME plus TX_ANTD, and that
   equals what TX_STAMP reports (§3.3, §7.2.25). The retry path rewrites
@@ -429,9 +448,14 @@ Kept here so they are not raised again.
 
 ## Register map
 
-Every `#define` in `dw1000_reg.h` (432 in total) was checked against the
-manual: register file ids, sub-register offsets, bit positions, widths
-and masks. No mismatch. Three notes:
+Every `#define` in `dw1000_reg.h` (432 in total at `117a784`) was
+checked against the manual: register file ids, sub-register offsets, bit
+positions, widths and masks. No mismatch. The fix commit `3a6a44f` then
+added eighteen more, all of them written from the manual as part of the
+two fixes that needed them: the PANADR PAN_ID and SHORT_ADDR fields
+(offset, mask and shift each) for the frame-filtering fix, and the
+PMSC_CTRL0 TXCLKS and RXCLKS fields with their four values each for the
+errata TX-1 workaround. Three notes:
 
 - `DW1000_LEN_DRX_CONF` (46) and `DW1000_LEN_OTP_IF` (19) disagree with
   Table 2's 44 and 18, but Table 2 would exclude RXPACC_NOSAT and
@@ -458,7 +482,7 @@ now matches 2.18 throughout. No other table moved between 2.12 and 2.18.
 | :--- | :-------------------- |
 | TX-1 delayed TX may not complete | Worked around: the TX clock is forced on for a delayed send. Measured on hardware, 85 silent losses before against 0 after; see **Fixed**. |
 | RX-1 byte 128 of the second RX buffer corrupted by a TX write past offset 127 before readout | Enforced since 2026-09-16: the send functions refuse a payload reaching past TX index 127 while a frame is held. Unreachable anyway without proprietary long frames. Every erratum item is now covered. |
-| TX-2 TX buffer index reset at TXSTRT | Not applicable; the driver offers no fast-turnaround write during transmission. |
+| TX-2 TX buffer index reset at TXSTRT | Guarded since `06cee4f`: the send functions refuse while a transmission is pending, before a byte reaches the chip, and `dw1000_tx_start()` refuses again for a caller driving the transmitter by hand. The driver offers no fast-turnaround write of its own, but `dw1000_tx_write_frame_data()` lets a caller make one, so the erratum is reachable rather than inapplicable. |
 | IRQ-1 IRQ glitch in double-buffered mode | Mitigated by the masked clears; `dw1000_pending_interrupt()` supports the poll-the-line workaround. |
 | PMSC-1 wake-up event longer than 500 µs | Not applicable; no sleep entry point. `dw1000_hardreset()` holds WAKEUP high. |
 | SYSSTAT-1 PLL lock bits unreliable | Not applicable; the driver never reads CPLOCK or CLKPLL_LL, and never calibrates the PLL. |
@@ -567,9 +591,10 @@ exists is still unchecked.
 
 ## Tooling
 
-- **Locally**: `make lib OSAL=null`, `make check-options` (256 of 256
-  option combinations, `-Wall -Wextra`, zero warnings), `clang
-  --analyze` on both sources (no reports).
+- **Locally**: `make lib OSAL=null`, `make check-options` (all 128
+  option combinations, `-Wall -Wextra`, zero warnings; it was 256 when
+  the audit ran, see **Status**), `clang --analyze` on both sources (no
+  reports).
 - **On rpi-a** (Debian, LLVM 19.1.7, Cppcheck 2.17.1, GCC 12), over the
   core plus `port/null`: `gcc -O2 -Wall -Wextra -fanalyzer` reports
   nothing. `clang-tidy` (`clang-analyzer-*`, `bugprone-*`, `cert-*`,
@@ -584,8 +609,8 @@ exists is still unchecked.
   option configurations, bar the identity byte-swap macros on
   little-endian and two pointers that could be `const`.
 - **Would widen the hunt**: `port/emulation` now carries a register
-  model and `make check` runs its smoke test, which is most of the
-  register-write recorder this audit asked for. The 2026-09-16 round
+  model and `make check` runs four tests against it, which is most of
+  the register-write recorder this audit asked for. The 2026-09-16 round
   turned each of its findings into a regression test against it, which
   is the practice this entry asked for; the manual-audit findings above
   still have none.
