@@ -97,7 +97,7 @@ thread_count(void)
 
 
 /*----------------------------------------------------------------------*/
-/* The wire protocol (docs/emulation.md)                                */
+/* The wire protocol (port/emulation/README.md)                                */
 /*----------------------------------------------------------------------*/
 
 /* Copied rather than included, for the reason smoke.c gives: a medium
@@ -210,7 +210,7 @@ stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 	/* The model asserts, for an immediate send, that TX_STAMP less
 	 * its own TX_ANTD lands on a 512-tick boundary. So round first,
 	 * then add the antenna delay the node supplied -- which is the
-	 * convention docs/emulation.md states.
+	 * convention port/emulation/README.md states.
 	 */
 	stamp = (DW1000_CLOCK_ROUNDUP(now) + in.tx.antenna_delay)
 	        & ((1ull << DW1000_TIME_CLOCK_BITS) - 1);

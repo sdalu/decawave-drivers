@@ -32,7 +32,7 @@
  * holds it across the line callback -- that call lands in code this port
  * does not own, and a node is entitled to reach for the driver from it.
  *
- * What the model does not do is in docs/emulation.md, which is also the
+ * What the model does not do is in port/emulation/README.md, which is also the
  * contract with the medium server.
  *
  * Originally written as a spank OSAL port; it has no dependency on spank.
@@ -484,7 +484,7 @@ static void e_dblbuf_toggle_host(struct dw1000_emulation *e) {
  * only place this is decided is inside the rsvc reader's own callback
  * -- which is the thread that would have to read the reply. The
  * reference server applies no behaviour to RX_CONFIG anyway
- * (docs/emulation.md), so the model's state is the whole of it.
+ * (port/emulation/README.md), so the model's state is the whole of it.
  */
 static bool e_rx_auto_reenable(struct dw1000_emulation *e, bool good) {
     uint32_t sys_cfg = E_REG_IC_READ32_KEY(e, SYS_CFG);
@@ -1275,7 +1275,7 @@ static uint64_t e_ticks_per_psym(struct dw1000_emulation *e) {
  * RXSFDTO cannot: UM 7.2.40.7 starts it at preamble detection, and this
  * model has no preamble -- a frame either arrives whole from the medium
  * server or does not arrive. Not arming it is the honest reading; see
- * docs/emulation.md.
+ * port/emulation/README.md.
  *
  * Whichever of the two is nearer is the one that will be reached, and
  * both stop the reception, so a single slot holds them. The mutex must
@@ -2084,7 +2084,7 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	     * arrival times the server computes for every *other* node,
 	     * which have no such register to be corrected from. Closing
 	     * that needs a field on the wire, and the protocol has none --
-	     * see docs/emulation.md.
+	     * see port/emulation/README.md.
 	     */
 	    raw = e->tx_rawst;
 	} else {

@@ -75,12 +75,12 @@
 #include "rsvc.h"
 
 /*----------------------------------------------------------------------*/
-/* The wire protocol (docs/emulation.md)                                */
+/* The wire protocol (port/emulation/README.md)                                */
 /*----------------------------------------------------------------------*/
 
 /* The same copy tests/emulation/smoke.c makes, for the same reason:
  * <rsvc.h> exports the client API, while the framing a server has to
- * speak is described in docs/emulation.md and written in rsvc.c, which
+ * speak is described in port/emulation/README.md and written in rsvc.c, which
  * is not a header. A medium server is entitled to nothing but the
  * document, so a test standing in for one takes nothing else either.
  */

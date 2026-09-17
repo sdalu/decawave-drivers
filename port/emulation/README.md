@@ -20,6 +20,20 @@ receives on the wire, so that a medium server can be written against
 it without reading the port's C.
 
 
+## Where a medium server comes from
+
+There is none in this tree, by design: a register model cannot work out
+a reception timestamp, so the medium is somebody else's program and this
+page is the seam. The one in use is Ruby, in spank --
+`simulation/lib/spank/simulator.rb` -- which is where this port came
+from in the first place: the C half (the emulation OSAL and its socket
+client) moved here so it could be a port like the others and be
+compiled by `make check`, while the medium server and the spank node
+stayed behind. That split is why this file exists rather than a shared
+header: the two halves are in different repositories and different
+languages, and the wire is all they have in common.
+
+
 ## Socket and framing
 
 The transport is a connected `AF_UNIX SOCK_DGRAM` socket: the node

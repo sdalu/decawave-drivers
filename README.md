@@ -59,7 +59,7 @@ Supported hosts
 | Unix                    | `port/unix`      | via the [bitters][1] lib                                          |
 | [ChibiOS][3]            | `port/chibios`   | SPI API v1 or v2                                                  |
 | [Apache MyNewt][4]      | `port/mynewt`    | via `hal_spi_txrx()`                                              |
-| Emulation               | `port/emulation` | no chip; see docs/emulation.md |
+| Emulation               | `port/emulation` | no chip; see port/emulation/README.md |
 | none                    | `port/null`      | no hardware; see below                                            |
 
 ChibiOS and MyNewt are built against their vendor headers but have not
@@ -72,7 +72,7 @@ thing to copy when writing a port of your own. `port/emulation` is not
 the same kind of stand-in: where `null` is wired to nothing and cannot
 run, `emulation` runs the driver against a model of the chip, and needs
 a medium server on the other end of its socket to do it -- see
-[`docs/emulation.md`](docs/emulation.md).
+[`port/emulation/README.md`](port/emulation/README.md).
 
 
 Layout
@@ -84,10 +84,15 @@ decawave-drivers
 │   ├── include/dw1000
 │   │   ├── dw1000.h               driver API, config and radio structs
 │   │   ├── dw1000_send.h          frame transmission helpers
+│   │   ├── dw1000_validate.h      human radio values to radio fields
+│   │   ├── dw1000_state.h         read the radio back off the chip
 │   │   ├── dw1000_reg.h           register, field and flag definitions
 │   │   ├── dw1000_otp.h           OTP memory map
 │   │   └── dw1000_bswap.h         endian helpers
-│   └── src                        dw1000.c, dw1000_send.c
+│   ├── src                        dw1000.c, dw1000_send.c,
+│   │                              dw1000_validate.c, and dw1000_state.c
+│   │                              which is the one optional source
+│   └── README.md                  the pitfalls guide, for applications
 │
 ├── port                           one OSAL per host, pick one
 │   ├── unix                       through the bitters library
@@ -95,15 +100,20 @@ decawave-drivers
 │   ├── chibios                    ChibiOS, SPI API v1 or v2
 │   ├── mynewt                     Apache MyNewt
 │   ├── cf2                        Crazyflie 2.x, on FreeRTOS
-│   ├── emulation                  register model, no chip, see docs/emulation.md
+│   ├── emulation                  register model, no chip, see port/emulation/README.md
 │   └── null                       no hardware, for compile checks
+│
+├── probe                          a two-way-ranging instrument, built on
+│                                  the driver rather than part of it
+├── sniffer                        forwards captured frames over ethernet
 │
 ├── dw1000.cmake                   the file list, read by both of these
 ├── Makefile                       compile checks, vendoring, doxygen
 ├── scripts                        reads dw1000.cmake for the Makefile
 ├── tests                          what `make check` runs
 ├── zephyr                         Kconfig and CMakeLists, as a module
-└── doc                            generated doxygen output
+├── docs                           the vendor shelf: manuals, errata
+└── doc                            generated doxygen output, and bench/
 ```
 
 
@@ -423,10 +433,23 @@ tree copied into another project's repository.
 Documentation
 =============
 
+Each part of the tree is documented beside itself, not here. This is the
+index:
+
+| Read | For |
+| :--- | :-- |
+| [`hw/drivers/dw1000/README.md`](hw/drivers/dw1000/README.md) | Traps an application built on this driver falls into -- the `rx_ok` contract, double buffering, what the driver does *not* do. Read before writing one. |
+| [`port/emulation/README.md`](port/emulation/README.md) | The wire protocol between a node and a medium server, for running the driver with no chip. |
+| [`probe/README.md`](probe/README.md) | Building and running the two-way-ranging instrument, and how to read its lines. Its reasoning is in [`probe/DESIGN.md`](probe/DESIGN.md). |
+| [`sniffer/README.md`](sniffer/README.md) | Building and running the UWB sniffer, which forwards captured frames over ethernet. |
+| [`AUDIT.md`](AUDIT.md) | What was checked against the manual, what was wrong, what was measured, and what is still open. Every claim here that came from the bench has its numbers there. |
+
 Running `doxygen` at the top of the tree writes HTML and LaTeX into
 `doc/generated`, which is not tracked. The [DW1000 User Manual][7] is the
 reference the code is annotated against, by section and table number at
-the point each register sequence is issued.
+the point each register sequence is issued. `docs/` is the vendor shelf:
+the manuals, the errata and the application notes, as published.
+`doc/bench/` holds raw measurement output that AUDIT.md cites.
 
 
 License

@@ -13,7 +13,7 @@
  * The medium is a thread rather than a program because that is the whole
  * point of the exercise: the port has no hardware behind it, so what is
  * left to check is that a node and a medium speaking the protocol of
- * docs/emulation.md carry a frame between them and agree on its
+ * port/emulation/README.md carry a frame between them and agree on its
  * timestamps. The thread binds the server socket, answers every request,
  * and loops the node's own transmitted frame straight back at it, which
  * is enough to drive TX, RX, and a bad FCS through the driver's four
@@ -64,11 +64,11 @@
 
 
 /*----------------------------------------------------------------------*/
-/* The wire protocol (docs/emulation.md)                                */
+/* The wire protocol (port/emulation/README.md)                                */
 /*----------------------------------------------------------------------*/
 
 /* Copied rather than included: <rsvc.h> exports the client API, while
- * the framing a server has to speak is described in docs/emulation.md
+ * the framing a server has to speak is described in port/emulation/README.md
  * and written in rsvc.c, which is not a header. A medium server is
  * entitled to nothing but the document, so the test takes nothing else
  * either -- and a change to the framing that skips the document breaks

@@ -50,7 +50,7 @@
 
 
 /*----------------------------------------------------------------------*/
-/* The wire protocol (docs/emulation.md)                                */
+/* The wire protocol (port/emulation/README.md)                                */
 /*----------------------------------------------------------------------*/
 
 /* Copied rather than included, for the reason smoke.c gives: a medium

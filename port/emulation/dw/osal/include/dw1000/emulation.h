@@ -125,7 +125,7 @@ void dw1000_emulation_destroy(struct dw1000_emulation *e);
  *       clock drift it is told about by its controller, which the node
  *       is never told; a node whose drift is non-zero therefore has a
  *       SYS_TIME that runs at a slightly different rate from the
- *       timestamps it is given. See docs/emulation.md.
+ *       timestamps it is given. See port/emulation/README.md.
  *
  * @return device time in units of @p DW1000_TIME_CLOCK_HZ, 40 bits
  */
