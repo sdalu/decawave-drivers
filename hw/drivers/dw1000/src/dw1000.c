@@ -2368,11 +2368,22 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask) {
 
 
 int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
+    // Not over a transmission. A host re-arming from an rx_error or
+    // rx_timeout callback while its own send is on the air (an event
+    // the receiver raised before the send, see dw1000_process_events())
+    // would enable the receiver on top of it: refused, with nothing
+    // written to the chip, and the completion's handler re-arms as
+    // after any send. tx_pending alone cannot say: the TXFRS branch
+    // clears it, and runs after the good-frame one, so a callback in
+    // a pass whose status word already carries the completion would
+    // be refused for a send that is over. TXFRS on the chip says.
+    if (dw->tx_pending && ! dw1000_tx_is_status_done(dw))
+	return DW1000_RX_ERR_BUSY;
+
     // A receiver reset owed from an error or timeout handled while a
     // transmission was in flight (UM §4.1.6): applied now that the
-    // receiver is being brought up, unless the transmission is still
-    // on the air, in which case the next start gets it
-    if (dw->rx_reset_due && ! dw->tx_pending) {
+    // receiver is being brought up
+    if (dw->rx_reset_due) {
 	dw->rx_reset_due = 0;
 	_dw1000_rx_reset(dw);
     }

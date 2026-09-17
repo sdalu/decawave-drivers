@@ -171,11 +171,14 @@ the receiver reset UM 4.1.6 asks for is applied by the next
 in double buffered receive the receiver is not re-enabled on top of the
 transmission; the completion's handler re-arms it, as after any send.
 
-The host's side of that: a callback that re-arms the receiver on
-`rx_error` or `rx_timeout` should skip it while its own send is pending
-and leave the re-arm to `tx_done`. The emulation port asserts on a
-receiver enabled during a transmission, and what the chip does with it
-is not documented.
+The host's side of that is nothing. `dw1000_rx_start()` refuses with
+`DW1000_RX_ERR_BUSY`, writing nothing to the chip, while a send is on
+the air, so a callback that re-arms the receiver on `rx_error` or
+`rx_timeout` may keep doing so unconditionally, and the completion's
+handler re-arms as after any send. A callback running in a pass whose
+status word already carries the completion is not refused, the chip's
+TXFRS saying the send is over: a `tx_done` that leaves the re-arm to
+`rx_ok` on seeing RXFCG beside its completion keeps working.
 
 ### One frame at a time, and you must consume the completion
 

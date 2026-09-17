@@ -392,6 +392,7 @@ static struct {
     bool     rx_error;
     bool     rx_timeout;
     uint32_t rx_timeout_status;
+    int      rx_start_rc;               /* from a callback, when rearm */
 } evt = {
     .lock = PTHREAD_MUTEX_INITIALIZER,
     .wake = PTHREAD_COND_INITIALIZER,
@@ -400,11 +401,25 @@ static struct {
 static void cb_tx_done(dw1000_t *dw, uint32_t status)
 { (void)dw; (void)status; evt.tx_done = true; }
 
+/* Set by a step: the rx_ok and rx_error callbacks re-arm the receiver,
+ * the way a single buffered host's do, and record what the call said. */
+static bool rearm;
+
 static void cb_rx_ok(dw1000_t *dw, uint32_t status, size_t length, bool rng)
-{ (void)dw; (void)status; (void)length; (void)rng; evt.rx_ok = true; }
+{
+    (void)status; (void)length; (void)rng;
+    evt.rx_ok = true;
+    if (rearm)
+	evt.rx_start_rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+}
 
 static void cb_rx_error(dw1000_t *dw, uint32_t status)
-{ (void)dw; (void)status; evt.rx_error = true; }
+{
+    (void)status;
+    evt.rx_error = true;
+    if (rearm)
+	evt.rx_start_rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+}
 
 static void cb_rx_timeout(dw1000_t *dw, uint32_t status)
 { (void)dw; evt.rx_timeout = true; evt.rx_timeout_status = status; }
@@ -437,6 +452,7 @@ evt_reset(void)
     evt.rx_error   = false;
     evt.rx_timeout = false;
     evt.rx_timeout_status = 0;
+    evt.rx_start_rc = 0;
 }
 
 /* Wait for the interrupt line, and leave whatever raised it unprocessed. */
@@ -861,10 +877,18 @@ step_tx_over_stale_rx_error(dw1000_t *dw, struct stub *s)
 		       DW1000_TX_IMMEDIATE) != 0)
 	return "the send over the stale error was refused";
 
-    /* The event pass a host runs next, with the frame on the air. */
+    /* The event pass a host runs next, with the frame on the air. The
+     * re-arm its rx_error does is refused, nothing written: the model
+     * would otherwise abort on a receiver enabled during a send. */
+    rearm = true;
     dw1000_process_events(dw);
+    rearm = false;
     if (!evt.rx_error)
 	return "the stale receive error was not reported";
+    if (evt.rx_start_rc != DW1000_RX_ERR_BUSY)
+	return REASON("dw1000_rx_start() from rx_error over the send answered"
+		      " %d, not DW1000_RX_ERR_BUSY (%d)", evt.rx_start_rc,
+		      DW1000_RX_ERR_BUSY);
     if (evt.tx_done)
 	return "the completion was reported before the frame was out";
 
@@ -874,6 +898,91 @@ step_tx_over_stale_rx_error(dw1000_t *dw, struct stub *s)
 
     pthread_mutex_lock(&s->lock);
     s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+    return NULL;
+}
+
+/* A receive start from a callback whose pass already carries the
+ * completion is honoured. The send is over, TXFRS on the chip says so,
+ * and a host that leaves the re-arm to rx_ok on seeing RXFCG beside its
+ * completion (the SPANK firmwares do) would otherwise be left deaf, the
+ * refusal above being keyed on tx_pending, which the TXFRS branch clears
+ * only after the good-frame one has run.
+ */
+static const char *
+step_rx_start_beside_completion(dw1000_t *dw, struct stub *s)
+{
+    uint32_t status;
+    int      i;
+
+    /* A good frame, latched and left unprocessed: the stub holds the
+     * good frame the previous step sent last. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = true;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0)
+	return "dw1000_rx_start did not start the reception";
+    if (!wait_line(IRQ_TIMEOUT_MS))
+	return "no interrupt for the good frame";
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (!(status & DW1000_FLG_SYS_STATUS_RXFCG))
+	return REASON("RXFCG not in the status (0x%08" PRIx32 ") after"
+		      " the good frame", status);
+
+    /* Send over it, and let the send complete before the pass. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0)
+	return "the send over the pending frame was refused";
+    for (i = 0; i < 200 && !dw1000_tx_is_status_done(dw); i++)
+	usleep(10000);
+    if (!dw1000_tx_is_status_done(dw))
+	return "the send over the pending frame did not complete";
+
+    /* One pass carrying both. rx_ok re-arms, as a single buffered
+     * host's does, and the stub answers that start with a frame, which
+     * is what says the receiver really is on. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = true;
+    pthread_mutex_unlock(&s->lock);
+
+    rearm = true;
+    dw1000_process_events(dw);
+    rearm = false;
+    if (!evt.rx_ok)
+	return "the pending frame was not reported";
+    if (!evt.tx_done)
+	return "the completion was not reported in the same pass";
+    if (evt.rx_start_rc != 0)
+	return REASON("dw1000_rx_start() from rx_ok beside the completion"
+		      " answered %d: refused, and a host trusting it is deaf",
+		      evt.rx_start_rc);
+
+    /* No edge to wait for: the line may not have dropped between the
+     * completion and the new frame. Poll the flag instead. */
+    evt.rx_ok = false;
+    for (i = 0; i < 200; i++) {
+	status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS,
+				    DW1000_OFF_NONE);
+	if (status & DW1000_FLG_SYS_STATUS_RXFCG)
+	    break;
+	usleep(10000);
+    }
+    dw1000_process_events(dw);
+    if (!evt.rx_ok)
+	return "the receiver started from rx_ok beside the completion"
+	       " received nothing";
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
     pthread_mutex_unlock(&s->lock);
     return NULL;
 }
@@ -1838,6 +1947,7 @@ main(void)
     step("wait4resp auto-rx",    step_wait4resp(&dw, &stub));
     step("tx while busy",        step_tx_while_busy(&dw, &stub));
     step("tx over a stale rx error", step_tx_over_stale_rx_error(&dw, &stub));
+    step("rx start beside the completion", step_rx_start_beside_completion(&dw, &stub));
     step("create/destroy cycles",step_lifecycle(&dw, &stub));
     step("medium vanishes",      step_medium_vanishes(&dw, &stub));
 

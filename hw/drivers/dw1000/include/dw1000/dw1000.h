@@ -259,6 +259,10 @@
  *  @p DW1000_RX_IDLE_ON_DELAY_ERROR asked to stay idle rather than
  *  fall back to an immediate start */
 #define DW1000_RX_ERR_TOO_LATE      (-1)
+/** A transmission is on the air: enabling the receiver on top of it is
+ *  refused, nothing is written to the chip, and the completion's
+ *  handler re-arms as after any send (see dw1000_process_events()) */
+#define DW1000_RX_ERR_BUSY          (-2)
 /** @} */
 
 
@@ -1646,8 +1650,12 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask);
  * @retval  0        Reception started
  * @retval  1        Reception started, but delayed start was not
  *                   respected.
- * @retval <0        Refused; @p DW1000_RX_ERR_TOO_LATE, the only one of
- *                   @ref RxError, when @p DW1000_RX_DELAYED_START and
+ * @retval <0        Refused, one of @ref RxError: @p DW1000_RX_ERR_BUSY
+ *                   with a transmission on the air (nothing written to
+ *                   the chip; a pass whose status word already carries
+ *                   the completion is not refused), or
+ *                   @p DW1000_RX_ERR_TOO_LATE when
+ *                   @p DW1000_RX_DELAYED_START and
  *                   @p DW1000_RX_IDLE_ON_DELAY_ERROR are both set and
  *                   the programmed time had passed.
  */
