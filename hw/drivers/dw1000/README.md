@@ -283,9 +283,26 @@ instead would hand you a believable lie.
 
 ## Double buffered receive
 
-Worth reading as a whole before turning `cfg->dblbuff` on. It shifted
-SDS-TWR distances by 6 to 10 cm on every pair when it was measured, with
-half the spread; which mode carries the bias is not established.
+Worth reading as a whole before turning `cfg->dblbuff` on.
+
+> [!IMPORTANT]
+> For a three-frame exchange, the node that must hear the last frame needs
+> this. Measured 2026-09-17, rpi-c to rpi-d, 4 interleaved rounds of 30
+> exchanges: a single-buffered responder resolved **0 of 120**, every
+> record `no-report`, having heard the POLL and the FINAL and never the
+> REPORT, with every drop counter at zero. A double-buffered one resolved
+> 120 of 120. `rxauto` does not cover it -- the read-out window is simply
+> deaf, and what used to paper over part of it was an application-level
+> re-arm that is itself a bug (see the note at the end of this section).
+
+It shifted SDS-TWR distances by 6 to 10 cm on every pair when it was first
+measured, with half the spread, and which mode carries that bias is still
+not established -- the obvious experiment is not available, because the
+both-ends-single-buffered case does not resolve at all. Varying only the
+initiator, the same bench put the shift at +23.0 mm on `asym_mm` (9.7
+sigma, n=120, and *tighter* double buffered: sd 16.2 against 20.3), while
+`sym_mm` and `ss_mm` disagreed in sign. So the number to expect is small
+and the direction is not settled. See AUDIT.md.
 
 ### `rxauto` is a separate bit, and both applications here keep it on
 

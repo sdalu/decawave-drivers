@@ -145,6 +145,59 @@ bullet above; it is still uncovered.
   cannot do (no raw register read). It measures which sequence goes on
   the air, which is the fact the adjustment depends on.
 
+### Settled: a single-buffered responder loses the REPORT, every time
+
+- **Measured** 2026-09-17, rpi-c initiator to rpi-d responder, channel 5,
+  4 rounds round-robin over the four combinations, 30 exchanges each, so
+  drift falls on all four equally. `D` is `--dblbuff`, `S` is
+  `--no-dblbuff`, written `<initiator><responder>`.
+
+  | combination | resolved | records |
+  | :---------- | :------- | :------ |
+  | DD | 120/120 | `status=ok` |
+  | SD | 120/120 | `status=ok` |
+  | DS | 0/120 | `status=no-report` |
+  | SS | 0/120 | `status=no-report` |
+
+  Every failing record carries `t_sp t_rp t_sr t_rr t_rf` and no `t_sf`,
+  with `heard=60` per run of 30 and every `drop_*` at zero: the responder
+  heard the POLL and the FINAL, and never the REPORT. Nothing filtered it
+  -- the third frame did not reach the radio, which is the read-out
+  window with the receiver off.
+
+- **So the responder must be double buffered.** Not a preference. It is
+  the same deafness that cost the pairing in "probe: receive
+  double-buffered, and stop arming the receiver off", and it is now
+  deterministic rather than intermittent, because the application-level
+  re-arm that used to paper over part of it is gone. `rxauto` alone does
+  not cover it.
+
+- **Which mode carries the 6 to 10 cm bias is therefore still open, and
+  cannot be answered the obvious way.** Turning the responder single
+  buffered does not yield a distance to compare; there is no
+  both-ends-off measurement to be had from this application as it
+  stands. What can be varied is the initiator, and it moves the answer
+  far less than 6 to 10 cm:
+
+  | estimator | init `D` | init `S` | difference |
+  | :-------- | :------- | :------- | :--------- |
+  | `asym_mm` | 767.4 ± 16.2 | 744.4 ± 20.3 | **+23.0 mm, 9.7 sigma** |
+  | `sym_mm`  | 653.3 ± 67.0 | 635.7 ± 88.9 | +17.6 mm, 1.7 sigma |
+  | `ss_mm`   | 1334.7 ± 79.9 | 1383.6 ± 179.5 | -48.9 mm, 2.7 sigma |
+
+  n = 120 each, sd quoted. Only `asym_mm` is tight enough to call: it is
+  consistent across all four rounds (+32.6, +18.4, +18.9, +22.3 mm) and
+  its spread is *smaller* double buffered, 16.2 against 20.3. `ss_mm`
+  moves the other way and is the drift-sensitive estimator, so the three
+  do not agree on a sign and "the bias" is not one number.
+
+- **Not reproduced: 6 to 10 cm.** On this pair, in this geometry, the
+  largest defensible shift attributable to double buffering is the
+  initiator's ~2.3 cm. The earlier figure was presumably taken with both
+  ends toggled together, which is the comparison that is no longer
+  available. One pair, one geometry, one session -- it does not
+  generalise on its own.
+
 ### Settled: the overrun recovery works, and the test could not see it
 
 Carried here on 2026-09-16 as a live defect: ruby-dw1000's
