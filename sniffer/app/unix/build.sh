@@ -20,7 +20,7 @@
 #
 # Unlike the probe there is nothing here to ask the manifest for: the
 # sniffer is an application and nothing else, so it exports no sources,
-# has no port layer, and appears nowhere in dw1000.cmake. Its six
+# has no port layer, and appears nowhere in dw1000.cmake. Its five
 # translation units all sit in this directory.
 #
 # Environment, each overridable:
@@ -131,13 +131,22 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
     set -- "$@" "$appdir/main.c"     "$appdir/cmdline.c"
     set -- "$@" "$appdir/eth.c"      "$appdir/capture.c"
     set -- "$@" "$appdir/uwb_dw1000.c"
-    set -- "$@" "$appdir/uwb_dw1000_validate.c"
 
     # DW1000_SOURCES_CORE without _SEND: the sniffer never transmits, and
     # dw1000.c never calls into dw1000_send.c, so the send half is left
     # out -- the receive-only case dw1000.cmake documents. The build.sh
     # this replaces took both, because a glob cannot tell them apart.
     set -- "$@" $DW1000_SOURCES_CORE $DW1000_OSAL_SOURCES
+
+    # DW1000_SOURCES_VALIDATE: what turns "--channel 5" into the field
+    # dw1000_radio_t wants, with the message when it will not. This program
+    # used to carry its own copy of that table, and the copy was wrong in
+    # three places.
+    #
+    # It is part of DW1000_SOURCES, so most consumers get it without
+    # asking -- but DW1000_SOURCES carries _SEND too, and the line above
+    # takes _CORE precisely to leave that out. So it is named here.
+    set -- "$@" $DW1000_SOURCES_VALIDATE
     set -- "$@" $BITTERS_TAKEN
 
     set -- "$@" $DW1000_LIBS $BITTERS_LIBS -lpopt -lm

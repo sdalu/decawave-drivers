@@ -79,7 +79,9 @@ INCDIR    != $(MANIFEST) incdir
 VERSIONHDR = $(INCDIR)/dw1000/dw1000_version.h
 SRC_CORE  != $(MANIFEST) core
 SRC_SEND  != $(MANIFEST) send
-SRC        = $(SRC_CORE) $(SRC_SEND)
+# Part of the driver's sources, not an extra: see dw1000.cmake's note.
+SRC_VALID != $(MANIFEST) validate
+SRC        = $(SRC_CORE) $(SRC_SEND) $(SRC_VALID)
 
 # What a hosted link needs; dw1000.c uses <math.h>.
 LIBS      != $(MANIFEST) libs
@@ -88,7 +90,7 @@ LIBS      != $(MANIFEST) libs
 # object rather than guessing.
 ALLOSALOBJ != $(MANIFEST) objs
 
-OBJ        = $(SRC_CORE:.c=.o) $(SRC_SEND:.c=.o)
+OBJ        = $(SRC_CORE:.c=.o) $(SRC_SEND:.c=.o) $(SRC_VALID:.c=.o)
 OSALOBJ    = $(OSAL_SRC:.c=.o)
 STATIC     = lib$(NAME).a
 
@@ -150,7 +152,7 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-manifest check-emulation check-probe	## compile the option matrix (~1 min), check the manifest, run the emulation smoke test, run the probe tests
+check: check-options check-manifest check-validate check-emulation check-probe	## compile the option matrix (~1 min), check the manifest, check the radio-value validation, run the emulation smoke test, run the probe tests
 
 # 256 compiles, tens of seconds in total, so the script reports progress
 # as it goes. CC, CFLAGS and WERROR reach it through the environment.
@@ -159,6 +161,15 @@ check-options:					## compile the core over every option combination
 
 check-manifest:					## check dw1000.cmake still describes the tree
 	@sh tests/check-manifest.sh
+
+# The cheapest check here: <dw1000/dw1000_validate.h> is a value mapping
+# that links on its own, so this needs no chip, no port and no driver --
+# two compiles and two runs. Twice because five of the eight preamble
+# lengths are proprietary and what the API may accept depends on the
+# build's options, which is the half that used to be wrong in the
+# hand-written copy this replaced.
+check-validate:					## check the radio-value validation against what dw1000_configure() accepts
+	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-validate.sh
 
 # The emulation port has no vendor tree to wait for -- unlike unix,
 # chibios, mynewt, cf2 and zephyr, it needs nothing installed -- and
@@ -280,6 +291,9 @@ ports:						## print the OSAL ports this tree ships
 state:						## print the optional radio-state source
 	@$(MANIFEST) state
 
+validate:					## print the optional radio-value validation source
+	@$(MANIFEST) validate
+
 options:					## print the compile-time options and their defaults
 	@echo 'Undefined takes the default below, which is not always off:'
 	@echo ''
@@ -326,5 +340,6 @@ distclean: clean				## clean, plus the generated documentation
 	rm -rf doc/generated
 
 .PHONY: help portcheck check check-options check-manifest check-emulation \
-	check-probe \
-	lib version version-full tag ports options sources doc clean distclean
+	check-probe check-validate \
+	lib version version-full tag ports options sources doc clean distclean \
+	state validate

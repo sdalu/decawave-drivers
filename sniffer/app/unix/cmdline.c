@@ -7,17 +7,22 @@
 
 #include <popt.h>
 
+#include <dw1000/dw1000_validate.h>
+
 #include "config.h"
 #include "cmdline.h"
 #include "eth.h"
 #include "uwb.h"
 
-#define CMDLINE_UWB_VALIDATE(_name, _var, _msg)			\
+/* Every value on this command line is the driver's to judge, radio
+ * fields and antenna delay alike -- see <dw1000/dw1000_validate.h>.
+ */
+#define CMDLINE_DW1000_VALIDATE(_name, _var, _msg)		\
     do {							\
-	if (! uwb_validate_##_name((_var), NULL, (_msg))) {	\
+	if (! dw1000_validate_##_name((_var), NULL, (_msg))) {	\
 	    DIE("uwb: %s", *(_msg));				\
 	}							\
-    } while(0) 
+    } while(0)
 
 int
 cmdline_parse(struct config *config, int argc, const char* argv[])
@@ -91,32 +96,32 @@ cmdline_parse(struct config *config, int argc, const char* argv[])
 	    exit(EXIT_OK);
 
 	case  1:
-	    CMDLINE_UWB_VALIDATE(channel, config->channel,  &errmsg);
+	    CMDLINE_DW1000_VALIDATE(channel, config->channel,  &errmsg);
 	    break;
 	case  2:
-	    CMDLINE_UWB_VALIDATE(bitrate, config->bitrate,  &errmsg);
+	    CMDLINE_DW1000_VALIDATE(bitrate, config->bitrate,  &errmsg);
 	    break;
         case  3:
-	    CMDLINE_UWB_VALIDATE(prf,     config->prf,      &errmsg);
+	    CMDLINE_DW1000_VALIDATE(prf,     config->prf,      &errmsg);
 	    break;
 	case  4:
-	    CMDLINE_UWB_VALIDATE(plen,    config->tx_plen,  &errmsg);
+	    CMDLINE_DW1000_VALIDATE(plen,    config->tx_plen,  &errmsg);
 	    break;
 	case  5:
-	    CMDLINE_UWB_VALIDATE(pac,     config->rx_pac,   &errmsg);
+	    CMDLINE_DW1000_VALIDATE(pac,     config->rx_pac,   &errmsg);
 	    break;
 	case  6:
-	    CMDLINE_UWB_VALIDATE(pcode,   config->tx_pcode, &errmsg);
+	    CMDLINE_DW1000_VALIDATE(pcode,   config->tx_pcode, &errmsg);
 	    break;
 	case  7:
-	    CMDLINE_UWB_VALIDATE(pcode,   config->rx_pcode, &errmsg);
+	    CMDLINE_DW1000_VALIDATE(pcode,   config->rx_pcode, &errmsg);
 	    break;
 
 	case 21:
-	    CMDLINE_UWB_VALIDATE(delay,   config->tx_delay, &errmsg);
+	    CMDLINE_DW1000_VALIDATE(antenna_delay, config->tx_delay, &errmsg);
 	    break;
 	case 22:
-	    CMDLINE_UWB_VALIDATE(delay,   config->rx_delay, &errmsg);
+	    CMDLINE_DW1000_VALIDATE(antenna_delay, config->rx_delay, &errmsg);
 	    break;
 	}
 

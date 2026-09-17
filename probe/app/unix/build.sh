@@ -125,6 +125,13 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
 
     set -- "$@" "$appdir/main.c"
     set -- "$@" $DW1000_SOURCES $DW1000_OSAL_SOURCES
+    # ... and the optional radio-state source, which main.c's start-up
+    # read-back calls into (dw1000_get_radio_state(),
+    # dw1000_radio_state_format()). It is deliberately not part of
+    # DW1000_SOURCES, so a consumer that wants it names it -- and this
+    # one did not, so the link has been failing on those two symbols
+    # since they were added.
+    set -- "$@" $DW1000_SOURCES_STATE
     set -- "$@" $PROBE_SOURCES
     set -- "$@" $BITTERS_TAKEN
 

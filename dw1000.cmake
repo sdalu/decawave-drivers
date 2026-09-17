@@ -18,6 +18,11 @@
 #   DW1000_SOURCES           the whole core
 #   DW1000_SOURCES_CORE      registers, configuration, receive, events
 #   DW1000_SOURCES_SEND      dw1000_tx_send() and the vectored variants
+#   DW1000_SOURCES_VALIDATE  human radio values (channel, kbps, MHz,
+#                            symbols) to dw1000_radio_t fields, with a
+#                            message; part of DW1000_SOURCES, and named
+#                            separately for a consumer that takes _CORE
+#                            alone
 #
 #   DW1000_OSAL_PORTS        the ports this tree ships
 #   DW1000_OSAL_<PORT>_INCLUDE_DIR   for PORT in CF2 CHIBIOS EMULATION MYNEWT
@@ -111,9 +116,23 @@ set(DW1000_SOURCES_SEND
 set(DW1000_SOURCES_STATE
     ${CMAKE_CURRENT_LIST_DIR}/hw/drivers/dw1000/src/dw1000_state.c)
 
+# Turning a channel number or a bitrate in kbps into the field
+# dw1000_radio_t wants, with a message when it cannot. Unlike _STATE it IS
+# part of DW1000_SOURCES below: anything that configures a radio from a
+# value it did not write itself needs this, and a caller left to write the
+# table by hand gets it wrong -- which is the history in
+# dw1000/dw1000_validate.h.
+#
+# Still named on its own, because DW1000_SOURCES carries _SEND with it and
+# a receive-only consumer takes _CORE instead; sniffer/app/unix is exactly
+# that, and asks for this by name.
+set(DW1000_SOURCES_VALIDATE
+    ${CMAKE_CURRENT_LIST_DIR}/hw/drivers/dw1000/src/dw1000_validate.c)
+
 set(DW1000_SOURCES
     ${DW1000_SOURCES_CORE}
-    ${DW1000_SOURCES_SEND})
+    ${DW1000_SOURCES_SEND}
+    ${DW1000_SOURCES_VALIDATE})
 
 # dw1000.c uses <math.h>. Nothing to link on a freestanding target, where
 # the compiler's own runtime supplies it.

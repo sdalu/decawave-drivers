@@ -101,8 +101,8 @@ static dw1000_config_t DW0_config = {
      * receive".
      */
     .dblbuff          = 1,
-    .tx_antenna_delay = UWB_ANTENNA_DELAY_METER_TO_CLOCK(154.6)/2,
-    .rx_antenna_delay = UWB_ANTENNA_DELAY_METER_TO_CLOCK(154.6)/2,
+    .tx_antenna_delay = DW1000_METER_TO_CLOCK(154.6)/2,
+    .rx_antenna_delay = DW1000_METER_TO_CLOCK(154.6)/2,
     /* rx_error is not optional here: dw1000_initialise() refuses dblbuff
      * without one and returns -1, because the overrun recovery re-arms
      * nothing by itself and the receiver would stop for good on the first
@@ -228,14 +228,19 @@ uwb_init(struct uwb_config *uwb_cfg)
 int
 uwb_config_dw1000_radio(struct dw1000_radio *radio)
 {
-    if (! (((radio->prf == DW1000_PRF_64MHZ) &&
-	    (radio->tx_pcode >= 9) && (radio->tx_pcode <= 24)) ||
-	   ((radio->prf == DW1000_PRF_16MHZ) &&
-	    (radio->tx_pcode >= 1) && (radio->tx_pcode <=  8))) )
+    dw1000_t *drv = &DW0;
+
+    /* The hand-written PRF/preamble-code check that used to be here is
+     * gone: dw1000_configure() runs _dw1000_radio_is_valid() on every
+     * call, which checks the same rule and more (it looks at rx_pcode
+     * too, which this did not, and at the preamble length against the
+     * build's options). Its return value used to be discarded, so a
+     * configuration it refused left the chip untouched while this
+     * reported success. It is checked now.
+     */
+    if (dw1000_configure(drv, radio) < 0)              // Configure radio
 	return -1;
 
-    dw1000_t *drv = &DW0;
-    dw1000_configure(drv,radio); 		       // Configure radio
     dw1000_rx_set_timeout(drv, 0);                     // No RX timeout
 
     return 0;

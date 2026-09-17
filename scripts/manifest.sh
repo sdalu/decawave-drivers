@@ -95,9 +95,14 @@ send)     cmvar DW1000_SOURCES_SEND ;;
 # Optional, and absent from `sources` for that reason: a consumer asks
 # for it by name or does not compile it. See dw1000/dw1000_state.h.
 state)    cmvar DW1000_SOURCES_STATE ;;
+# Part of `sources`, unlike state. Answered on its own as well, for a
+# consumer that takes `core` rather than `sources` because it does not
+# transmit. See dw1000/dw1000_validate.h.
+validate) cmvar DW1000_SOURCES_VALIDATE ;;
 # DW1000_SOURCES is composed of the two in cmake syntax the Makefile
 # cannot expand, so compose it here from the same two pieces.
-sources)  echo "`cmvar DW1000_SOURCES_CORE` `cmvar DW1000_SOURCES_SEND`" ;;
+sources)  echo "`cmvar DW1000_SOURCES_CORE` `cmvar DW1000_SOURCES_SEND`" \
+	       "`cmvar DW1000_SOURCES_VALIDATE`" ;;
 libs)     out=; for l in `cmvar DW1000_LIBS`; do out="$out -l$l"; done
 	  echo $out ;;
 ports)    cmvar DW1000_OSAL_PORTS ;;
@@ -154,6 +159,7 @@ vars)
     # has to ask twice fails differently against a driver too old to
     # answer, which is exactly what happened to rpi-redskin's build.sh.
     state=$d/`cmvar DW1000_SOURCES_STATE`
+    validate=$d/`cmvar DW1000_SOURCES_VALIDATE`
     inc=$d/`cmvar DW1000_INCLUDE_DIR`
     oinc=$d/`portvar "$port" INCLUDE_DIR`
     osrc=$d/`portvar "$port" SOURCES`
@@ -163,8 +169,9 @@ vars)
 
     printf "DW1000_SOURCES_CORE='%s'\n" "$core"
     printf "DW1000_SOURCES_SEND='%s'\n" "$send"
-    printf "DW1000_SOURCES='%s'\n"      "$core $send"
+    printf "DW1000_SOURCES='%s'\n"      "$core $send $validate"
     printf "DW1000_SOURCES_STATE='%s'\n" "$state"
+    printf "DW1000_SOURCES_VALIDATE='%s'\n" "$validate"
     printf "DW1000_OSAL='%s'\n"         "$port"
     printf "DW1000_OSAL_SOURCES='%s'\n" "$osrc"
     printf "DW1000_INCLUDE='%s'\n"      "$inc"
@@ -179,6 +186,7 @@ vars)
     echo "usage: manifest.sh version|incdir|core|send|sources|libs|ports|objs" >&2
     echo "       manifest.sh inc|src <port>" >&2
     echo "       manifest.sh vars <port> <directory>" >&2
+    echo "       manifest.sh validate" >&2
     echo "       manifest.sh probeincdir|probecore|probeexchange|probesrc|probeports" >&2
     echo "       manifest.sh probeportsrc <port>" >&2
     exit 1

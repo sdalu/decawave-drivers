@@ -11,6 +11,7 @@
 #include <poll.h>
 
 #include <bitters.h>
+#include <dw1000/dw1000_validate.h>
 
 #include "config.h"
 #include "cmdline.h"
@@ -215,19 +216,35 @@ int main(int argc, const char* argv[]) {
     
     /* Initialize UWB
      */
-    uwb_config.antenna.tx_delay = config.tx_delay;
-    uwb_config.antenna.rx_delay = config.rx_delay;
+    /* Metres on the command line, ticks in the chip -- and the conversion
+     * used to be computed and thrown away. cmdline_parse() validates with
+     * a NULL out parameter, so what landed here was the raw metres: an
+     * explicit --tx_delay 154.6 set 154 ticks, about 0.7 m, instead of
+     * 32951. The defaults (UINT16_MAX) mean "leave the driver's own
+     * alone" and must not be converted, which is what the guard is for.
+     */
+    if (config.tx_delay != UINT16_MAX)
+	dw1000_validate_antenna_delay(config.tx_delay,
+				      &uwb_config.antenna.tx_delay, NULL);
+    if (config.rx_delay != UINT16_MAX)
+	dw1000_validate_antenna_delay(config.rx_delay,
+				      &uwb_config.antenna.rx_delay, NULL);
     if (uwb_init(&uwb_config) < 0) {
 	DIE("failed to initialise dw1000 driver");
     }
 
-    uwb_validate_channel(config.channel,  &dw1000_radio.channel,  NULL);
-    uwb_validate_bitrate(config.bitrate,  &dw1000_radio.bitrate,  NULL);
-    uwb_validate_prf    (config.prf,      &dw1000_radio.prf,      NULL);
-    uwb_validate_pcode  (config.tx_pcode, &dw1000_radio.tx_pcode, NULL);
-    uwb_validate_pcode  (config.rx_pcode, &dw1000_radio.rx_pcode, NULL);
-    uwb_validate_plen   (config.tx_plen,  &dw1000_radio.tx_plen,  NULL);
-    uwb_validate_pac    (config.rx_pac,   &dw1000_radio.rx_pac,   NULL);
+    /* Already checked, with the message, in cmdline_parse(); this is the
+     * pass that writes the encoded values into the radio. The combination
+     * they make is not checked here and must not be -- that is
+     * dw1000_configure()'s job, by way of uwb_config_dw1000_radio() below.
+     */
+    dw1000_validate_channel(config.channel,  &dw1000_radio.channel,  NULL);
+    dw1000_validate_bitrate(config.bitrate,  &dw1000_radio.bitrate,  NULL);
+    dw1000_validate_prf    (config.prf,      &dw1000_radio.prf,      NULL);
+    dw1000_validate_pcode  (config.tx_pcode, &dw1000_radio.tx_pcode, NULL);
+    dw1000_validate_pcode  (config.rx_pcode, &dw1000_radio.rx_pcode, NULL);
+    dw1000_validate_plen   (config.tx_plen,  &dw1000_radio.tx_plen,  NULL);
+    dw1000_validate_pac    (config.rx_pac,   &dw1000_radio.rx_pac,   NULL);
 
     if (uwb_config_dw1000_radio(&dw1000_radio) < 0) {
 	DIE("selected UWB configuration is invalid");

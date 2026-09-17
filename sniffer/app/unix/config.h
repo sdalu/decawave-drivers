@@ -48,10 +48,6 @@
     DIE(x " (%s)", ##__VA_ARGS__, strerror(errno))
 
 
-
-
-#define SPEED_OF_LIGHT 		299792458.0
-
 #include "eth.h"
     
 struct config {

@@ -84,7 +84,7 @@ case $gitver in
     *) echo "  git part does not start with '+': '$gitver'"; bad=1 ;;
 esac
 
-for q in incdir core send; do
+for q in incdir core send validate; do
     v=`$m $q`
     if [ -z "$v" ]; then
 	echo "  manifest: $q is empty"; bad=1

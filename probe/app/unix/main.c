@@ -105,10 +105,15 @@ static dw1000_spi_driver_t dw1000_spi_drv = {
  * kept the same here since this app targets the same hardware, so the
  * two remain comparable the way the Zephyr probe and redskin are on
  * their bench. */
-#define PROBE_SPEED_OF_LIGHT_MPS 299792458LL
-#define PROBE_METER_TO_CLOCK(dm)					\
-    (((int64_t)(dm) * DW1000_TIME_CLOCK_HZ) / (10 * PROBE_SPEED_OF_LIGHT_MPS))
-#define PROBE_ANTENNA_DELAY_ROUNDTRIP_M 1546
+/* The conversion is DW1000_METER_TO_CLOCK() in <dw1000/dw1000.h> now,
+ * where the sniffer and rpi-redskin reach it too -- this file used to
+ * spell its own, in integer decimetres, because metres as an integer are
+ * too coarse for an antenna delay (one metre is 213 ticks). The driver's
+ * is floating point for that reason, so the figure is written in metres
+ * as it is everywhere it is measured and written down. Same answer:
+ * 154.6 m is 32951 ticks either way, 16475 after halving.
+ */
+#define PROBE_ANTENNA_DELAY_ROUNDTRIP_M 154.6
 
 static void dw1000_cb_tx_done(dw1000_t *dw, uint32_t status);
 static void dw1000_cb_rx_timeout(dw1000_t *dw, uint32_t status);
@@ -130,8 +135,8 @@ static const dw1000_config_t dw1000_config = {
     .lde_loading      = 1,
     .rxauto           = 1,
     .dblbuff          = 1, /* EXPERIMENT 2026-09-16 */
-    .tx_antenna_delay = PROBE_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
-    .rx_antenna_delay = PROBE_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
+    .tx_antenna_delay = DW1000_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
+    .rx_antenna_delay = DW1000_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
     .cb.tx_done       = dw1000_cb_tx_done,
     .cb.rx_timeout    = dw1000_cb_rx_timeout,
     .cb.rx_error      = dw1000_cb_rx_error,

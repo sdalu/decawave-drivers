@@ -153,6 +153,58 @@
     (DW1000_CLOCK_TO_USEC(x)/1000)
 
 /**
+ * @brief Speed of light, in metres per second
+ *
+ * As a double, because the two conversions below need it to be: see
+ * @p DW1000_METER_TO_CLOCK().
+ *
+ * Definable from outside, and left alone if it already is, so that a
+ * caller working to a propagation velocity other than this one -- a
+ * calibrated figure, or a medium that is not air -- can set it once for
+ * the whole build rather than avoid the conversions. Define it before
+ * this header is reached, on the command line or in a configuration
+ * header, and every use here follows.
+ */
+#if !defined(DW1000_SPEED_OF_LIGHT_MPS)
+#define DW1000_SPEED_OF_LIGHT_MPS 299792458.0
+#endif
+
+/**
+ * @brief Convert metres of flight to DW1000 clock unit
+ *
+ * One metre is about 213.1 ticks and one tick about 4.7 mm, which is why
+ * this is floating point where @p DW1000_USEC_TO_CLOCK() is not: metres
+ * as an integer would quantise to the nearest 213 ticks, and for the
+ * antenna delays in use around here (154.2 m, 154.6 m of round trip)
+ * writing 154 instead of 154.6 is 128 ticks out -- 0.6 m of range.
+ *
+ * Meant for a compile-time constant, where it folds and no floating
+ * point reaches the image:
+ *
+ * @code
+ *     .tx_antenna_delay = DW1000_METER_TO_CLOCK(154.6) / 2,
+ *     .rx_antenna_delay = DW1000_METER_TO_CLOCK(154.6) / 2,
+ * @endcode
+ *
+ * Deliberately not rounded, unlike the µsec and msec conversions: every
+ * caller so far halves the result, which would undo it.
+ *
+ * @note An antenna delay is a register field of 16 bits. Use
+ *       @p dw1000_validate_antenna_delay() to convert one that came from
+ *       a user, which range-checks it and says what is wrong.
+ */
+#define DW1000_METER_TO_CLOCK(x)				\
+    (((x) * (double)DW1000_TIME_CLOCK_HZ) / DW1000_SPEED_OF_LIGHT_MPS)
+
+/**
+ * @brief Convert DW1000 clock unit to metres of flight
+ *
+ * The other direction, for turning a measured interval into a distance.
+ */
+#define DW1000_CLOCK_TO_METER(x)				\
+    (((x) * DW1000_SPEED_OF_LIGHT_MPS) / (double)DW1000_TIME_CLOCK_HZ)
+
+/**
  * @brief Length of CRC field
  */
 #define DW1000_CRC_LENGTH 2
