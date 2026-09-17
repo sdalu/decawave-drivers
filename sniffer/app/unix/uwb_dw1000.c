@@ -26,6 +26,7 @@
 /*======================================================================*/
 
 static void _rx_ok(dw1000_t *drv, uint32_t status, size_t length, bool ranging);
+static void _rx_error(dw1000_t *drv, uint32_t status);
 
 
 
@@ -88,11 +89,29 @@ static dw1000_config_t DW0_config = {
     .leds_blink_time  = 3,
     .lde_loading      = 1,     // Loading of LDE microcode
     .rxauto           = 1,     // Automatically re-enable receiver
+    /* Double receive buffer (UM 4.3.3): the driver re-enables the
+     * receiver in the good-frame path *before* calling rx_ok, so the next
+     * frame lands in the other buffer while this one is read out, and it
+     * toggles the host side buffer pointer as soon as rx_ok returns. Two
+     * obligations follow, both met by _rx_ok() below and by capture.c:
+     * the callback must not re-enable the receiver itself, and it must
+     * read the frame out before returning -- RX_BUFFER swings with the
+     * pointer. rxauto stays on beside it, as probe and rpi-redskin both
+     * have it. See hw/drivers/dw1000/README.md, "Double buffered
+     * receive".
+     */
+    .dblbuff          = 1,
     .tx_antenna_delay = UWB_ANTENNA_DELAY_METER_TO_CLOCK(154.6)/2,
     .rx_antenna_delay = UWB_ANTENNA_DELAY_METER_TO_CLOCK(154.6)/2,
+    /* rx_error is not optional here: dw1000_initialise() refuses dblbuff
+     * without one and returns -1, because the overrun recovery re-arms
+     * nothing by itself and the receiver would stop for good on the first
+     * overrun. rx_timeout stays NULL -- uwb_config_dw1000_radio() sets
+     * the receive timeout to 0, so no timeout is ever reported.
+     */
     .cb               = { .tx_done    = NULL,
 			  .rx_timeout = NULL,
-			  .rx_error   = NULL,
+			  .rx_error   = _rx_error,
 			  .rx_ok      = NULL, },
 };
 
@@ -104,10 +123,27 @@ static dw1000_config_t DW0_config = {
 static void
 _rx_ok(dw1000_t *drv, uint32_t status, size_t length, bool ranging)
 {
+    (void)drv;
+
     if (uwb_cb_rx_ok == NULL)
 	return;
 
     uwb_cb_rx_ok(status, length, ranging);
+}
+
+
+/* Every receive error, the overrun included, arrives here, and re-arming
+ * is the host's job for all of them -- the driver's overrun recovery puts
+ * the chip back in order and reports, but enables nothing. An overrun
+ * (RXOVRR in the status) means frames were lost on the chip rather than in
+ * the ring; it is not distinguished here because the response is the same.
+ */
+static void
+_rx_error(dw1000_t *drv, uint32_t status)
+{
+    (void)status;
+
+    dw1000_rx_start(drv, DW1000_RX_IMMEDIATE);
 }
 
 

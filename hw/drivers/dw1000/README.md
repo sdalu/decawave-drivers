@@ -287,6 +287,21 @@ Worth reading as a whole before turning `cfg->dblbuff` on. It shifted
 SDS-TWR distances by 6 to 10 cm on every pair when it was measured, with
 half the spread; which mode carries the bias is not established.
 
+### `rxauto` is a separate bit, and both applications here keep it on
+
+`cfg->dblbuff` and `cfg->rxauto` are independent. `rxauto` becomes `SYS_CFG`'s
+`RXAUTR`, written once by `dw1000_initialise()`; `dblbuff` is what makes
+`dw1000_process_events()` write `RXENAB` itself in the good-frame path, before
+calling `rx_ok`. Both applications in this tree that turn double buffering on
+leave `rxauto` set as well -- `probe/app/unix/main.c` and `rpi-redskin/main.c`
+-- so that pairing is what the bench results above were obtained with, and the
+one to start from.
+
+What is *not* established is whether `rxauto` is load-bearing in this mode or
+merely harmless: nothing here has been measured with `dblbuff` set and
+`rxauto` clear. Neither bit covers a timeout, so an `rx_timeout` callback
+re-arms for itself either way.
+
 ### The `rx_ok` contract changes
 
 Two obligations, both absolute:
@@ -300,6 +315,31 @@ Two obligations, both absolute:
    only queues the event and reads the frame later gets the previous frame's
    data with the current frame's length. This was found with the Ruby gem,
    in exactly that shape.
+
+### Read out in the callback, but do the work outside it
+
+Obligation 2 says read everything before returning; it does not say *process*
+it there, and the two pull in opposite directions. The callback is open while
+the receiver is already armed and the next frame is landing in the other
+buffer, so anything slow inside it is time the following frame's read-out is
+waiting on -- and a third frame arriving while both buffers are held is the
+overrun above.
+
+The shape that resolves it, in `probe/src/exchange.c` and again in
+`sniffer/app/unix/capture.c`: the callback does the SPI read-out into a ring
+of slots and returns; whatever costs real time -- a `sendmsg(2)`, a
+classification, a write to a file -- happens afterwards, from the loop, on
+what the ring holds. A monotonic count of frames captured indexes the ring
+(`seq % depth`), the producer never refuses, and a consumer that has fallen
+more than the depth behind detects it on its next read and counts the loss.
+`probe` needs a lock around both ends because its producer is on the port's
+event thread; an application whose producer and consumer are the same thread
+needs none.
+
+`probe` reached this the hard way and the history is worth knowing: a single
+slot instead of a ring silently discarded a peer's answer that arrived
+between two waits, which cost an entire pairing (0 of 20 resolved). See the
+commit "probe/exchange: hold received frames in a ring, not one slot".
 
 ### Two registers the read-out needs do not swing
 
@@ -318,12 +358,24 @@ issues `HRBPT` (which is the only thing that clears `RXOVRR`, UM §4.3.5) and
 calls `rx_error` with `RXOVRR` in the status. Re-arm as you would for any
 other error.
 
-> [!WARNING]
-> A live defect sits here. On the bench, a node that takes one overrun stops
-> receiving for good, with an `rx_error` callback registered and the
-> recovery running. It reproduces on rpi-d through ruby-dw1000's
-> `test_an_overrun_does_not_leave_the_receiver_deaf`, and it is not the
-> missing-callback case described above. Unexplained as of 2026-09-16.
+> [!NOTE]
+> This was carried here as a live defect until 2026-09-16 -- a node that took
+> one overrun appeared to stop receiving for good, with the callback
+> registered and the recovery running, reproduced through ruby-dw1000's
+> `test_an_overrun_does_not_leave_the_receiver_deaf`. It is not a driver
+> defect. Measured the same day on a quiet channel, with the flood paced so
+> its frames reach the air:
+>
+> ```text
+> rx_ok=3590 matched=3590 before_ovr=0 after_ovr=3590 rx_error=3 overruns=3
+> ```
+>
+> Three overruns, and 3590 of 4000 frames delivered after the first of them.
+> The zero was two faults in the test: its flood finishes 412 ms before the
+> receiver's stall ends, so nothing remains to hear "after"; and it outruns
+> the one-frame-at-a-time send discipline, so almost none of it transmits at
+> all. See AUDIT.md, "Settled: the overrun recovery works, and the test could
+> not see it".
 
 ### `dw1000_rx_start()` syncs the buffer pointers
 

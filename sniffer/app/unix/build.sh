@@ -20,7 +20,7 @@
 #
 # Unlike the probe there is nothing here to ask the manifest for: the
 # sniffer is an application and nothing else, so it exports no sources,
-# has no port layer, and appears nowhere in dw1000.cmake. Its five
+# has no port layer, and appears nowhere in dw1000.cmake. Its six
 # translation units all sit in this directory.
 #
 # Environment, each overridable:
@@ -129,7 +129,8 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
     set -- "$@" "-DBITTERS_VERSION_GIT=\"$BITTERS_VERSION_GIT\""
 
     set -- "$@" "$appdir/main.c"     "$appdir/cmdline.c"
-    set -- "$@" "$appdir/eth.c"      "$appdir/uwb_dw1000.c"
+    set -- "$@" "$appdir/eth.c"      "$appdir/capture.c"
+    set -- "$@" "$appdir/uwb_dw1000.c"
     set -- "$@" "$appdir/uwb_dw1000_validate.c"
 
     # DW1000_SOURCES_CORE without _SEND: the sniffer never transmits, and

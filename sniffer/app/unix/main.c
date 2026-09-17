@@ -16,6 +16,7 @@
 #include "cmdline.h"
 #include "uwb.h"
 #include "eth.h"
+#include "capture.h"
 
 #ifndef __arraycount
 #define	__arraycount(__x)	(sizeof(__x) / sizeof(__x[0]))
@@ -23,16 +24,21 @@
 
 
 
+/* Producer half of the ring, and nothing else.
+ *
+ * Under double buffering this runs with the receiver already armed and the
+ * next frame landing in the other buffer, so it does the one thing that
+ * cannot wait -- the read-out, inside capture_put() -- and returns. What
+ * used to be here, a per-frame printf and a blocking sendmsg(2), now
+ * happens in loop() below, on what the ring holds. It must not re-enable
+ * the receiver: the driver already did. See capture.c.
+ */
 static void
 _rx_ok(uint32_t status, size_t length, bool ranging) {
-    printf("GOT RX_OK: size=%ld\n", length);
-    uint8_t data[length];
-    uwb_read_frame_data(data, length, 0);
-    
-    uint8_t addr[] = { 0xdc, 0x4a, 0x3e, 0x06, 0x6f, 0x7b };
-    if (eth_send(addr, data, length) < 0) {
-	WARN_ERRNO("failed sending ethernet frame");
-    }
+    (void)status;
+    (void)ranging;
+
+    capture_put(length);
 }
 
 
@@ -124,8 +130,19 @@ int loop(void) {
     struct pollfd pollfd[1];
     uwb_fill_pollfd(&pollfd[0]);
 
+    /* Armed once, here, and not again per iteration. Under double
+     * buffering the driver re-enables the receiver itself in the
+     * good-frame path, and errors re-arm from _rx_error() in
+     * uwb_dw1000.c, so there is nothing left for this loop to arm. The
+     * re-arm that used to sit at the bottom of it is the mistake probe
+     * removed in "probe: receive double-buffered, and stop arming the
+     * receiver off": an unconditional re-arm around a wait turns the
+     * receiver off for exactly the window a frame arrives in.
+     */
     uwb_rx_start();
-    
+
+    unsigned long reported_lost = 0;
+
     while(1) {
 	int n = poll(pollfd, __arraycount(pollfd), -1);
 	if (n <= 0) continue;
@@ -133,7 +150,31 @@ int loop(void) {
 	if (pollfd[0].revents) {
 	    uwb_wait_events();
 	    uwb_process_events();
-	    uwb_rx_start();
+
+	    /* Drain what the callbacks captured. This is where the frame
+	     * leaves the program, deliberately outside the callback that
+	     * received it -- eth_send() is a blocking sendmsg(2).
+	     */
+	    struct capture_frame frame;
+	    while (capture_get(&frame)) {
+		if (config.verbose) {
+		    INFO("GOT RX_OK: size=%zu", frame.length);
+		}
+		if (eth_send(config.dst_addr, frame.data, frame.length) < 0) {
+		    WARN_ERRNO("failed sending ethernet frame");
+		}
+	    }
+
+	    /* Frames the ring had to overwrite before they could be sent.
+	     * Reported when the count moves rather than per frame, so a
+	     * burst of losses does not itself cost time in this loop.
+	     */
+	    const struct capture_stats *stats = capture_stats();
+	    if (stats->overrun != reported_lost) {
+		WARN("lost %lu frame(s): forwarding fell behind the radio",
+		     stats->overrun - reported_lost);
+		reported_lost = stats->overrun;
+	    }
 	}
     }
 }
