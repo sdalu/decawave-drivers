@@ -1,19 +1,19 @@
 #!/bin/sh
 # Stage 0 of the probe: record and role are free of <dw1000/dw1000.h>, so
-# the format can be proved with no chip, no driver and no radio -- just
+# the format can be proved with no chip, no driver and no radio: just
 # probe/src, the emulation port, and tests/probe/format.c. So this is the
 # one probe check the tree can actually *run*, the same reason
 # check-emulation.sh exists for the driver: build the three into a
 # temporary directory and run it.
 #
 # probe/src also holds exchange.c, which is NOT free of <dw1000/dw1000.h>
-# -- it is chip mechanism, and drives the chip directly -- so proving it
+# (it is chip mechanism, and drives the chip directly), so proving it
 # compiles and links needs the driver core and an OSAL port alongside the
 # probe port, exactly like check-emulation.sh needs them for the driver
 # itself. Pulling those in here, from the manifest, with no Zephyr tree
 # anywhere in sight, is what proves exchange.c's Zephyr coupling really
 # is gone: if it still referenced a Zephyr header or type, this would not
-# link. format.c itself calls nothing in exchange.c -- linking it in is
+# link. format.c itself calls nothing in exchange.c; linking it in is
 # the check, the same way format.c already links port/emulation's clock
 # in without calling it just to prove that builds too.
 #
@@ -25,7 +25,7 @@
 #
 # The second is why exchange.c being linked in is no longer merely a
 # link check. It overrides the two POLL budgets, because a gate cannot
-# prove a wait ends by waiting out a thirty-second one; the defaults are
+# prove a wait ends by waiting out a sixty-second one; the defaults are
 # a property of the bench's harness and probe/src/exchange.c makes them
 # overridable for exactly this.
 #
@@ -38,7 +38,7 @@ top=`dirname "$0"`/..
 cc=${CC:-cc}
 cflags=${CFLAGS:--Wall -Wextra}
 
-# From dw1000.cmake, like everything else that needs to know the files --
+# From dw1000.cmake, like everything else that needs to know the files;
 # never hardcoded here, which is what tests/check-manifest.sh punishes.
 m="sh $top/scripts/manifest.sh"
 inc="-I$top/`$m probeincdir` -I$top/`$m incdir` -I$top/`$m inc emulation`"
@@ -56,9 +56,9 @@ gitver=`sh "$top/scripts/gitversion.sh"`
 tmp=`mktemp -d`
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-# 0.4 s for the first POLL and 0.2 s for each one after it, against 30 s
+# 0.4 s for the first POLL and 0.2 s for each one after it, against 60 s
 # and 2 s in the field. Both steps of the exchange test spend their whole
-# budget by construction -- nothing ever answers -- so the run is about a
+# budget by construction (nothing ever answers), so the run is about a
 # second and a half, and the test's own alarm(20) is the backstop.
 budgets='-DPROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US=400000
 	 -DPROBE_EXCHANGE_POLL_TIMEOUT_US=200000'

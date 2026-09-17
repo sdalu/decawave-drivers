@@ -1,15 +1,15 @@
 #!/bin/sh
-# The README lists eight compile-time options, and nothing in this tree
+# The README lists seven compile-time options, and nothing in this tree
 # selects any of them: whoever vendors the driver does, in their own build.
 # So an option that stops compiling stops compiling silently, and is found
 # by the one consumer who wanted it. DW1000_WITH_EXTENDED_SEND=0 spent an
 # unknown length of time giving fourteen errors that way.
 #
-# Compile the core over all 256 combinations, against the null port -- the
+# Compile the core over all 128 combinations, against the null port, the
 # one OSAL that needs no vendor tree and no hardware. Run by `make check`.
 #
 # Only -fsyntax-only: this is about the options being coherent, not about
-# codegen, and 256 real compiles would cost more than the answer is worth.
+# codegen, and 128 real compiles would cost more than the answer is worth.
 #
 # POSIX sh and awk only.
 set -e
@@ -22,7 +22,7 @@ m="sh $top/scripts/manifest.sh"
 inc="-I$top/`$m incdir` -I$top/`$m inc null`"
 src=
 # `state` is optional and absent from `sources`, so nothing else would
-# ever compile it -- which is exactly how an optional file stops
+# ever compile it, which is exactly how an optional file stops
 # compiling without anyone noticing. Named here on purpose.
 for f in `$m sources` `$m state` `$m src null`; do src="$src $top/$f"; done
 
@@ -47,7 +47,7 @@ run=0
 
 # One option breaking the build breaks it in half the matrix, so failures
 # are grouped by the compiler output they produced rather than printed as
-# they happen: 128 copies of the same fourteen errors is not a report.
+# they happen: 64 copies of the same fourteen errors is not a report.
 # The group's file names come from a checksum of that output.
 : > "$tmp/order"
 
@@ -57,7 +57,7 @@ echo "options: $total combinations of $n options, port/null, $cc"
 printf '  '
 
 # Counting to 2^n and reading the bits off the counter, rather than
-# nesting eight loops. `expr` and `test` are all this needs, so it stays
+# nesting seven loops. `expr` and `test` are all this needs, so it stays
 # in POSIX sh.
 i=0
 while [ "$i" -lt "$total" ]; do
@@ -96,14 +96,14 @@ done
 
 # A total that is not a whole number of rows would leave the last row
 # unterminated. It always is here, but the script should not depend on
-# eight being the number of options.
+# seven being the number of options.
 if [ $(( run % row )) -ne 0 ]; then
     printf ' %4d/%d\n' "$run" "$total"
 fi
 
 # The options every member of a group agrees on are the ones that caused
 # it; the ones that vary across the group are along for the ride. Saying
-# so turns "128 combinations failed" into the name of the option to look
+# so turns "64 combinations failed" into the name of the option to look
 # at. Positions where the group disagrees print nothing.
 common() {
     awk -v opts="`echo $OPTS`" '

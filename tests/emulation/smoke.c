@@ -7,7 +7,7 @@
 
 /*
  * Smoke test for port/emulation: the driver, the register model, and a
- * medium -- all three in one process, with no chip and no server to
+ * medium, all three in one process, with no chip and no server to
  * start.
  *
  * The medium is a thread rather than a program because that is the whole
@@ -22,15 +22,19 @@
  * Two rules the model imposes on any medium, both learned the hard way
  * (see osal.c):
  *
- *  - the IRQ line callback runs on the rsvc reader thread, inside the
- *    model's own non-recursive mutex, and every driver call takes that
- *    mutex to do its SPI transfers. So the callback here only signals a
- *    condition variable; dw1000_process_events() is called by the main
- *    thread, which holds nothing.
+ *  - the IRQ line callback runs on the rsvc reader thread. The model's
+ *    mutex is released before it is called (osal.c, e_irq_fire()), so
+ *    the deadlock against the driver's own SPI transfer is gone. The
+ *    prohibition is not, because it had two independent reasons and
+ *    only that one was fixed: the reader thread is the only thread that
+ *    matches reply datagrams, so a driver call from the callback waits
+ *    for a reply nobody is left to read. So the callback here only
+ *    signals a condition variable; dw1000_process_events() is called by
+ *    the main thread, which holds nothing.
  *
  *  - the rsvc client blocks on a semaphore for a reply. The wait is
  *    bounded now (rsvc_set_reply_timeout(), five seconds by default), so
- *    a request left unanswered is an error rather than a hang -- but
+ *    a request left unanswered is an error rather than a hang. But
  *    five seconds is a diagnosis, not a schedule, and a node that spends
  *    them has already lost whatever timing it had. So the stub still
  *    answers every type it is sent, with status -1 for one it does not
@@ -71,7 +75,7 @@
  * the framing a server has to speak is described in port/emulation/README.md
  * and written in rsvc.c, which is not a header. A medium server is
  * entitled to nothing but the document, so the test takes nothing else
- * either -- and a change to the framing that skips the document breaks
+ * either, and a change to the framing that skips the document breaks
  * this test, which is the point.
  */
 struct rsvc_inhdr {                     /* node -> server, 11 bytes */
