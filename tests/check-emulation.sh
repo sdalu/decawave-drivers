@@ -1,5 +1,5 @@
 #!/bin/sh
-# port/emulation is the one port that needs nothing installed -- no
+# port/emulation is the one port that needs nothing installed: no
 # vendor tree, no chip, and (since each test under tests/emulation
 # carries its own medium) no server either. So it is the one port this
 # tree can actually *run* the driver against, rather than merely
@@ -8,11 +8,11 @@
 #
 # Three tests, each saying in its own header comment what it covers:
 #   smoke   a frame out and a frame back, the four callbacks, a bad FCS
-#   timing  the parts that need a clock -- SYS_TIME, delayed send and
-#           receive, RXRFTO and RXPTO -- and the create/destroy cycle
-#   dblbuf  the double receive buffer: the swinging set, HRBPT, overrun
+#   timing  the parts that need a clock (SYS_TIME, delayed send and
+#           receive, RXRFTO and RXPTO) and the create/destroy cycle
+#   dblbuff the double receive buffer: the swinging set, HRBPT, overrun
 #
-# dblbuf is built twice. Errata 1.4 RX-1 needs a TX write past index 127,
+# dblbuff is built twice. Errata 1.4 RX-1 needs a TX write past index 127,
 # which the 127 byte standard frame cannot reach, so the second build
 # turns proprietary long frames on and the file compiles one extra step.
 #
@@ -43,7 +43,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 # Not a glob over tests/emulation: tests/check-manifest.sh exists to
 # punish a build step that discovers its own inputs, and a test added
 # here should be added here deliberately.
-tests="smoke timing dblbuf dblbuf_longframe"
+tests="smoke timing dblbuff dblbuff_longframe"
 
 status=0
 for t in $tests; do
@@ -51,10 +51,10 @@ for t in $tests; do
 
     # One file, two builds: see the note at the top.
     case $t in
-    dblbuf_longframe) file=dblbuf
-		      extra=-DDW1000_WITH_PROPRIETARY_LONG_FRAME=1 ;;
-    *)		      file=$t
-		      extra= ;;
+    dblbuff_longframe) file=dblbuff
+		       extra=-DDW1000_WITH_PROPRIETARY_LONG_FRAME=1 ;;
+    *)		       file=$t
+		       extra= ;;
     esac
 
     if ! $cc $cflags $extra $inc -DDW1000_VERSION_GIT="\"$gitver\"" \

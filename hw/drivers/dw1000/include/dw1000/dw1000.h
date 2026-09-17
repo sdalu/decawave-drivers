@@ -159,8 +159,8 @@
  * @p DW1000_METER_TO_CLOCK().
  *
  * Definable from outside, and left alone if it already is, so that a
- * caller working to a propagation velocity other than this one -- a
- * calibrated figure, or a medium that is not air -- can set it once for
+ * caller working to a propagation velocity other than this one (a
+ * calibrated figure, or a medium that is not air) can set it once for
  * the whole build rather than avoid the conversions. Define it before
  * this header is reached, on the command line or in a configuration
  * header, and every use here follows.
@@ -176,7 +176,7 @@
  * this is floating point where @p DW1000_USEC_TO_CLOCK() is not: metres
  * as an integer would quantise to the nearest 213 ticks, and for the
  * antenna delays in use around here (154.2 m, 154.6 m of round trip)
- * writing 154 instead of 154.6 is 128 ticks out -- 0.6 m of range.
+ * writing 154 instead of 154.6 is 128 ticks out: 0.6 m of range.
  *
  * Meant for a compile-time constant, where it folds and no floating
  * point reaches the image:
@@ -650,7 +650,7 @@ struct dw1000 {
 #define DW1000_RX_IMMEDIATE           0x00
 #define DW1000_RX_DELAYED_START       0x01
 #define DW1000_RX_IDLE_ON_DELAY_ERROR 0x02
-#define DW1000_RX_NO_DBLBUF_SYNC      0x04
+#define DW1000_RX_NO_DBLBUFF_SYNC     0x04
 
 // Frame filtering
 #define DW1000_FF_DISABLED         0
@@ -1343,7 +1343,7 @@ uint32_t dw1000_tx_get_power(dw1000_t *dw);
  * 3-bit coarse (DA gain) field holding (6 - coarse) and a 5-bit fine
  * (mixer gain) field, for 61 half-dB steps over 30.5 dB.
  *
- * Being the exact inverse, it cannot detect an error in that encoding --
+ * Being the exact inverse, it cannot detect an error in that encoding:
  * a wrong encoder round-trips cleanly through this. It exists so that a
  * consumer needs no second copy of the field layout.
  *

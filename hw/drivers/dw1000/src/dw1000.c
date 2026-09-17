@@ -424,7 +424,7 @@ void _dw1000_clocks(dw1000_t *dw, int mode) {
      * Byte 0 holds the sys/tx/rx clock selections, and byte 1 holds the
      * LDECLK bit that UM §2.5.5.10 (table 4) requires set while the LDE
      * microcode is copied from ROM to RAM. Both are read-modify-written,
-     * so bits no mode touches keep their value -- except the high byte
+     * so bits no mode touches keep their value, except the high byte
      * during DW1000_CLOCK_LDE_LOAD, which table 4 pins to an exact value.
      */
 
@@ -934,7 +934,7 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
  * @param[in]  dw       driver context
  */
 static inline
-void dw1000_rx_reset(dw1000_t *dw) {
+void _dw1000_rx_reset(dw1000_t *dw) {
     // Trigger reset for RX by creating a 0 pulse
     _dw1000_reg_write8(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL0_SOFTRESET,
 		      0xE0);
@@ -952,7 +952,7 @@ void dw1000_rx_reset(dw1000_t *dw) {
  * @return the preamble acculumation count
  */
 static inline
-uint16_t dw1000_rx_get_pacc_count(dw1000_t *dw) {
+uint16_t _dw1000_rx_get_pacc_count(dw1000_t *dw) {
     // Get Preamble accumulation count... and adjust it
     // UM §7.2.18: RX Frame Information Register (RXPACC field)
     uint16_t rxpacc       =
@@ -985,7 +985,7 @@ uint16_t dw1000_rx_get_pacc_count(dw1000_t *dw) {
  * @param dw        driver context
  */
 static
-void dw1000_rx_sync_dblbuf(dw1000_t *dw) {
+void _dw1000_rx_sync_dblbuff(dw1000_t *dw) {
     // Never while the host still holds a reported frame. Between the
     // RXENAB of the double buffered RXFCG branch and the HRBPT that
     // follows the rx_ok callback the two pointers are misaligned on
@@ -1033,7 +1033,7 @@ void dw1000_rx_sync_dblbuf(dw1000_t *dw) {
  * @param clear     event status bits to clear
  */
 static inline
-void dw1000_rx_clear_status_dblbuf(dw1000_t *dw, uint32_t clear) {
+void _dw1000_rx_clear_status_dblbuff(dw1000_t *dw, uint32_t clear) {
     // Save and clear interrupt mask
     uint32_t sys_mask =
 	_dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE);
@@ -1410,7 +1410,7 @@ int dw1000_initialise(dw1000_t *dw) {
  * This used to be a wall of DW1000_ASSERT inside dw1000_configure().
  * That maps to assert() / __ASSERT / osalDbgAssert on four of the five
  * ports, so it vanished under NDEBUG, without CONFIG_ASSERT, or without
- * CH_DBG_ENABLE_ASSERTS -- exactly the builds that ship.
+ * CH_DBG_ENABLE_ASSERTS: exactly the builds that ship.
  *
  * @param[in]  radio    radio configuration
  *
@@ -1678,7 +1678,7 @@ void _dw1000_rx_overrun_recover(dw1000_t *dw, uint32_t status) {
     _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
 		         DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
 		         DW1000_MSK_SYS_STATUS_ALL_RX_TO);
-    dw1000_rx_reset(dw);
+    _dw1000_rx_reset(dw);
 
     // UM §4.3.5: "The overrun condition and the RXOVRR status bit will
     // be cleared as soon as the host issues the HRBPT command". That is
@@ -1694,7 +1694,7 @@ void _dw1000_rx_overrun_recover(dw1000_t *dw, uint32_t status) {
     // UM §7.2.15: only the last byte of SYS_CTRL, where HRBPT lives.
     _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3,
 		       (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
-    dw1000_rx_sync_dblbuf(dw);
+    _dw1000_rx_sync_dblbuff(dw);
 
     dw->wait4resp = 0;
 
@@ -1708,7 +1708,7 @@ bool dw1000_process_events(dw1000_t *dw) {
     const dw1000_config_t *cfg = dw->config;
 
     // Set for events that are handled and reported but do not survive in
-    // the status word returned below -- the overrun, whose bits are
+    // the status word returned below: the overrun, whose bits are
     // stripped from it once handled.
     bool processed = false;
     
@@ -1778,7 +1778,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 
 	    // From here to the toggle below the host side buffer belongs
 	    // to this frame and to whoever reads it out, the rx_ok
-	    // callback included. dw1000_rx_sync_dblbuf() honours this.
+	    // callback included. _dw1000_rx_sync_dblbuff() honours this.
 	    dw->rx_held = 1;
 	}
 
@@ -1822,7 +1822,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//   the swinging set and glitch as they go, so the interrupts
 	//   are masked around the write (UM §4.3.3, figure 14)
 	if (cfg->dblbuff) {
-	    dw1000_rx_clear_status_dblbuf(dw, clear);
+	    _dw1000_rx_clear_status_dblbuff(dw, clear);
 	} else {
 	    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS,
 				DW1000_OFF_NONE, clear);
@@ -1843,7 +1843,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 	    // been read out and before the toggle, not only on entry. The
 	    // receiver was re-enabled above, so while the callback ran a
 	    // second frame could land in the other buffer and a third
-	    // overrun -- and HRBPT is the very thing that clears RXOVRR
+	    // overrun, and HRBPT is the very thing that clears RXOVRR
 	    // (§4.3.5, §7.2.17), so toggling unconditionally would erase
 	    // the evidence and no later call would ever see it. Take the
 	    // overrun path instead of toggling: the receiver is left in
@@ -1912,7 +1912,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 	    // Turn off receiver, returning to IDLE state
 	    dw1000_txrx_off(dw);
 	    // Reset in case a frame was already being received
-            dw1000_rx_reset(dw);
+            _dw1000_rx_reset(dw);
         }
 
         // Call the corresponding callback if present
@@ -1930,8 +1930,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// interrupt (Errata IRQ-1) and a wasted status read per event.
 
 	// Turn off receiver (return to IDLE state), dropping what the
-	// receiver raised -- the frame-ready flags the failed frame
-	// leaves behind included, or the receiver stays confused -- but
+	// receiver raised, the frame-ready flags the failed frame
+	// leaves behind included, or the receiver stays confused, but
 	// not what the transmitter raised: dw1000_txrx_off() would also
 	// clear a completion set since the status snapshot taken above,
 	// and nothing would ever report it
@@ -1944,7 +1944,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//    it is necessary to apply a receiver reset after an
 	//    error or timeout event.
 	//    (It is not necessary to do this for RXPTO and RXSFDTO)"
-        dw1000_rx_reset(dw);
+        _dw1000_rx_reset(dw);
 
         // Call the corresponding callback if present
         if (cfg->cb.rx_timeout) {
@@ -1963,8 +1963,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// status read per CRC error.
 
 	// Turn off receiver (return to IDLE state), dropping what the
-	// receiver raised -- the frame-ready flags the failed frame
-	// leaves behind included, or the receiver stays confused -- but
+	// receiver raised, the frame-ready flags the failed frame
+	// leaves behind included, or the receiver stays confused, but
 	// not what the transmitter raised: dw1000_txrx_off() would also
 	// clear a completion set since the status snapshot taken above,
 	// and nothing would ever report it
@@ -1977,7 +1977,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//    it is necessary to apply a receiver reset after an
 	//    error or timeout event.
 	//    (It is not necessary to do this for RXPTO and RXSFDTO)"
-        dw1000_rx_reset(dw);
+        _dw1000_rx_reset(dw);
 
         // Call the corresponding callback if present
         if (cfg->cb.rx_error) {
@@ -2028,7 +2028,7 @@ void _dw1000_txrx_off(dw1000_t *dw, uint32_t clear) {
     // back to the chip (dw1000_txrx_idle() is used before a transmit
     // for exactly that case).
     if (clear & DW1000_MSK_SYS_STATUS_ALL_RX_GOOD)
-	dw1000_rx_sync_dblbuf(dw);
+	_dw1000_rx_sync_dblbuff(dw);
 
     // Reset internal flags
     //   The transceiver is off, so whatever was being transmitted is
@@ -2070,7 +2070,7 @@ uint8_t dw1000_tx_power_to_05db(uint32_t txpower) {
     // dw1000_configure() writes the same byte into bits 23..16 and 15..8;
     // either answers, so take the first. The coarse field holds
     // (6 - coarse) in 3 bits and the fine field 5 bits, which is what the
-    // encoder in _dw1000_radio_tuning() builds -- see its UM 7.2.31.1 note.
+    // encoder in _dw1000_radio_tuning() builds; see its UM 7.2.31.1 note.
     uint8_t byte   = (txpower >> 16) & 0xFF;
     uint8_t coarse = 6 - ((byte >> 5) & 0x07);
     uint8_t fine   = byte & 0x1F;
@@ -2111,7 +2111,7 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
     // place. TFLEN+TFLE occupy bits 0-9 and TXBOFFS bits 22-31: an
     // out of range length shifts into TXBR (bits 13-14) and silently
     // changes the on-air bitrate, which is a far worse failure than the
-    // truncated frame clamping gives -- and the same silent-clamp
+    // truncated frame clamping gives, and the same silent-clamp
     // behaviour dw1000_tx_write_frame_data() already applies to the
     // buffer write this length describes.
     if (length > max_length) length = max_length;
@@ -2275,8 +2275,8 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask) {
 
 int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
     // Sync double buffer unless explicitely disabled
-    if (! (rx_mode & DW1000_RX_NO_DBLBUF_SYNC)) {
-        dw1000_rx_sync_dblbuf(dw);
+    if (! (rx_mode & DW1000_RX_NO_DBLBUFF_SYNC)) {
+        _dw1000_rx_sync_dblbuff(dw);
     }
 
     // Trigger receiving by writting to SYS_CTRL
@@ -2348,7 +2348,7 @@ void dw1000_rx_get_info(dw1000_t *dw, dw1000_rxinfo_t *rxinfo) {
     // double buffered mode the receiver is re-enabled before this
     // callback runs, so the live register may already hold the next
     // frame's LDE result. Use the value sampled for this frame, as
-    // dw1000_rx_get_pacc_count() does for DRX_RXPACC_NOSAT.
+    // _dw1000_rx_get_pacc_count() does for DRX_RXPACC_NOSAT.
     rxinfo->max_noise = dw->config->dblbuff
 	? dw->lde_thresh
 	: _dw1000_reg_read16(dw, DW1000_REG_LDE_IF, DW1000_OFF_LDE_THRESH);
@@ -2397,11 +2397,11 @@ void dw1000_rx_get_power_estimate(dw1000_t *dw,
     // 2.09 and 2.15).
     //  PRF     4   16        64
     //  A       -   113.77    121.74
-    double N  = (double) dw1000_rx_get_pacc_count(dw);
+    double N  = (double) _dw1000_rx_get_pacc_count(dw);
     double A  = dw->radio.prf == DW1000_PRF_16MHZ ? 113.77 : 121.74;
 
     // N divides both estimates below. The SFD adjustment in
-    // dw1000_rx_get_pacc_count() can legitimately leave it at 0, and so
+    // _dw1000_rx_get_pacc_count() can legitimately leave it at 0, and so
     // can a failed SPI read (the OSAL contract zeroes the buffer). 0 here
     // would yield +inf / NaN, which is worse than an obvious sentinel:
     // every comparison against NaN is false, so dw1000_rx_power_correction()

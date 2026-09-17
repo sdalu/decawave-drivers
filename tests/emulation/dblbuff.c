@@ -12,13 +12,13 @@
  * This one works at the register level rather than through the driver's
  * callbacks. What is being checked is which of two register sets an
  * access lands in, and that is a question about the model, not about
- * the driver's event loop -- so the steps read SYS_STATUS, RX_FINFO and
+ * the driver's event loop, so the steps read SYS_STATUS, RX_FINFO and
  * RX_BUFFER directly and say where each byte came from.
  *
  * Its medium delivers a burst: on one RX_CONFIG it sends as many frames
  * as the step asked for, back to back, each carrying its own number in
  * its first payload byte and a good FCS. That is what an overrun needs
- * and what a single-frame medium cannot produce -- and it only works
+ * and what a single-frame medium cannot produce, and it only works
  * because the model now honours RXAUTR, without which the receiver
  * would be idle again before the second frame arrived.
  *
@@ -50,7 +50,7 @@
 
 
 /*----------------------------------------------------------------------*/
-/* The wire protocol (port/emulation/README.md)                                */
+/* The wire protocol (port/emulation/README.md)                         */
 /*----------------------------------------------------------------------*/
 
 /* Copied rather than included, for the reason smoke.c gives: a medium
@@ -81,7 +81,7 @@ struct rsvc_outhdr {                    /* server -> node, 12 bytes */
 
 /* The model checks an incoming frame's FCS, so a burst frame has to
  * carry a real one or it is a bad-CRC frame and the IC pointer does not
- * move -- which is a different test.
+ * move, which is a different test.
  */
 static uint16_t
 crc16_ccitt(const uint8_t *src, size_t len)
@@ -519,7 +519,7 @@ deliver(dw1000_t *dw, struct stub *s, unsigned n)
     s->burst = n;
     pthread_mutex_unlock(&s->lock);
 
-    dw1000_rx_start(dw, DW1000_RX_IMMEDIATE | DW1000_RX_NO_DBLBUF_SYNC);
+    dw1000_rx_start(dw, DW1000_RX_IMMEDIATE | DW1000_RX_NO_DBLBUFF_SYNC);
     usleep(150000);
 }
 
@@ -540,7 +540,7 @@ step_aligned_at_reset(dw1000_t *dw, struct stub *s)
 }
 
 /* One frame. UM 4.3.2: a good CRC moves ICRBP and nothing moves HSRBP,
- * so the two must now differ -- that difference is how a host knows
+ * so the two must now differ: that difference is how a host knows
  * there is a frame waiting.
  */
 static const char *
@@ -589,7 +589,7 @@ step_two_frames_two_sets(dw1000_t *dw, struct stub *s)
     deliver(dw, s, 2);
 
     /* Both buffers are full, so the IC has come all the way round and
-     * the pointers agree again -- with two frames outstanding, not none.
+     * the pointers agree again, with two frames outstanding, not none.
      */
     buffer_pointers(dw, &host, &ic);
     if (host != ic)
@@ -648,7 +648,7 @@ step_overrun(dw1000_t *dw, struct stub *s)
 		      buffered_frame_id(dw), before + 1);
 
     /* UM 4.3.5: RXOVRR "will be cleared as soon as the host issues the
-     * HRBPT command" -- and the one just issued did release a buffer, so
+     * HRBPT command", and the one just issued did release a buffer, so
      * it is already gone.
      */
     if (sys_status(dw) & DW1000_FLG_SYS_STATUS_RXOVRR)
@@ -831,8 +831,8 @@ step_bad_crc_keeps_buffer(dw1000_t *dw, struct stub *s)
 		      id, first + 1);
 
     /* RXFCE is deliberately not checked. The damaged frame set it in
-     * this buffer and the good frame then reused the very same buffer --
-     * which is the behaviour under test -- so its RXFCG has replaced it.
+     * this buffer and the good frame then reused the very same buffer,
+     * which is the behaviour under test, so its RXFCG has replaced it.
      * A buffer that still showed RXFCE here would mean the good frame
      * had gone somewhere else.
      */
@@ -849,7 +849,7 @@ step_bad_crc_keeps_buffer(dw1000_t *dw, struct stub *s)
  * in order and reports a receive error, and the host's rx_error callback
  * is what enables the receiver again, as it does for any other error.
  * With no callback registered the recovery still runs and the receiver
- * stays off for good, which is silent and permanent -- so
+ * stays off for good, which is silent and permanent, so
  * dw1000_initialise() refuses the pairing instead.
  *
  * Refused before any SPI traffic, which is why this step can run a
@@ -896,7 +896,7 @@ step_dblbuff_needs_rx_error(dw1000_t *dw, struct stub *s)
  * In double buffered mode the two pointers are misaligned on purpose
  * while a frame is read out: ICRBP is on the buffer the chip is filling,
  * HSRBP on the one being read. dw1000_txrx_off() drops the receive
- * status, and that used to take dw1000_rx_sync_dblbuf() with it --
+ * status, and that used to take _dw1000_rx_sync_dblbuff() with it:
  * aligning the pointers there issues HRBPT (UM 4.3.3, figure 14), which
  * hands the buffer being read straight back to the chip. The rest of the
  * read-out then came from the other buffer and the driver's own toggle
@@ -1018,7 +1018,7 @@ static void
 on_alarm(int sig)
 {
     (void)sig;
-    static const char msg[] = "dblbuf: timed out\n";
+    static const char msg[] = "dblbuff: timed out\n";
     ssize_t n = write(STDERR_FILENO, msg, sizeof(msg) - 1);
     (void)n;
     _exit(1);
@@ -1032,7 +1032,8 @@ make_socket_dir(char *dir, size_t dirlen, char *sock, size_t socklen)
     if (tmp == NULL || tmp[0] == '\0')
 	tmp = "/tmp";
 
-    if ((size_t)snprintf(dir, dirlen, "%s/dw1000-dblbuf.XXXXXX", tmp) >= dirlen)
+    if ((size_t)snprintf(dir, dirlen,
+			 "%s/dw1000-dblbuff.XXXXXX", tmp) >= dirlen)
 	return false;
     if (mkdtemp(dir) == NULL)
 	return false;
@@ -1101,8 +1102,8 @@ main(void)
 	.rxauto           = 1,
 	.tx_antenna_delay = 16436,
 	.rx_antenna_delay = 16436,
-	/* Present but empty. Nothing here waits on a callback -- the steps
-	 * read registers -- but dw1000_initialise() unmasks only the
+	/* Present but empty. Nothing here waits on a callback (the steps
+	 * read registers), but dw1000_initialise() unmasks only the
 	 * events it has somewhere to report, and one step needs RXFCG
 	 * unmasked to have an IRQS worth checking.
 	 */
@@ -1132,16 +1133,16 @@ main(void)
     alarm(60);
 
     if (!make_socket_dir(dir, sizeof(dir), sockpath, sizeof(sockpath))) {
-	fprintf(stderr, "dblbuf: cannot make a socket directory\n");
+	fprintf(stderr, "dblbuff: cannot make a socket directory\n");
 	return 1;
     }
     if (!stub_start(&stub, sockpath, &stub_thread)) {
-	fprintf(stderr, "dblbuf: cannot start the stub medium: %s\n",
+	fprintf(stderr, "dblbuff: cannot start the stub medium: %s\n",
 		strerror(errno));
 	return 1;
     }
-    if ((rsvc = rsvc_open(sockpath, (char *)"dblbuf", NULL)) == NULL) {
-	fprintf(stderr, "dblbuf: rsvc_open failed\n");
+    if ((rsvc = rsvc_open(sockpath, (char *)"dblbuff", NULL)) == NULL) {
+	fprintf(stderr, "dblbuff: rsvc_open failed\n");
 	return 1;
     }
 
@@ -1151,18 +1152,18 @@ main(void)
     spi.emulation          = emulation;
 
     if (rsvc_o(rsvc, RSVC_SEED_GET, &seed, &seedlen) < 0) {
-	fprintf(stderr, "dblbuf: RSVC_SEED_GET failed\n");
+	fprintf(stderr, "dblbuff: RSVC_SEED_GET failed\n");
 	return 1;
     }
 
     dw1000_init(&dw, &config);
     dw1000_hardreset(&dw);
     if (dw1000_initialise(&dw) != 0) {
-	fprintf(stderr, "dblbuf: dw1000_initialise failed\n");
+	fprintf(stderr, "dblbuff: dw1000_initialise failed\n");
 	return 1;
     }
     if (dw1000_configure(&dw, &radio) != 0) {
-	fprintf(stderr, "dblbuf: dw1000_configure failed\n");
+	fprintf(stderr, "dblbuff: dw1000_configure failed\n");
 	return 1;
     }
 

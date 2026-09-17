@@ -9,8 +9,8 @@
  * The DW1000 register model.
  *
  * A SPI transfer from the driver is decoded here into a register access,
- * and the registers that mean something -- SYS_CTRL, SYS_CFG,
- * SYS_STATUS, SYS_MASK, the TX and RX buffers and their timestamps --
+ * and the registers that mean something (SYS_CTRL, SYS_CFG,
+ * SYS_STATUS, SYS_MASK, the TX and RX buffers and their timestamps)
  * are given the behaviour the chip has: writing TXSTRT sends a frame to
  * the medium server, an incoming frame fills RX_BUFFER and sets the RX
  * status bits, and any status bit that the mask lets through raises the
@@ -29,7 +29,7 @@
  *  - the model's own deadline thread.
  *
  * Every one of them takes e->mutex for the registers, and none of them
- * holds it across the line callback -- that call lands in code this port
+ * holds it across the line callback: that call lands in code this port
  * does not own, and a node is entitled to reach for the driver from it.
  *
  * What the model does not do is in port/emulation/README.md, which is also the
@@ -62,7 +62,7 @@
 
 /* What a deadline, once reached, makes the model do. One slot each, so
  * that arming a second receive timeout replaces the first rather than
- * queueing behind it -- which is what the chip does, the timeouts being
+ * queueing behind it, which is what the chip does, the timeouts being
  * counters and not a list.
  */
 #define E_DEADLINE_TX		0	/* a delayed send comes due     */
@@ -88,7 +88,7 @@ struct dw1000_emulation {
     int 		state;
     bool                irq;
 
-    /* The double receive buffer of UM 4.3. `dblbuf` is DIS_DRXB
+    /* The double receive buffer of UM 4.3. `dblbuff` is DIS_DRXB
      * inverted, tracked as the host writes SYS_CFG; `rbp_host` moves on
      * the HRBPT command and `rbp_ic` on each frame received with a good
      * CRC, and both are mirrored into the HSRBP and ICRBP status bits
@@ -96,7 +96,7 @@ struct dw1000_emulation {
      * in a buffer that the host has not released yet: at two, both
      * buffers are full and the next frame is an overrun.
      */
-    bool		dblbuf;
+    bool		dblbuff;
     int			rbp_host;
     int			rbp_ic;
     unsigned		pending;
@@ -413,7 +413,7 @@ uint64_t dw1000_emulation_clock(void) {
  * 64-bit tick count.
  *
  * A programmed time is 40 bits, so on its own it says nothing about
- * which of the counter's 17.2-second laps is meant -- and the chip
+ * which of the counter's 17.2-second laps is meant, and the chip
  * answers that the same way every time: the next one. UM 3.3 makes the
  * consequence explicit, that a host which programs a time just gone by
  * "has to complete almost a whole clock count period before the start
@@ -439,7 +439,7 @@ static uint64_t e_clock_forward(uint64_t now_full, uint64_t at) {
  * sets and a host reads the same answer whichever set it is on. The
  * mutex must be held.
  */
-static void e_dblbuf_publish(struct dw1000_emulation *e) {
+static void e_dblbuff_publish(struct dw1000_emulation *e) {
     uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
 
     if (e->rbp_host) DW1000_SET_FLG(sys_status, SYS_STATUS_HSRBP);
@@ -457,7 +457,7 @@ static void e_dblbuf_publish(struct dw1000_emulation *e) {
  * status bit will be cleared as soon as the host issues the HRBPT
  * command." The mutex must be held.
  */
-static void e_dblbuf_toggle_host(struct dw1000_emulation *e) {
+static void e_dblbuff_toggle_host(struct dw1000_emulation *e) {
     e->rbp_host = !e->rbp_host;
     if (e->pending > 0)
 	e->pending--;
@@ -466,8 +466,8 @@ static void e_dblbuf_toggle_host(struct dw1000_emulation *e) {
     DW1000_CLR_FLG(sys_status, SYS_STATUS_RXOVRR);
     E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
 
-    e_dblbuf_publish(e);
-    EMU_DEBUG("dblbuf: HRBPT, host now on set %d (ic %d, %u pending)",
+    e_dblbuff_publish(e);
+    EMU_DEBUG("dblbuff: HRBPT, host now on set %d (ic %d, %u pending)",
 	      e->rbp_host, e->rbp_ic, e->pending);
 }
 
@@ -482,7 +482,7 @@ static void e_dblbuf_toggle_host(struct dw1000_emulation *e) {
  * Nothing is sent to the medium server when the receiver comes back
  * this way. RX_CONFIG is a request, answered synchronously, and the
  * only place this is decided is inside the rsvc reader's own callback
- * -- which is the thread that would have to read the reply. The
+ * which is the thread that would have to read the reply. The
  * reference server applies no behaviour to RX_CONFIG anyway
  * (port/emulation/README.md), so the model's state is the whole of it.
  */
@@ -509,7 +509,7 @@ static bool e_rx_auto_reenable(struct dw1000_emulation *e, bool good) {
      * The frame wait timeout is excluded in both, and needs no code
      * here: a timeout returns to idle without asking.
      */
-    return e->dblbuf ? true : !good;
+    return e->dblbuff ? true : !good;
 }
 
 /* A frame has been taken: the IC moves to the other set.
@@ -521,17 +521,17 @@ static bool e_rx_auto_reenable(struct dw1000_emulation *e, bool good) {
  * called for a good frame and nothing else.
  *
  * Called after the interrupt has been worked out, not before: everything
- * about the frame -- its status bits included -- belongs to the set the
+ * about the frame, its status bits included, belongs to the set the
  * IC was on while writing it.
  */
-static void e_dblbuf_advance_ic(struct dw1000_emulation *e) {
-    if (!e->dblbuf)
+static void e_dblbuff_advance_ic(struct dw1000_emulation *e) {
+    if (!e->dblbuff)
 	return;
 
     e->rbp_ic = !e->rbp_ic;
     e->pending++;
-    e_dblbuf_publish(e);
-    EMU_DEBUG("dblbuf: frame taken, ic now on set %d (host %d, %u pending)",
+    e_dblbuff_publish(e);
+    EMU_DEBUG("dblbuff: frame taken, ic now on set %d (host %d, %u pending)",
 	      e->rbp_ic, e->rbp_host, e->pending);
 }
 
@@ -632,8 +632,8 @@ static char *e_state[] = {
  *
  * So neither is set once and left; each is recomputed from how far the
  * armed operation still is from starting, which is what makes a
- * cancelled operation clear HPDWARN by itself -- TRXOFF disarms, nothing
- * is pending, the bit reads zero -- and what makes a marginal delay stop
+ * cancelled operation clear HPDWARN by itself (TRXOFF disarms, nothing
+ * is pending, the bit reads zero), and what makes a marginal delay stop
  * warning once the counter has caught up with it.
  *
  * That the deadline is carried at 64 bits is what makes this expressible:
@@ -809,8 +809,8 @@ static void *e_timer_thread(void *args) {
 	int64_t ticks = (int64_t)(e->deadline[next].at - now);
 	if (ticks > 0) {
 	    /* Not yet. Sleep on the same clock the deadline is expressed
-	     * in -- CLOCK_REALTIME, which is what dw1000_emulation_clock()
-	     * samples -- so that a step of the host clock moves both.
+	     * in (CLOCK_REALTIME, which is what dw1000_emulation_clock()
+	     * samples), so that a step of the host clock moves both.
 	     */
 	    struct timespec until;
 	    clock_gettime(CLOCK_REALTIME, &until);
@@ -828,8 +828,8 @@ static void *e_timer_thread(void *args) {
 
 	/* Due. Take it out of the way, and carry its stamp to the action.
 	 *
-	 * The action has to drop the mutex -- two of the three end up in
-	 * a blocking socket call -- and the host can do anything in that
+	 * The action has to drop the mutex (two of the three end up in
+	 * a blocking socket call), and the host can do anything in that
 	 * gap, including a TRXOFF that cancels this operation and a fresh
 	 * command that starts another one. Checking the model's state is
 	 * not enough to tell those apart: a receive cancelled and
@@ -1124,7 +1124,7 @@ void dw1000_emulation_destroy(struct dw1000_emulation *e) {
      *
      * rsvc_unregister() is deliberately not called. It only marks the
      * handler unused, and does not wait for one already dispatched, so
-     * it buys nothing that rsvc_close() has not already bought -- and
+     * it buys nothing that rsvc_close() has not already bought, and
      * calling it after rsvc_close() would be locking a mutex that
      * rsvc_close() has destroyed.
      */
@@ -1169,7 +1169,7 @@ void dw1000_emulation_reset(struct dw1000_emulation *e) {
      * of the reset SYS_CFG written below, so the model comes up single
      * buffered, which is what the chip does (UM 4.3.1).
      */
-    e->dblbuf   = false;
+    e->dblbuff   = false;
     e->rbp_host = 0;
     e->rbp_ic   = 0;
     e->pending  = 0;
@@ -1231,7 +1231,7 @@ void dw1000_emulation_reset(struct dw1000_emulation *e) {
 /* PAC size in preamble symbols, recovered from DRX_TUNE2.
  *
  * UM 7.2.40.9 programs DRX_PRETOC in units of PAC size, and UM 7.2.40.5
- * is where the PAC size is actually set -- as one of eight opaque tuning
+ * is where the PAC size is actually set, as one of eight opaque tuning
  * words, four per PRF. The model has to go the other way, so it matches
  * the word it was given against the same eight values; a host that wrote
  * something else gets the 8-symbol default and a warning, which is all
@@ -1273,7 +1273,7 @@ static uint64_t e_ticks_per_psym(struct dw1000_emulation *e) {
  *    the same moment when RXWTOE is set.
  *
  * RXSFDTO cannot: UM 7.2.40.7 starts it at preamble detection, and this
- * model has no preamble -- a frame either arrives whole from the medium
+ * model has no preamble: a frame either arrives whole from the medium
  * server or does not arrive. Not arming it is the honest reading; see
  * port/emulation/README.md.
  *
@@ -1369,7 +1369,7 @@ int dw1000_emulation_recv(struct dw1000_emulation *e) {
      *
      * Not "the model is idle": with RXAUTR the receiver puts itself back
      * on after every frame (UM 5.3.2), so a host that enables it again
-     * -- which dw1000_rx_start() does on each call -- finds it already
+     * (which dw1000_rx_start() does on each call) finds it already
      * on, and the chip takes that in its stride. What is not allowed is
      * enabling the receiver on top of a transmission.
      */
@@ -1390,7 +1390,7 @@ int dw1000_emulation_recv(struct dw1000_emulation *e) {
 
 	/* UM 4.2 and 7.2.17: a turn-on time already gone by is not an
 	 * error the chip acts on. It waits for the counter to come round
-	 * to it -- "almost a whole clock count period" -- and HPDWARN is
+	 * to it, "almost a whole clock count period", and HPDWARN is
 	 * how the host is told, so that it can "take recovery measures"
 	 * if it wants to. Taking them is the host's move, not the
 	 * model's, and this driver's move is TRXOFF.
@@ -1445,7 +1445,7 @@ static void e_deadline_fire_rxto(struct dw1000_emulation *e, uint64_t seq,
     pthread_mutex_lock(&e->mutex);
     /* The state check alone is not enough here. A receiver that was
      * turned off and straight back on is in state RX either way, and
-     * this timeout belongs to the session that was cancelled -- firing
+     * this timeout belongs to the session that was cancelled: firing
      * it would end the new one early, and leave the new session's own
      * timeout to expire later into nothing.
      */
@@ -1541,8 +1541,8 @@ static int e_tx_engage(struct dw1000_emulation *e) {
 
 /* A delayed send has come due.
  *
- * The check and the commitment are one hold. Splitting them -- test the
- * state, drop the mutex, retake it and move to TX -- left a window in
+ * The check and the commitment are one hold. Splitting them (test the
+ * state, drop the mutex, retake it and move to TX) left a window in
  * which a TRXOFF could find nothing armed (the slot having already been
  * dequeued), set the model idle, and then have the frame go out anyway
  * behind the host's back.
@@ -1674,7 +1674,7 @@ int dw1000_emulation_send(struct dw1000_emulation *e) {
 
     /* UM 3.3: "it is the internal start time mentioned above that is used
      * when deciding whether to set the HPDWARN event", and UM 7.2.17
-     * makes HPDWARN a condition rather than an event -- so nothing is
+     * makes HPDWARN a condition rather than an event, so nothing is
      * set here. e_status_derived() answers it from how far the start
      * time still is, every time SYS_STATUS is read, and TRXOFF clears it
      * by disarming.
@@ -1688,7 +1688,7 @@ int dw1000_emulation_send(struct dw1000_emulation *e) {
      * The lap is chosen on the start time and not on the RMARKER. For a
      * start time just behind us the chip waits almost a whole period for
      * the counter to come round to it, and the RMARKER follows Ton after
-     * that -- which is a different lap from the one the RMARKER alone
+     * that, which is a different lap from the one the RMARKER alone
      * would have picked.
      */
     e->tx_start = e_clock_forward(now, start);
@@ -1776,10 +1776,10 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
 	 */
 	uint32_t sys_cfg = E_REG_IC_READ32_KEY(e, SYS_CFG);
 	bool     want    = !DW1000_GET_FLG(sys_cfg, SYS_CFG_DIS_DRXB);
-	if (want != e->dblbuf) {
-	    e->dblbuf = want;
-	    EMU_DEBUG("dblbuf: %s", want ? "enabled" : "disabled");
-	    e_dblbuf_publish(e);
+	if (want != e->dblbuff) {
+	    e->dblbuff = want;
+	    EMU_DEBUG("dblbuff: %s", want ? "enabled" : "disabled");
+	    e_dblbuff_publish(e);
 	}
     }
 
@@ -1793,7 +1793,7 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
 	if (DW1000_GET_FLG(sys_ctrl, SYS_CTRL_HRBPT)) {
 	    DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_HRBPT);
 	    E_REG_IC_WRITE32_KEY(e, sys_ctrl, SYS_CTRL);
-	    e_dblbuf_toggle_host(e);
+	    e_dblbuff_toggle_host(e);
 	}
 
 	if (DW1000_GET_FLG(sys_ctrl, SYS_CTRL_TRXOFF)) {
@@ -1829,7 +1829,7 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
     if (recv) dw1000_emulation_recv(e);
 
     /* IRQS is derived from SYS_STATUS and SYS_MASK, so recomputing it is a
-     * read-modify-write of a register and belongs under the mutex -- which
+     * read-modify-write of a register and belongs under the mutex, which
      * it was not, and a frame arriving on the rsvc reader thread between
      * the two reads here left IRQS describing neither status.
      */
@@ -1946,11 +1946,11 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	/* Overrun. UM 4.3.5: the IC has filled one buffer, moved to the
 	 * other and filled that too, and come back to a buffer the host
 	 * has still not released with HRBPT. The frame in progress is
-	 * abandoned -- "the frame reception in progress will be aborted"
-	 * -- ICRBP does not move, and RXOVRR stands until the host
+	 * abandoned ("the frame reception in progress will be aborted"),
+	 * ICRBP does not move, and RXOVRR stands until the host
 	 * issues HRBPT.
 	 */
-	if (e->dblbuf && (e->pending >= 2)) {
+	if (e->dblbuff && (e->pending >= 2)) {
 	    uint32_t ovrr = E_REG_IC_READ32_KEY(e, SYS_STATUS);
 	    DW1000_SET_FLG(ovrr, SYS_STATUS_RXOVRR);
 	    E_REG_IC_WRITE32_KEY(e, ovrr, SYS_STATUS);
@@ -2058,8 +2058,8 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	 * the frame was on its way to the server aborts it, and the chip
 	 * then raises no TXFRS and calls nothing back; without this check
 	 * the late reply would report a frame the host has cancelled, and
-	 * would drag whatever state the host has since reached -- a fresh
-	 * receive, say -- back to IDLE behind its back.
+	 * would drag whatever state the host has since reached (a fresh
+	 * receive, say) back to IDLE behind its back.
 	 */
 	if (! E_IS_STATE(e, TX)) {
 	    EMU_WARNING("transmit completion ignored (state=%s)",
@@ -2083,7 +2083,7 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	     * That jitter is not gone, only moved: it is still in the
 	     * arrival times the server computes for every *other* node,
 	     * which have no such register to be corrected from. Closing
-	     * that needs a field on the wire, and the protocol has none --
+	     * that needs a field on the wire, and the protocol has none;
 	     * see port/emulation/README.md.
 	     */
 	    raw = e->tx_rawst;
@@ -2143,7 +2143,7 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 
     edge = e_irq_update(e);
     if (taken)
-	e_dblbuf_advance_ic(e);
+	e_dblbuff_advance_ic(e);
 
  done:
     pthread_mutex_unlock(&e->mutex);
@@ -2162,14 +2162,14 @@ static bool e_irq_update(struct dw1000_emulation *e) {
     /* Re-compute IRQS.
      *
      * From the HOST's set, not the IC's. UM 7.2.17 defines IRQS over the
-     * status bits as the host sees them -- "whenever a status bit ... is
-     * activated and the corresponding bit in [SYS_MASK] is enabled" --
+     * status bits as the host sees them ("whenever a status bit ... is
+     * activated and the corresponding bit in [SYS_MASK] is enabled"),
      * and four of those bits are per-buffer. Taking them from the IC's
      * set means that with both buffers full, the second frame's RXFCG
      * sits in the set the host is on while the IC has already swung back
      * to the other, so IRQS reads zero and the edge never comes: the
      * frame is stranded until a third one arrives. That is also why the
-     * whole mask/clear/unmask/HRBPT dance of UM 4.3.3 exists -- the line
+     * whole mask/clear/unmask/HRBPT dance of UM 4.3.3 exists: the line
      * follows the bits the host can see.
      */
     uint32_t sys_status = E_REG_HOST_READ32_KEY(e, SYS_STATUS);

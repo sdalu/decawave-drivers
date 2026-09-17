@@ -7,7 +7,7 @@
 
 /*
  * Private macros of the register model: how a register is declared, how
- * it is attached to the model, and how the two sides reach it -- IC-side
+ * it is attached to the model, and how the two sides reach it: IC-side
  * (the model itself, which may write a read-only register) and host-side
  * (the driver over SPI, which may not).
  */
@@ -136,14 +136,14 @@ struct e_register {
  * ICRBP. Read from the model's own fields rather than from SYS_STATUS,
  * which is where the chip keeps them: selecting a set is what every
  * register access starts with, so asking a register for the answer
- * would be asking it of itself. The two are kept in step -- the fields
+ * would be asking it of itself. The two are kept in step: the fields
  * are what decides, the status bits are what the host reads.
  *
  * With DIS_DRXB set, which is the reset value, there is one buffer and
  * both sides are on set 0.
  */
-#define E_SWINGSET_IC(e)	((e)->dblbuf ? (e)->rbp_ic   : 0)
-#define E_SWINGSET_HOST(e)	((e)->dblbuf ? (e)->rbp_host : 0)
+#define E_SWINGSET_IC(e)	((e)->dblbuff ? (e)->rbp_ic   : 0)
+#define E_SWINGSET_HOST(e)	((e)->dblbuff ? (e)->rbp_host : 0)
 
 /* ... and which one a given access uses. `system` is the IC. */
 #define E_SWINGSET(e, system)						\
