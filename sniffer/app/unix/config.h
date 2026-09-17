@@ -17,10 +17,20 @@
 #define RPI_DW1000_SCLK         BITTERS_RPI_SPI0_SCLK	// RPI_P1_23
 #define RPI_DW1000_SS           BITTERS_RPI_SPI0_CE0	// RPI_P1_24
 
+/*
+ * One pin map, the one wired on the bench: SPI0/CE0, reset on P1_18,
+ * wakeup on P1_16, interrupt on P1_15. Identical to rpi-redskin/config.h
+ * and to probe/app/unix/config.h, which took it from there -- so a Pi
+ * that already runs either of those runs this with nothing rewired.
+ *
+ * This program used to differ (wakeup on P1_22, interrupt on P1_16),
+ * which meant a bench could run redskin or the sniffer but not both
+ * without moving two jumpers.
+ */
 #define RPI_DW1000_SPI		BITTERS_RPI_SPI0
-#define RPI_DW1000_WAKEUP       BITTERS_RPI_P1_22
+#define RPI_DW1000_WAKEUP       BITTERS_RPI_P1_16
 #define RPI_DW1000_RESET        BITTERS_RPI_P1_18
-#define RPI_DW1000_IRQ          BITTERS_RPI_P1_16
+#define RPI_DW1000_IRQ          BITTERS_RPI_P1_15
 
 #define RPI_GPIO_PIN_INITIALIZER(name)					\
     BITTERS_GPIO_PIN_INITIALIZER(BITTERS_RPI_GPIO_CHIP, RPI_##name)

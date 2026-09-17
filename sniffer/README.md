@@ -118,12 +118,12 @@ On a Raspberry Pi, connect the DecaWave module to these pins:
 | RPI | DWM1000 | Meaning
 |-----|---------|-------------------
 |  14 | GND     | Ground
-|  16 | IRQ     | DWM1000 interrupt
+|  15 | IRQ     | DWM1000 interrupt
+|  16 | WAKEUP  | DWM1000 wakeup
 |  17 | 3V3     | Power 3.3V
 |  18 | RESET   | DWM1000 reset
 |  19 | MOSI    | SPI MOSI
 |  21 | MISO    | SPI MISO
-|  22 | WAKEUP  | DWM1000 wakeup
 |  23 | SCLK    | SPI clock
 |  24 | CS      | SPI chip select
 
@@ -131,12 +131,15 @@ Reset and wakeup want a pull-up held across boot, which the Pi does not
 do by itself; `uwb_init()` prints the `raspi-gpio set` line to put in a
 boot-time script.
 
-**This is not the pin map the rest of the tree uses.** `rpi-redskin`, and
-`probe/app/unix/config.h` after it, put wakeup on P1_16 and the interrupt
-on P1_15; this program has wakeup on P1_22 and the interrupt on P1_16
-(reset is P1_18 for all three). A bench wired for one will not run the
-other. The map lives in `app/unix/config.h`, and it was left as it was
-found -- rewiring somebody's bench is not a thing a file move should do.
+This is the one pin map in use: the same one `rpi-redskin` is wired for
+and `probe/app/unix/config.h` took from it, so a Pi that already runs
+either of those runs this with nothing rewired. It lives in
+`app/unix/config.h`. The SPI settings and the three GPIO configurations
+are identical to rpi-redskin's too.
+
+Before this program was folded into the tree it differed -- wakeup on
+P1_22, interrupt on P1_16 -- which meant a bench could run redskin or the
+sniffer, but not both without moving two jumpers.
 
 
 Building
