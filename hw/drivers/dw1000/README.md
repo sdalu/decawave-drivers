@@ -159,6 +159,24 @@ the frame being read out. The frame itself survives, the driver holding
 its buffer against exactly this, but there is no reason to ask for the
 loss.
 
+What `dw1000_txrx_idle()` keeps, the next `dw1000_process_events()`
+handles, and that pass may well run while the frame is still on the
+air. A receive error, a timeout or an overrun found there is not
+answered with TRXOFF while a transmission is pending: TRXOFF would abort
+the send, the chip would raise no TXFRS for a frame it never finished,
+and a host waiting for the completion would wait for nothing. The
+receiver's status is dropped instead, the callback is still called, and
+the receiver reset UM 4.1.6 asks for is applied by the next
+`dw1000_rx_start()`. A good frame found there is read out as usual, but
+in double buffered receive the receiver is not re-enabled on top of the
+transmission; the completion's handler re-arms it, as after any send.
+
+The host's side of that: a callback that re-arms the receiver on
+`rx_error` or `rx_timeout` should skip it while its own send is pending
+and leave the re-arm to `tx_done`. The emulation port asserts on a
+receiver enabled during a transmission, and what the chip does with it
+is not documented.
+
 ### One frame at a time, and you must consume the completion
 
 A send issued while a previous one has not been reported done is refused

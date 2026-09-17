@@ -148,6 +148,12 @@ struct stub {
      */
     bool     swallow;
 
+    /* When set, the completion of a send is held back this long
+     * before it is sent, so that a step can act on the chip while
+     * the frame is still on the air.
+     */
+    unsigned tx_done_delay_ms;
+
     /* Written by the stub thread, read by a step once it has finished. */
     uint8_t  frame[DW1000_FRAME_MAXSIZE];
     size_t   framelen;
@@ -198,6 +204,7 @@ stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 	    offsetof(struct dw1000_driver_iopkt, tx.frame);
 	uint64_t now      = dw1000_emulation_clock();
 	uint64_t stamp;
+	unsigned delay_ms;
 
 	pthread_mutex_lock(&s->lock);
 	memcpy(s->frame, in.tx.frame, framelen);
@@ -215,9 +222,13 @@ stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 	stamp = (DW1000_CLOCK_ROUNDUP(now) + in.tx.antenna_delay)
 	        & ((1ull << DW1000_TIME_CLOCK_BITS) - 1);
 	s->tx_done_time = stamp;
+	delay_ms        = s->tx_done_delay_ms;
 	pthread_mutex_unlock(&s->lock);
 
 	stub_send(s, peer, peerlen, RSVC_UWB_IO, id, 0, 0, NULL, 0);
+
+	if (delay_ms)
+	    usleep(delay_ms * 1000);
 
 	memset(&out, 0, sizeof(out));
 	out.drvid             = in.drvid;
@@ -428,8 +439,9 @@ evt_reset(void)
     evt.rx_timeout_status = 0;
 }
 
+/* Wait for the interrupt line, and leave whatever raised it unprocessed. */
 static bool
-wait_irq(dw1000_t *dw, unsigned timeout_ms)
+wait_line(unsigned timeout_ms)
 {
     struct timespec deadline;
     bool got;
@@ -450,6 +462,14 @@ wait_irq(dw1000_t *dw, unsigned timeout_ms)
     got = evt.irq;
     evt.irq = false;
     pthread_mutex_unlock(&evt.lock);
+
+    return got;
+}
+
+static bool
+wait_irq(dw1000_t *dw, unsigned timeout_ms)
+{
+    bool got = wait_line(timeout_ms);
 
     if (got)
 	dw1000_process_events(dw);
@@ -776,6 +796,85 @@ step_tx_while_busy(dw1000_t *dw, struct stub *s)
     if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
 	return "no completion for the send after the idle";
 
+    return NULL;
+}
+
+/* A receive error latched before a send does not abort the send.
+ *
+ * dw1000_txrx_idle() keeps the pending events, by design, so the event
+ * pass that follows a send can find an error the receiver raised just
+ * before it, while the frame is on the air. Answering that error with
+ * TRXOFF, as the error path does with the transmitter idle, cuts the
+ * frame: the chip raises no TXFRS for a transmission it never finished,
+ * and the host waits for a completion that cannot come. ruby-dw1000 met
+ * it on a two-node bench as one send in a thousand timing out while the
+ * peer was transmitting too.
+ *
+ * The bad frame comes from the stub: a frame sent without the automatic
+ * CRC carries payload where its FCS should be, and the model rejects it
+ * on receive with RXFCE. The stub holds the completion of the send under
+ * test back for a while, so that the event pass runs with the frame
+ * still on the air, which is the ordering the race produces.
+ */
+static const char *
+step_tx_over_stale_rx_error(dw1000_t *dw, struct stub *s)
+{
+    uint32_t status;
+
+    /* Leave the bad frame in the stub. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE | DW1000_TX_NO_AUTO_CRC) != 0)
+	return "the uncrc'd frame was refused";
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "the uncrc'd frame did not complete";
+
+    /* Get it back, and leave the error it raises unprocessed. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = true;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0)
+	return "dw1000_rx_start did not start the reception";
+    if (!wait_line(IRQ_TIMEOUT_MS))
+	return "no interrupt for the bad frame";
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (!(status & DW1000_FLG_SYS_STATUS_RXFCE))
+	return REASON("RXFCE not in the status (0x%08" PRIx32 ") after"
+		      " the bad frame", status);
+
+    /* Send over it, the way a host does: IDLE, keeping the events. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 100;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0)
+	return "the send over the stale error was refused";
+
+    /* The event pass a host runs next, with the frame on the air. */
+    dw1000_process_events(dw);
+    if (!evt.rx_error)
+	return "the stale receive error was not reported";
+    if (evt.tx_done)
+	return "the completion was reported before the frame was out";
+
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "no completion for the send over the stale error: the"
+	       " error path cut the frame on the air";
+
+    pthread_mutex_lock(&s->lock);
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
     return NULL;
 }
 
@@ -1738,6 +1837,7 @@ main(void)
     step("rx delayed, late",     step_rx_delayed_late(&dw, &stub));
     step("wait4resp auto-rx",    step_wait4resp(&dw, &stub));
     step("tx while busy",        step_tx_while_busy(&dw, &stub));
+    step("tx over a stale rx error", step_tx_over_stale_rx_error(&dw, &stub));
     step("create/destroy cycles",step_lifecycle(&dw, &stub));
     step("medium vanishes",      step_medium_vanishes(&dw, &stub));
 

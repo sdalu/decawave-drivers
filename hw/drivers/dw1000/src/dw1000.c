@@ -1653,6 +1653,33 @@ void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
 
 /**
  * @internal
+ * @brief Drop what the receiver raised, leaving the transceiver alone
+ *
+ * @details The status side of _dw1000_txrx_off(): the receive-side bits
+ *          in @p clear are cleared, through the masked write the
+ *          swinging set needs in double buffered receive, and the
+ *          buffer pointers are realigned when frame bits are among
+ *          them. No TRXOFF: this is for an event found while a
+ *          transmission is in flight, which TRXOFF would abort with no
+ *          TXFRS ever raised for it (UM §7.2.15).
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  clear    event status bits to clear
+ */
+static void _dw1000_rx_drop_status(dw1000_t *dw, uint32_t clear) {
+    if (dw->config->dblbuff) {
+	_dw1000_rx_clear_status_dblbuff(dw, clear);
+    } else {
+	_dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
+			    clear);
+    }
+    if (clear & DW1000_MSK_SYS_STATUS_ALL_RX_GOOD)
+	_dw1000_rx_sync_dblbuff(dw);
+}
+
+
+/**
+ * @internal
  * @brief  Recover the receiver from a double buffered overrun
  *
  * @details UM §4.3.3/§4.3.5: a frame arrived while both buffers were
@@ -1675,10 +1702,23 @@ void _dw1000_rx_overrun_recover(dw1000_t *dw, uint32_t status) {
 
     // RXOVRR is deliberately absent from the bits cleared here: UM
     // §7.2.17 makes it READ ONLY, so writing 1 to it does nothing.
-    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
-		         DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
-		         DW1000_MSK_SYS_STATUS_ALL_RX_TO);
-    _dw1000_rx_reset(dw);
+    //
+    // With a transmission in flight the TRXOFF would abort it, and the
+    // chip raises no TXFRS for a frame it never finished (UM §7.2.15):
+    // drop the receiver's status without it, and put the receiver
+    // reset off until dw1000_rx_start(). What belongs to the pending
+    // send (tx_pending, wait4resp) is left to its completion.
+    if (dw->tx_pending) {
+	_dw1000_rx_drop_status(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
+				   DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
+				   DW1000_MSK_SYS_STATUS_ALL_RX_TO);
+	dw->rx_reset_due = 1;
+    } else {
+	_dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
+			     DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
+			     DW1000_MSK_SYS_STATUS_ALL_RX_TO);
+	_dw1000_rx_reset(dw);
+    }
 
     // UM §4.3.5: "The overrun condition and the RXOVRR status bit will
     // be cleared as soon as the host issues the HRBPT command". That is
@@ -1696,7 +1736,8 @@ void _dw1000_rx_overrun_recover(dw1000_t *dw, uint32_t status) {
 		       (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
     _dw1000_rx_sync_dblbuff(dw);
 
-    dw->wait4resp = 0;
+    if (! dw->tx_pending)
+	dw->wait4resp = 0;
 
     if (cfg->cb.rx_error) {
 	cfg->cb.rx_error(dw, status);
@@ -1773,8 +1814,14 @@ bool dw1000_process_events(dw1000_t *dw) {
 		_dw1000_reg_read16(dw, DW1000_REG_LDE_IF,
 				   DW1000_OFF_LDE_THRESH);
 
-	    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
-				DW1000_FLG_SYS_CTRL_RXENAB);
+	    // Not over a transmission, though: this frame arrived before
+	    // the send, and the chip is in TX. The receiver is not enabled
+	    // on top of that; the completion's handler re-arms it, as it
+	    // would after any send.
+	    if (! dw->tx_pending) {
+		_dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
+				    DW1000_FLG_SYS_CTRL_RXENAB);
+	    }
 
 	    // From here to the toggle below the host side buffer belongs
 	    // to this frame and to whoever reads it out, the rx_ok
@@ -1935,16 +1982,29 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// not what the transmitter raised: dw1000_txrx_off() would also
 	// clear a completion set since the status snapshot taken above,
 	// and nothing would ever report it
-	_dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
-			     DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
-			     DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+	//
+	// Unless a transmission is in flight: what the receiver raised
+	// before the send is dropped without the TRXOFF, which would abort
+	// the frame on the air with no TXFRS ever raised for it (UM
+	// §7.2.15), and the reset below is owed to dw1000_rx_start()
+	if (dw->tx_pending) {
+	    _dw1000_rx_drop_status(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+				       DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+				       DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+	    dw->rx_reset_due = 1;
+	} else {
+	    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+				 DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+				 DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+	}
 
 	// HOTFIX: UM §4.1.6: RX Message timestamp
 	//   "Due to an issue in the re-initialisation of the receiver,
 	//    it is necessary to apply a receiver reset after an
 	//    error or timeout event.
 	//    (It is not necessary to do this for RXPTO and RXSFDTO)"
-        _dw1000_rx_reset(dw);
+        if (! dw->tx_pending)
+            _dw1000_rx_reset(dw);
 
         // Call the corresponding callback if present
         if (cfg->cb.rx_timeout) {
@@ -1968,16 +2028,29 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// not what the transmitter raised: dw1000_txrx_off() would also
 	// clear a completion set since the status snapshot taken above,
 	// and nothing would ever report it
-	_dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
-			     DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
-			     DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+	//
+	// Unless a transmission is in flight: what the receiver raised
+	// before the send is dropped without the TRXOFF, which would abort
+	// the frame on the air with no TXFRS ever raised for it (UM
+	// §7.2.15), and the reset below is owed to dw1000_rx_start()
+	if (dw->tx_pending) {
+	    _dw1000_rx_drop_status(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+				       DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+				       DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+	    dw->rx_reset_due = 1;
+	} else {
+	    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+				 DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+				 DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+	}
 
 	// HOTFIX: UM §4.1.6: RX Message timestamp
 	//   "Due to an issue in the re-initialisation of the receiver,
 	//    it is necessary to apply a receiver reset after an
 	//    error or timeout event.
 	//    (It is not necessary to do this for RXPTO and RXSFDTO)"
-        _dw1000_rx_reset(dw);
+        if (! dw->tx_pending)
+            _dw1000_rx_reset(dw);
 
         // Call the corresponding callback if present
         if (cfg->cb.rx_error) {
@@ -2274,6 +2347,15 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask) {
 
 
 int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
+    // A receiver reset owed from an error or timeout handled while a
+    // transmission was in flight (UM §4.1.6): applied now that the
+    // receiver is being brought up, unless the transmission is still
+    // on the air, in which case the next start gets it
+    if (dw->rx_reset_due && ! dw->tx_pending) {
+	dw->rx_reset_due = 0;
+	_dw1000_rx_reset(dw);
+    }
+
     // Sync double buffer unless explicitely disabled
     if (! (rx_mode & DW1000_RX_NO_DBLBUFF_SYNC)) {
         _dw1000_rx_sync_dblbuff(dw);

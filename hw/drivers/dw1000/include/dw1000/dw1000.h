@@ -576,6 +576,10 @@ struct dw1000 {
                             //  in the host side buffer, being read out
                             //  by the rx_ok callback. Releasing it now
                             //  would hand it back to the chip mid-read.
+    uint8_t  rx_reset_due;  // A receive error or timeout was handled
+                            //  while a transmission was in flight, so
+                            //  the receiver reset UM 4.1.6 asks for
+                            //  was put off: dw1000_rx_start() applies it
 
     struct {
 	uint32_t sys_cfg;   // Shadow of SYS_CFG,  UM 7.2.6
