@@ -17,9 +17,10 @@
  * there is no protocol running underneath needing a long-lived process,
  * no reset signal, no debug channel: one role, one run, one exit code.
  *
- * NOT BUILT, NOT RUN: this needs a Raspberry Pi with a DW1000 attached
- * and the bitters GPIO/SPI library, neither of which is available in
- * the environment this was written in. See probe/app/unix/build.sh.
+ * Needs a Raspberry Pi with a DW1000 attached and the bitters GPIO/SPI
+ * library, so it builds nowhere else -- see probe/app/unix/build.sh,
+ * which takes BITTERS= and reads both trees' manifests. Built and run on
+ * rpi-a; the bench pair for measurements is rpi-c to rpi-d.
  */
 
 /* pthread_setname_np() is a glibc extension. */
@@ -134,17 +135,18 @@ static const dw1000_config_t dw1000_config = {
     .leds_blink_time  = 3,
     .lde_loading      = 1,
     .rxauto           = 1,
-    /* Settled as a mechanism: six defects fixed on 2026-09-16, and
-     * tests/emulation/dblbuf.c now drives the double-buffer event path,
-     * which had no test at all before that round. The overrun recovery
-     * is settled too -- see AUDIT.md, "the overrun recovery works, and
-     * the test could not see it".
+    /* Not an experiment any more, and for the responder not a choice:
+     * benched 2026-09-17 against rpi-d, 4 interleaved rounds of 30
+     * exchanges per combination, a single-buffered responder resolved
+     * 0 of 120 -- it hears the POLL and the FINAL and never the REPORT.
+     * Double buffered it resolved 120 of 120. AUDIT.md carries the
+     * table.
      *
-     * What is NOT settled is the metrology. The guide records a 6 to
-     * 10 cm shift in SDS-TWR distance on every pair, with half the
-     * spread, and which mode carries the bias is still unattributed.
-     * That matters more here than anywhere else, because distance is
-     * what this instrument exists to report. */
+     * The initiator does have a choice, which --no-dblbuff exposes, and
+     * it costs about 2.3 cm on asym_mm (and slightly more spread). The
+     * guide's older 6 to 10 cm figure is not reproduced here, and the
+     * experiment that would attribute it -- both ends single buffered --
+     * cannot be run, because that configuration does not resolve. */
     .dblbuff          = 1,
     .tx_antenna_delay = DW1000_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
     .rx_antenna_delay = DW1000_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
@@ -330,7 +332,9 @@ usage(const char *prog)
         "  --power=<dB>|auto transmit power, 0..30.5 on the 0.5 dB grid\n"
         "                    (default: auto)\n"
         "  --node=NAME       origin node name emitted lines carry\n"
-        "                    (default: this host's hostname)\n",
+        "                    (default: this host's hostname)\n"
+        "  --dblbuff         double-buffered receive (default)\n"
+        "  --no-dblbuff      single-buffered, to compare against\n",
         prog);
 }
 
@@ -394,6 +398,11 @@ main(int argc, char *argv[])
     long     warmup      = 5;
     uint8_t  power        = DW1000_TX_POWER_AUTO;
     char     node_name[64] = {0};
+    /* Default on, as the config template has it. The switch exists so a
+     * bench run can interleave the two modes without rebuilding between
+     * them, which is the only way to compare them against the same air:
+     * rpi-redskin has the same pair of flags, for the same reason. */
+    bool     dblbuff      = dw1000_config.dblbuff;
 
     while (argc > 1 && argv[1][0] == '-') {
         if (strcmp(argv[1], "--ss") == 0) {
@@ -405,6 +414,10 @@ main(int argc, char *argv[])
                 DIE("invalid --power value '%s'", argv[1] + 8);
         } else if (strncmp(argv[1], "--node=", 7) == 0) {
             strncpy(node_name, argv[1] + 7, sizeof(node_name) - 1);
+        } else if (strcmp(argv[1], "--dblbuff") == 0) {
+            dblbuff = true;
+        } else if (strcmp(argv[1], "--no-dblbuff") == 0) {
+            dblbuff = false;
         } else if (strcmp(argv[1], "--") == 0) {
             argc--; argv++;
             break;
@@ -484,23 +497,21 @@ main(int argc, char *argv[])
     if (bitters_spi_enable(&dw1000_spi, &dw1000_spi_cfg) < 0)
         DIE_ERRNO("unable to configure spi for dw1000");
 
-    dw1000_init(&dw0, &dw1000_config);
-    /* No dw1000_hardreset() here, and this is the ONE place this
-     * application knowingly differs from the working stack.
-     *
-     * The reason first given for it was wrong on its facts: it claimed
-     * spank/port/hal/io/dw1000/src/driver.c goes init -> initialise ->
-     * configure without a hard reset. That file does no such thing --
-     * it goes init -> hardreset -> initialise -> leds_blink ->
-     * configure, and sniffer/app/unix/uwb_dw1000.c follows it exactly.
-     * So the premise is gone; what remains is the observation that
-     * prompted it, that a hard reset released early leaves the chip's
-     * clocks half configured, receive working on defaults and transmit
-     * not.
-     *
-     * Still under test, and worth settling: an instrument that reports
-     * distance should not be the only thing on the bench bringing the
-     * chip up differently from everything else on it. */
+    /* dw1000_init() keeps the pointer, so the copy the switch writes to
+     * is static rather than automatic; the template above stays const. */
+    static dw1000_config_t dw1000_config_run;
+    dw1000_config_run         = dw1000_config;
+    dw1000_config_run.dblbuff = dblbuff;
+
+    dw1000_init(&dw0, &dw1000_config_run);
+    /* init -> hardreset -> initialise, which is what
+     * spank/port/hal/io/dw1000/src/driver.c does and what
+     * sniffer/app/unix/uwb_dw1000.c does after it. This application used
+     * to skip the reset and was the one thing on the bench bringing the
+     * DW1000 up differently from everything else on it -- on the strength
+     * of a comment that misread the very file it cited as precedent.
+     */
+    dw1000_hardreset(&dw0);
     if (dw1000_initialise(&dw0) < 0)
         DIE("DW1000 not identified");
 
