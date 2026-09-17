@@ -134,7 +134,18 @@ static const dw1000_config_t dw1000_config = {
     .leds_blink_time  = 3,
     .lde_loading      = 1,
     .rxauto           = 1,
-    .dblbuff          = 1, /* EXPERIMENT 2026-09-16 */
+    /* Settled as a mechanism: six defects fixed on 2026-09-16, and
+     * tests/emulation/dblbuf.c now drives the double-buffer event path,
+     * which had no test at all before that round. The overrun recovery
+     * is settled too -- see AUDIT.md, "the overrun recovery works, and
+     * the test could not see it".
+     *
+     * What is NOT settled is the metrology. The guide records a 6 to
+     * 10 cm shift in SDS-TWR distance on every pair, with half the
+     * spread, and which mode carries the bias is still unattributed.
+     * That matters more here than anywhere else, because distance is
+     * what this instrument exists to report. */
+    .dblbuff          = 1,
     .tx_antenna_delay = DW1000_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
     .rx_antenna_delay = DW1000_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
     .cb.tx_done       = dw1000_cb_tx_done,
@@ -474,11 +485,22 @@ main(int argc, char *argv[])
         DIE_ERRNO("unable to configure spi for dw1000");
 
     dw1000_init(&dw0, &dw1000_config);
-    /* No dw1000_hardreset() here: the working stack on this hardware
-     * (spank/port/hal/io/dw1000/src/driver.c) goes init -> initialise ->
-     * configure without one, and initialise() performs its own reset. A
-     * hard reset released early leaves the chip's clocks half configured
-     * -- receive works on defaults, transmit does not. Under test. */
+    /* No dw1000_hardreset() here, and this is the ONE place this
+     * application knowingly differs from the working stack.
+     *
+     * The reason first given for it was wrong on its facts: it claimed
+     * spank/port/hal/io/dw1000/src/driver.c goes init -> initialise ->
+     * configure without a hard reset. That file does no such thing --
+     * it goes init -> hardreset -> initialise -> leds_blink ->
+     * configure, and sniffer/app/unix/uwb_dw1000.c follows it exactly.
+     * So the premise is gone; what remains is the observation that
+     * prompted it, that a hard reset released early leaves the chip's
+     * clocks half configured, receive working on defaults and transmit
+     * not.
+     *
+     * Still under test, and worth settling: an instrument that reports
+     * distance should not be the only thing on the bench bringing the
+     * chip up differently from everything else on it. */
     if (dw1000_initialise(&dw0) < 0)
         DIE("DW1000 not identified");
 
