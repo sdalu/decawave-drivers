@@ -6,19 +6,19 @@
  */
 
 /**
- * DW1000 probe -- Linux/Raspberry Pi application.
+ * DW1000 probe: Linux/Raspberry Pi application.
  *
  * Where zephyr-redskin/probe's src/shell.c offers `probe twr_resp` and
  * `probe twr_init` as shell commands, this offers the same two roles as
  * one argv-driven run: bring the radio up, run the selected role once,
- * report a summary, exit. It is deliberately not a daemon -- unlike
+ * report a summary, exit. It is deliberately not a daemon, unlike
  * rpi-redskin/main.c, which this is modelled on for the bring-up shape
  * (bitters GPIO/SPI wiring, the DW1000 pin map, the processing thread),
  * there is no protocol running underneath needing a long-lived process,
  * no reset signal, no debug channel: one role, one run, one exit code.
  *
  * Needs a Raspberry Pi with a DW1000 attached and the bitters GPIO/SPI
- * library, so it builds nowhere else -- see probe/app/unix/build.sh,
+ * library, so it builds nowhere else; see probe/app/unix/build.sh,
  * which takes BITTERS= and reads both trees' manifests. Built and run on
  * rpi-a; the bench pair for measurements is rpi-c to rpi-d.
  */
@@ -73,7 +73,7 @@ dw1000_spi   = RPI_SPI_INITIALIZER(DW1000_SPI, 0);
 
 /* dw1000_wakeup IS driven here, high, as rpi-redskin does. The driver
  * only asserts it at init and never on the transmit path, and the Zephyr
- * application has no such line -- but on this HAT the pin exists and is
+ * application has no such line. But on this HAT the pin exists and is
  * an input to the chip, and left unconfigured it floats. The working
  * stack drives it and prints a boot-time hint to pull it up; an earlier
  * version of this file reasoned from the Zephyr side and left it
@@ -101,13 +101,13 @@ static dw1000_spi_driver_t dw1000_spi_drv = {
 /* Driver bring-up                                                      */
 /*======================================================================*/
 
-/* Not calibrated for this instrument -- see zephyr-redskin/probe/src/
+/* Not calibrated for this instrument; see zephyr-redskin/probe/src/
  * main.c's own note by the same name. rpi-redskin's HAT uses 154.6 m;
  * kept the same here since this app targets the same hardware, so the
  * two remain comparable the way the Zephyr probe and redskin are on
  * their bench. */
 /* The conversion is DW1000_METER_TO_CLOCK() in <dw1000/dw1000.h> now,
- * where the sniffer and rpi-redskin reach it too -- this file used to
+ * where the sniffer and rpi-redskin reach it too. This file used to
  * spell its own, in integer decimetres, because metres as an integer are
  * too coarse for an antenna delay (one metre is 213 ticks). The driver's
  * is floating point for that reason, so the figure is written in metres
@@ -129,7 +129,7 @@ static const dw1000_config_t dw1000_config = {
     .wakeup           = &dw1000_wakeup,
     /* As rpi-redskin has them. Not for the LEDs: the driver's LED block
      * is also where PMSC_CTRL0's GPDCE and KHZCLKEN get enabled, beside
-     * the driver author's own note "XXX: seems to be mandatory?!" -- and
+     * the driver author's own note "XXX: seems to be mandatory?!", and
      * with leds == 0 that block is skipped entirely. Under test. */
     .leds             = DW1000_LED_ALL,
     .leds_blink_time  = 3,
@@ -138,14 +138,14 @@ static const dw1000_config_t dw1000_config = {
     /* Not an experiment any more, and for the responder not a choice:
      * benched 2026-09-17 against rpi-d, 4 interleaved rounds of 30
      * exchanges per combination, a single-buffered responder resolved
-     * 0 of 120 -- it hears the POLL and the FINAL and never the REPORT.
+     * 0 of 120: it hears the POLL and the FINAL and never the REPORT.
      * Double buffered it resolved 120 of 120. AUDIT.md carries the
      * table.
      *
      * The initiator does have a choice, which --no-dblbuff exposes, and
      * it costs about 2.3 cm on asym_mm (and slightly more spread). The
      * guide's older 6 to 10 cm figure is not reproduced here, and the
-     * experiment that would attribute it -- both ends single buffered --
+     * experiment that would attribute it (both ends single buffered)
      * cannot be run, because that configuration does not resolve. */
     .dblbuff          = 1,
     .tx_antenna_delay = DW1000_METER_TO_CLOCK(PROBE_ANTENNA_DELAY_ROUNDTRIP_M) / 2,
@@ -182,7 +182,7 @@ static struct dw1000_radio probe_radio = {
 /*======================================================================*/
 
 /* Same shape as zephyr-redskin/probe/src/main.c's: capture (for the
- * exchange roles) then re-arm, never the other way round -- a restart is
+ * exchange roles) then re-arm, never the other way round: a restart is
  * free to disturb the very registers the capture reads. */
 static void
 dw1000_cb_tx_done(dw1000_t *dw, uint32_t status)
@@ -224,7 +224,7 @@ dw1000_cb_rx_error(dw1000_t *dw, uint32_t status)
 /*======================================================================*/
 
 /* THE ONE INVIOLABLE RULE, same as zephyr-redskin/probe/src/main.c's:
- * this callback does exactly one thing -- latch the wake-up -- and
+ * this callback does exactly one thing, latch the wake-up, and
  * nothing else. It runs on one of bitters' own GPIO IRQ threads (see
  * bitters_gpio_irq_callback()'s own doc comment), not inside a real
  * signal handler, so calling into dw1000_probe_port_wake() (a pthread
@@ -240,8 +240,8 @@ dw1000_irq_cb(bitters_gpio_pin_t *pin, void *args)
     dw1000_probe_port_wake();
 }
 
-/* Not depended upon for correctness -- every real wake-up is latched by
- * dw1000_irq_cb() above -- only a bound on how long a missed edge could
+/* Not depended upon for correctness (every real wake-up is latched by
+ * dw1000_irq_cb() above), only a bound on how long a missed edge could
  * go unnoticed, same as the Zephyr application's event thread. */
 #define PROBE_EVENT_WAIT_TIMEOUT_US 1000000U
 
@@ -265,7 +265,7 @@ dw1000_event_thread(void *arg)
 
 
 /*======================================================================*/
-/* Line buffering for twr_resp -- see <dw1000/probe/exchange.h>'s note   */
+/* Line buffering for twr_resp: see <dw1000/probe/exchange.h>'s note    */
 /* on why dw1000_probe_twr_resp_run() takes a callback rather than       */
 /* owning a buffer of its own: a Linux process has no RAM budget to      */
 /* protect the way the DWM1001 does, so this simply heap-allocates       */
@@ -464,7 +464,7 @@ main(int argc, char *argv[])
             strcpy(node_name, "-");
     }
 
-    INFO("probe (unix) -- dw1000 %s / bitters %s",
+    INFO("probe (unix): dw1000 %s / bitters %s",
         DW1000_VERSION_FULL, bitters_version());
     INFO("PID = %d", getpid());
     INFO("Antenna delay tx=%u / rx=%u",
@@ -508,7 +508,7 @@ main(int argc, char *argv[])
      * spank/port/hal/io/dw1000/src/driver.c does and what
      * sniffer/app/unix/uwb_dw1000.c does after it. This application used
      * to skip the reset and was the one thing on the bench bringing the
-     * DW1000 up differently from everything else on it -- on the strength
+     * DW1000 up differently from everything else on it, on the strength
      * of a comment that misread the very file it cited as precedent.
      */
     dw1000_hardreset(&dw0);
@@ -521,7 +521,7 @@ main(int argc, char *argv[])
 
     /* Read back off the chip, not echoed from the config: the two are
      * the same only when the chip honoured what it was asked. Printed
-     * once at start-up, never inside an exchange -- it is SPI traffic.
+     * once at start-up, never inside an exchange: it is SPI traffic.
      * The identical lines come out of the Zephyr shell's `probe config`,
      * so the two platforms diff directly. */
     {
@@ -542,7 +542,7 @@ main(int argc, char *argv[])
         DIE_ERRNO("failed to attach DW1000 IRQ callback");
 
     /* PROBE_TXTEST=1: the rawest possible transmit, bypassing the exchange,
-     * the receiver and the event thread entirely -- write, start, poll
+     * the receiver and the event thread entirely: write, start, poll
      * TXFRS. A listener that hears this and not the exchange indicts the
      * exchange's interaction; one that hears neither indicts bring-up. */
     if (getenv("PROBE_TXTEST") != NULL) {
@@ -610,7 +610,7 @@ main(int argc, char *argv[])
     /* If a wake-up is already latched when the nudge below arrives, the
      * event thread's current dw1000_probe_port_wait() returns true and
      * it runs one more dw1000_process_events() before it next tests
-     * event_thread_stop -- and a stray rx_timeout/rx_error there would
+     * event_thread_stop, and a stray rx_timeout/rx_error there would
      * re-arm the receiver right after the txrx_off() above. Harmless
      * for a process about to tear down its pins and exit, so left as
      * best-effort rather than adding a second flag to close that

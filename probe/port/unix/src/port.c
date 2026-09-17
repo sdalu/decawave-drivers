@@ -11,12 +11,12 @@
  * / dw1000_probe_port_wake(), and a line on stdout.
  *
  * Deliberately identical in shape to port/emulation/src/port.c, which is
- * already POSIX/pthread-based and already correct -- this is that same
+ * already POSIX/pthread-based and already correct; this is that same
  * implementation for a real host rather than a simulated one. The two
  * are kept as separate translation units (rather than one shared file)
- * because they are separate PORTS in the manifest -- an application
+ * because they are separate PORTS in the manifest: an application
  * building for the emulation medium and one driving real hardware pick
- * one or the other at link time, the same way any two OSAL ports do --
+ * one or the other at link time, the same way any two OSAL ports do,
  * even though nothing here differs from it today. A port that later
  * needs to depend on something Linux-specific (a HAT's GPIO edge count
  * for interrupt diagnostics, say) gets that without touching the
@@ -24,7 +24,7 @@
  *
  * "Interrupt context" here is the application's own SIGIO/GPIO-edge
  * handling of the DW1000's interrupt line calling
- * dw1000_probe_port_wake() -- see probe/app/unix/main.c, which runs that
+ * dw1000_probe_port_wake(); see probe/app/unix/main.c, which runs that
  * on an ordinary pthread rather than a real signal handler, so an
  * ordinary mutex is fine here.
  *
@@ -109,11 +109,11 @@ dw1000_probe_port_wait(uint32_t timeout_us)
     }
 
     pthread_mutex_lock(&wait_lock);
-    /* A wake-up already pending -- including one that arrived before
-     * this call was made -- is consumed at once, timeout_us of 0
+    /* A wake-up already pending, including one that arrived before
+     * this call was made, is consumed at once, timeout_us of 0
      * included: the loop condition is false and pthread_cond_timedwait()
      * is never entered. Otherwise it is entered with a deadline already
-     * in the past, which returns ETIMEDOUT immediately -- the "polls"
+     * in the past, which returns ETIMEDOUT immediately: the "polls"
      * dw1000_probe_port_wait() promises for a zero timeout.
      */
     while (!wait_pending) {

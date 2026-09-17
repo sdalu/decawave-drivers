@@ -12,7 +12,7 @@
  *
  * tests/emulation/smoke.c already covers a frame going out and coming
  * back, and its medium runs a fake clock of its own stepping by a
- * millisecond per stamp -- fine for checking that a timestamp arrives,
+ * millisecond per stamp: fine for checking that a timestamp arrives,
  * useless for checking when. The medium here stamps with
  * dw1000_emulation_clock() instead, the same clock the model's SYS_TIME
  * reads, which is the only way the two halves can be compared at all.
@@ -24,7 +24,7 @@
  * of them is worth restating, because this file once claimed it had
  * relaxed and it had not: the line callback still must not call the
  * driver. It no longer runs inside the model's mutex, which was one
- * reason; the other stands, and is the one smoke.c gives -- the callback
+ * reason; the other stands, and is the one smoke.c gives: the callback
  * runs on the rsvc reader thread, and a driver call from it waits for a
  * reply that only that thread could have delivered.
  *
@@ -142,7 +142,7 @@ struct stub {
      */
     bool     shutdown;
 
-    /* When set, an RX_CONFIG is received and simply not answered --
+    /* When set, an RX_CONFIG is received and simply not answered:
      * the behaviour of a server that does not know a service type, or
      * has stopped between the request and the reply.
      */
@@ -209,7 +209,7 @@ stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 
 	/* The model asserts, for an immediate send, that TX_STAMP less
 	 * its own TX_ANTD lands on a 512-tick boundary. So round first,
-	 * then add the antenna delay the node supplied -- which is the
+	 * then add the antenna delay the node supplied, which is the
 	 * convention port/emulation/README.md states.
 	 */
 	stamp = (DW1000_CLOCK_ROUNDUP(now) + in.tx.antenna_delay)
@@ -300,7 +300,7 @@ stub_medium(void *args)
 	 * is how step_medium_vanishes() releases this thread once it has
 	 * taken the socket's path away. Nothing in the protocol sends an
 	 * empty datagram, so there is no legitimate reading to confuse it
-	 * with -- and continuing would spin, since a shut-down socket
+	 * with, and continuing would spin, since a shut-down socket
 	 * returns zero for ever.
 	 */
 	if (n == 0) {
@@ -554,7 +554,7 @@ step_sys_time(dw1000_t *dw, struct stub *s)
 }
 
 /* A delayed send. The frame must leave near the programmed time, and
- * TX_RAWST must be that time exactly -- UM 3.3 makes the RMARKER the
+ * TX_RAWST must be that time exactly: UM 3.3 makes the RMARKER the
  * programmed value by construction, so there is nothing to round.
  */
 static const char *
@@ -614,7 +614,7 @@ step_tx_delayed(dw1000_t *dw, struct stub *s)
      * the programmed time.
      *
      * Only the lower bound is asserted, and it is the one that says
-     * something about the model -- a model that ignored DX_TIME and sent
+     * something about the model: a model that ignored DX_TIME and sent
      * at once would trip it by 5 ms. There is no upper bound, because
      * there is nothing honest to put in it: how long after the deadline
      * the frame actually reaches the medium is how long the host took to
@@ -624,8 +624,8 @@ step_tx_delayed(dw1000_t *dw, struct stub *s)
      * run in twenty on a loaded box, measuring the scheduler and calling
      * it a defect.
      *
-     * What would have been caught by an upper bound -- a deadline armed
-     * on the wrong lap of the 40-bit counter, which is 17.2 s out -- is
+     * What would have been caught by an upper bound (a deadline armed
+     * on the wrong lap of the 40-bit counter, which is 17.2 s out) is
      * already caught by wait_irq() above timing out, and the exact
      * TX_RAWST check is what proves the model computed the right moment
      * whatever the scheduler then did with it.
@@ -677,7 +677,7 @@ step_tx_delayed_late(dw1000_t *dw, struct stub *s)
 
     /* UM 7.2.17: HPDWARN "is READ ONLY. It will clear when the delayed
      * TX/RX is cancelled". The driver's answer to the warning was a
-     * TRXOFF, which is that cancellation, so the bit must now be gone --
+     * TRXOFF, which is that cancellation, so the bit must now be gone,
      * without the host writing anything, because writing it does
      * nothing. A model that latched it would leave it set here.
      */
@@ -687,7 +687,7 @@ step_tx_delayed_late(dw1000_t *dw, struct stub *s)
 
     /* And the bit being read only is not a detail: try writing 1 to it,
      * the way a host would clear an ordinary status bit, and check that
-     * nothing happens -- here by confirming the next delayed send still
+     * nothing happens, here by confirming the next delayed send still
      * works. This is the consequence that matters. A model that latched
      * HPDWARN would refuse every delayed operation from here on, which
      * is a node that has silently lost delayed send for the rest of the
@@ -1191,7 +1191,7 @@ step_rx_delayed(dw1000_t *dw, struct stub *s)
  * end of the sender's own frame, with no software in between. A
  * responder that answers in under a millisecond will be missed by a host
  * that re-arms the receiver from its transmit-complete callback, and
- * heard by one that set WAIT4RESP -- so a model that quietly required
+ * heard by one that set WAIT4RESP, so a model that quietly required
  * the software path would let an exchange pass in emulation that fails
  * on a fast link, or fail one that works.
  *
@@ -1239,7 +1239,7 @@ step_wait4resp(dw1000_t *dw, struct stub *s)
     }
     pthread_mutex_unlock(&s->lock);
 
-    /* Nobody answers, so the frame wait timeout must end it -- which it
+    /* Nobody answers, so the frame wait timeout must end it, which it
      * can only do if the turn-on armed it. Before this was fixed the
      * host waited for ever here.
      */
@@ -1267,7 +1267,7 @@ step_wait4resp(dw1000_t *dw, struct stub *s)
  * Every other step here creates one model and destroys it at exit, so
  * the shutdown path runs once per process and never in the state a
  * caller that loops through configurations puts it in. That caller
- * exists -- a transmit power sweep builds a model per setting -- and a
+ * exists (a transmit power sweep builds a model per setting), and a
  * thread left behind each time would surface as a failure to create the
  * nth one, a long way from the call that leaked the first.
  *
@@ -1382,8 +1382,8 @@ step_lifecycle(dw1000_t *dw, struct stub *s)
 /* A server that does not answer is an error, not a hang.
  *
  * Every call a node makes is a request with a reply, and a server that
- * has stopped -- or that does not recognise a service type, which is
- * what an older server does with a newer node -- leaves nothing to wake
+ * has stopped, or that does not recognise a service type, which is
+ * what an older server does with a newer node, leaves nothing to wake
  * the caller. That used to block the node for ever, and because a node's
  * work happens on these calls, for ever meant the run was over with no
  * indication why. The wait is bounded now.
@@ -1391,7 +1391,7 @@ step_lifecycle(dw1000_t *dw, struct stub *s)
  * Two things are checked, and the second matters as much as the first: 
  * that the call comes back at all, and that it comes back no sooner than
  * the bound. A call that failed instantly would also "not hang", and
- * would be a far worse bug -- it would abandon replies that were merely
+ * would be a far worse bug: it would abandon replies that were merely
  * in flight.
  */
 static const char *
@@ -1465,8 +1465,8 @@ static bool stub_start(struct stub *s, const char *path, pthread_t *thread);
  * This is not a corner case; it is how every simulation ends. The
  * simulator takes its socket away and its nodes carry on for a moment,
  * transmitting into a path that is no longer there. The model used to
- * abort on that -- an assert on a failed writev inside rsvc, and an
- * EMU_FATAL on a failed RX_CONFIG -- so an orderly shutdown produced
+ * abort on that (an assert on a failed writev inside rsvc, and an
+ * EMU_FATAL on a failed RX_CONFIG), so an orderly shutdown produced
  * what looked like a crash, after the run's work was already done and
  * with nothing useful in it. Observed in spank's simulation, where it
  * fired for two nodes out of ten in one run and none in the next.
@@ -1535,7 +1535,7 @@ step_medium_vanishes(dw1000_t *dw, struct stub *s)
     if (dw1000_configure(&d, &radio) != 0)
 	return "dw1000_configure failed against the second medium";
 
-    /* The server goes away -- properly, which means the socket itself
+    /* The server goes away, properly, which means the socket itself
      * and not merely its name. Unlinking the path is not enough: the
      * node's socket is *connected*, so the binding outlives the name and
      * sends keep succeeding. It is the endpoint's destruction, when the

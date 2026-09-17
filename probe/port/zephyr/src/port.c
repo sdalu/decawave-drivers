@@ -17,7 +17,7 @@
  * The latch is a k_sem with a limit of 1, which IS the semantics
  * <dw1000/probe/port.h> asks for and not an approximation of it: a give
  * before any take is remembered, a take consumes exactly one, and gives
- * beyond the limit are dropped rather than counted -- so wakes collapse.
+ * beyond the limit are dropped rather than counted, so wakes collapse.
  * k_sem_give() is safe from an interrupt handler, which is the context
  * the contract requires wake() to survive.
  */
@@ -65,8 +65,8 @@ static K_SEM_DEFINE(wake_sem, 0, 1);
 bool
 dw1000_probe_port_wait(uint32_t timeout_us)
 {
-    /* K_USEC(0) is K_NO_WAIT, so a zero timeout polls -- which is what
-     * the contract promises -- and a pending give is still consumed. */
+    /* K_USEC(0) is K_NO_WAIT, so a zero timeout polls, which is what
+     * the contract promises, and a pending give is still consumed. */
     return k_sem_take(&wake_sem, K_USEC(timeout_us)) == 0;
 }
 

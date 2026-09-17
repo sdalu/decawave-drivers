@@ -10,7 +10,7 @@
  * on the socket.
  *
  * The register model is driven by the port (the SPI and IO line calls of
- * dw1000/osal.h); what it cannot answer on its own -- the air -- it asks
+ * dw1000/osal.h); what it cannot answer on its own, the air, it asks
  * a medium server over the rsvc unix socket, as `struct
  * dw1000_driver_iopkt` messages of type DW1000_RSVC_TX, RX, TX_DONE and
  * RX_CONFIG.
@@ -69,7 +69,7 @@ void dw1000_emulation_reset(struct dw1000_emulation *e);
  * closed: a deadline that fired into a closed connection would wait for
  * a reply nobody is left to deliver.
  *
- * Idempotent. Must not be called from the line callback -- that would be
+ * Idempotent. Must not be called from the line callback: that would be
  * the model waiting for a thread that is waiting for the callback to
  * return.
  *
@@ -84,9 +84,9 @@ void dw1000_emulation_stop(struct dw1000_emulation *e);
  * model and the rsvc connection each hold a thread that calls into the
  * other:
  *
- *   1. @p dw1000_emulation_stop(e)  -- after this the model makes no
+ *   1. @p dw1000_emulation_stop(e)  : after this the model makes no
  *                                      further calls on the connection;
- *   2. @p rsvc_close(rsvc)          -- after this the reader thread has
+ *   2. @p rsvc_close(rsvc)          : after this the reader thread has
  *                                      been joined, so no frame can
  *                                      arrive in the model;
  *   3. @p dw1000_emulation_destroy(e).
@@ -110,7 +110,7 @@ void dw1000_emulation_destroy(struct dw1000_emulation *e);
  *
  * The model has no oscillator to count, so it derives the device clock
  * from the host's CLOCK_REALTIME by the same formula the reference
- * medium server uses -- seconds since the epoch times
+ * medium server uses: seconds since the epoch times
  * @p DW1000_TIME_CLOCK_HZ, truncated, kept to 40 bits. That is what puts
  * a node's SYS_TIME on the same timeline as the RX and TX timestamps the
  * server hands it, which is the whole point: a delayed send is programmed

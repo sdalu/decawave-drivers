@@ -39,8 +39,8 @@
 /**
  * @brief How an exchange attempt ended, FROM THE RESPONDER'S SIDE.
  *
- * The responder is the only end that emits a record -- it is the one
- * holding both ends' numbers, because the far end's arrived in REPORT --
+ * The responder is the only end that emits a record: it is the one
+ * holding both ends' numbers, because the far end's arrived in REPORT,
  * so these name what the responder saw. An initiator-side vocabulary
  * would have no way to describe the responder's own first failure.
  *
@@ -111,7 +111,7 @@ const char *dw1000_probe_exchange_name(dw1000_probe_exchange_t exchange);
  * inside them.
  *
  * A field is absent for one of three reasons, and a reader need not tell
- * them apart -- `-` is `-`:
+ * them apart: `-` is `-`:
  *
  *  - it never travelled. The far end's readings ride in REPORT and its
  *    instants in FINAL and REPORT, so an attempt that ended earlier has
@@ -119,15 +119,15 @@ const char *dw1000_probe_exchange_name(dw1000_probe_exchange_t exchange);
  *  - it could not be computed: both distances, when the four intervals
  *    sum to zero (DW1000_PROBE_STATUS_BAD_DISTANCE);
  *  - there was no estimate: dw1000_rx_get_power_estimate() yields
- *    -INFINITY when the preamble accumulation count came out 0 -- a frame
+ *    -INFINITY when the preamble accumulation count came out 0: a frame
  *    shorter than the SFD adjustment, or a failed read of RX_FINFO. The
  *    reference instrument carries that case as 0, an in-band sentinel of
  *    exactly the kind this header refuses; the probe clears the bit and
  *    prints `-`. That is a deliberate departure, and the only one a
  *    reader could notice without being told.
  *
- * Temperature and voltage have no failure path -- the driver's read is a
- * void function -- so the near end's pair is present in every record.
+ * Temperature and voltage have no failure path (the driver's read is a
+ * void function), so the near end's pair is present in every record.
  */
 #define DW1000_PROBE_F_T_SP        (1u <<  0)
 #define DW1000_PROBE_F_T_RP        (1u <<  1)
@@ -175,7 +175,7 @@ const char *dw1000_probe_exchange_name(dw1000_probe_exchange_t exchange);
  *                    real result and means the antenna delay is too large
  *  - temperature     hundredths of a degree Celsius, signed
  *  - voltage         millivolts
- *  - receive power   hundredths of a dBm, NEGATED -- 8825 is -88.25 dBm
+ *  - receive power   hundredths of a dBm, NEGATED: 8825 is -88.25 dBm
  *
  * `resp_` is the responder, the node that emits the record; `init_` is
  * the initiator, whose readings arrived in REPORT.
@@ -235,7 +235,7 @@ struct dw1000_probe_record {
  * round1 and reply2 are measured on the initiator's clock, reply1 and
  * round2 on the responder's, so a crystal offset between the two nodes
  * biases them differently. On a true 1032.0 mm link with the responder
- * 20 ppm fast -- an ordinary part-to-part offset -- single-sided reports
+ * 20 ppm fast (an ordinary part-to-part offset), single-sided reports
  * -140.8 mm, symmetric 1172.9 mm, and Neirynck 1032.2 mm. That is why
  * the distances are signed, and why an instrument reports all three
  * rather than picking one.
@@ -247,8 +247,8 @@ struct dw1000_probe_record {
  * @return false only when not even the single-sided estimate could be
  *         computed, which means one of the four two-frame instants was
  *         missing. A four-interval sum of zero is NOT that case: it costs
- *         `sym` and `asym` alone -- their bits stay clear and the record
- *         is DW1000_PROBE_STATUS_BAD_DISTANCE -- while the single-sided
+ *         `sym` and `asym` alone (their bits stay clear and the record
+ *         is DW1000_PROBE_STATUS_BAD_DISTANCE), while the single-sided
  *         estimate still stands, so the answer is still true. (The
  *         earlier wording of this line said otherwise and contradicted
  *         both the presence-bit note above and the status enum; it was
@@ -280,7 +280,7 @@ bool dw1000_probe_pack_power(double dbm, uint16_t *out);
  * the record is here; the values mean nothing to this library.
  *
  * The role is carried as the enum, not as a string, so that it can only
- * ever be spelled by dw1000_probe_role_name() -- an application filling in a
+ * ever be spelled by dw1000_probe_role_name(); an application filling in a
  * string by hand is precisely how `resp` and `twr_resp` come to coexist.
  *
  * A NULL or empty @p node or @p run is printed `-`, like any other absent
@@ -303,7 +303,7 @@ struct dw1000_probe_origin {
  * must be byte-identical on every platform or the single parser stops
  * being single, and it must be provable with no chip.
  *
- * Writes at most @p len bytes including the NUL, and never a newline --
+ * Writes at most @p len bytes including the NUL, and never a newline:
  * that is dw1000_probe_port_emit()'s.
  *
  * @return the length the line would have had, excluding the NUL, the way
@@ -354,7 +354,7 @@ size_t dw1000_probe_record_format(char *buf, size_t len,
  *
  *  - `drop_unwatched=` arrived while no wait was running. The exchange
  *    is a sequence of waits with gaps between them, and this counts the
- *    frames that landed in a gap -- a peer answering faster than this
+ *    frames that landed in a gap: a peer answering faster than this
  *    role gets back into its wait. It is NOT a loss: the ring holds
  *    them and the next wait examines them. It was a loss once, and the
  *    day it cost is in exchange.c's comment on the ring;
@@ -379,7 +379,7 @@ struct dw1000_probe_stats {
                                           because a request-only line
                                           records an intention, and a
                                           result-only line cannot show a
-                                          request that was not honoured --
+                                          request that was not honoured,
                                           a clamp at the top of the range,
                                           or AUTO resolving to 7.5 dB       */
     const char *driver_version;      /**< which driver produced these

@@ -17,8 +17,8 @@
  * needs, not what a measurement needs. A probe additionally needs to know
  * what time it is, to wait for a frame with a deadline, and to put a line
  * somewhere. Every existing consumer of this driver has hand-rolled those
- * three -- tests/emulation/smoke.c and the Raspberry Pi application each
- * grew their own condition variable and clock loop -- which is the
+ * three (tests/emulation/smoke.c and the Raspberry Pi application each
+ * grew their own condition variable and clock loop), which is the
  * duplication this header exists to stop.
  *
  * Nothing here knows anything about a measurement. A port is chosen at
@@ -43,7 +43,7 @@
  *
  * Monotonic is the requirement, not the epoch: only differences are ever
  * taken. A port that can only offer milliseconds multiplies by 1000 and
- * says so in its own header -- the settle windows are tens of seconds, so
+ * says so in its own header: the settle windows are tens of seconds, so
  * the resolution that matters is the frame deadline, which is
  * sub-millisecond.
  */
@@ -83,16 +83,17 @@ void dw1000_probe_port_sleep(uint32_t us);
  *    re-enable itself the radio can take several frames back to back
  *    without the host in between, so wakes genuinely do arrive in
  *    bursts. One pending wake, with dw1000_process_events() then
- *    draining whatever it finds, is the shape that fits -- counting them
+ *    draining whatever it finds, is the shape that fits; counting them
  *    would only promise a correspondence the probe cannot use.
  *
  * A @p timeout_us of 0 polls. The probe loops against its own deadline
- * using dw1000_probe_port_now(), so a stale wake-up -- a frame that turns out to
- * fail the peer filter -- costs one iteration, and a port tracks nothing.
+ * using dw1000_probe_port_now(), so a stale wake-up (a frame that turns
+ * out to fail the peer filter) costs one iteration, and a port tracks
+ * nothing.
  *
  * Neither this nor dw1000_probe_port_wake() touches the chip.
  * dw1000_process_events() is called by the PROBE, on the thread that
- * called this, after it returns true -- never by the port, and never
+ * called this, after it returns true; never by the port, and never
  * from the context that calls dw1000_probe_port_wake().
  *
  * The permanent reason is the RTOS ports: there the wake context is an
@@ -102,7 +103,7 @@ void dw1000_probe_port_sleep(uint32_t us);
  * reasons and do not move together: under the emulation port the wake
  * context is the socket reader thread, and a driver call from it issues
  * a request and then blocks waiting for a reply that only that same
- * thread could have delivered -- a hang, not an error.
+ * thread could have delivered: a hang, not an error.
  *
  * That port is itself the argument for stating the rule once rather than
  * per platform. It had TWO independent reasons for this prohibition, a
@@ -115,7 +116,7 @@ void dw1000_probe_port_sleep(uint32_t us);
  * A wake-up may arrive from MORE THAN ONE context: a host port can have
  * several sources (a reader thread and a deadline thread, say) and a
  * bare-metal one several interrupt sources. The latch must tolerate
- * concurrent wakes from different threads -- which is why it is a latch
+ * concurrent wakes from different threads, which is why it is a latch
  * and not a flag.
  *
  * @param[in] timeout_us  how long to wait at most, in microseconds
@@ -129,8 +130,8 @@ bool dw1000_probe_port_wait(uint32_t timeout_us);
  *
  * The APPLICATION attaches the DW1000 interrupt line and calls this from
  * its handler. Attaching needs the pin, and a pin is a wiring fact that
- * belongs to the application -- a devicetree node on one platform, a
- * GPIO number on another -- so the port supplies the primitive and the
+ * belongs to the application (a devicetree node on one platform, a
+ * GPIO number on another), so the port supplies the primitive and the
  * application wires it. A port that looked the pin up itself would be a
  * port that knows a board.
  *
@@ -147,7 +148,7 @@ void dw1000_probe_port_wake(void);
  * @brief Take and release exclusive use of the radio's bus.
  *
  * The driver is not thread safe and its OSAL ports add no serialisation
- * of their own -- every consumer supplies it, and they each invented
+ * of their own: every consumer supplies it, and they each invented
  * their own before this existed. The exchange needs it because at least
  * two contexts reach the chip: whatever drives the exchange, and
  * whatever calls dw1000_process_events() after a wake-up.
@@ -171,7 +172,7 @@ void dw1000_probe_port_bus_unlock(void);
  * @brief Emit one finished line.
  *
  * The probe formats; the port transports. @p line is NUL-terminated and
- * carries no newline of its own -- appending whatever the host's notion
+ * carries no newline of its own; appending whatever the host's notion
  * of one is belongs here, since that is the part that differs between a
  * UART and a pipe.
  *

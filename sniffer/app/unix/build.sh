@@ -1,5 +1,5 @@
 #!/bin/sh
-# build.sh -- compile the Linux/Raspberry Pi UWB sniffer
+# build.sh: compile the Linux/Raspberry Pi UWB sniffer
 # usage: build.sh [-n] [-o outfile]
 #
 #   -n   print the compiler command and exit; compile nothing
@@ -11,9 +11,9 @@
 # than naming files, so a source this application did not add itself is
 # never missed and never hand-copied out of step with the manifest that
 # actually describes it. The build.sh this replaces globbed
-# hw/drivers/dw1000/src/*.c, which now silently takes dw1000_state.c --
+# hw/drivers/dw1000/src/*.c, which now silently takes dw1000_state.c,
 # a file the driver holds back on purpose (see dw1000.cmake's note on
-# DW1000_SOURCES_STATE) -- and had had its bitters half narrowed from
+# DW1000_SOURCES_STATE), and had had its bitters half narrowed from
 # src/*.c to four named files by hand, which is the maintenance this
 # removes rather than repeats: the narrowing is the manifest's job, and
 # a hand-kept list is wrong again as soon as either tree adds a file.
@@ -26,7 +26,7 @@
 # Environment, each overridable:
 #   DW1000     this tree (decawave-drivers); default: three directories
 #              above this script, i.e. the tree this script itself lives
-#              in -- set it only to point at a *different* checkout
+#              in; set it only to point at a *different* checkout
 #   BITTERS    the bitters tree; default $HOME/Repos/bitters
 #   CC         compiler binary                                  (cc)
 #   CCEXTRA    flags that particular binary needs
@@ -61,9 +61,9 @@ shift $((OPTIND - 1))
 command -v "$CC" >/dev/null || die "no such compiler: $CC"
 command -v make  >/dev/null || die "make(1) is needed to read the manifests"
 [ -f "$DW1000/dw1000.cmake" ] \
-    || die "no dw1000.cmake under $DW1000 -- wrong DW1000= ?"
+    || die "no dw1000.cmake under $DW1000; wrong DW1000= ?"
 [ -d "$BITTERS" ] \
-    || die "no bitters tree at $BITTERS -- set BITTERS="
+    || die "no bitters tree at $BITTERS; set BITTERS="
 
 # The driver core and its unix OSAL, from decawave-drivers' own manifest
 # interface (dw1000.cmake, read through `make sources`). Same call
@@ -75,7 +75,7 @@ eval "$dw1000_vars"
 # bitters, taken by subsystem: this application uses gpio, spi and delay
 # (core is always required), not i2c. Same choice probe/app/unix/build.sh
 # and rpi-redskin/build.sh make, for the same reason: which subsystems a
-# program takes is its own choice, not the module's -- and asking the
+# program takes is its own choice, not the module's, and asking the
 # manifest for them by name is what keeps that choice from going stale,
 # which the hand-narrowed list this replaces could not.
 bitters_vars=$(make -s -C "$BITTERS" sources) \
@@ -100,7 +100,7 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
     set -- "$@" $BITTERS_CFLAGS
 
     # The compile-time options this program's radio configuration
-    # (main.c's dw1000_radio) assumes -- the driver's own defaults,
+    # (main.c's dw1000_radio) assumes: the driver's own defaults,
     # spelled out rather than left implicit, exactly as
     # probe/app/unix/build.sh and rpi-redskin/build.sh do, and the same
     # four the build.sh this replaces set.
@@ -113,7 +113,7 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
     # the probe asks for: the asserts check every SPI transfer and GPIO
     # call this program makes against the shapes bitters documents, and
     # SILENCE_RPI_WARNING suppresses the runtime complaint bitters makes
-    # when it finds itself somewhere that is not a Raspberry Pi -- which
+    # when it finds itself somewhere that is not a Raspberry Pi, which
     # is a warning worth having on a bench and not worth having here.
     set -- "$@" -DBITTERS_WITH_GPIO -DBITTERS_WITH_SPI
     set -- "$@" -DBITTERS_WITH_GPIO_IRQ -DBITTERS_WITH_THREADS
@@ -123,7 +123,7 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
     # cmdline.c prints this for -V. It used to be the sniffer's own git
     # description, from the repository it had to itself; now that it
     # lives here, what it honestly reports is the driver it was built
-    # against -- release plus whatever a between-releases build adds.
+    # against: release plus whatever a between-releases build adds.
     set -- "$@" "-DVERSION=\"$DW1000_VERSION$DW1000_VERSION_GIT\""
     set -- "$@" "-DDW1000_VERSION_GIT=\"$DW1000_VERSION_GIT\""
     set -- "$@" "-DBITTERS_VERSION_GIT=\"$BITTERS_VERSION_GIT\""
@@ -134,7 +134,7 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
 
     # DW1000_SOURCES_CORE without _SEND: the sniffer never transmits, and
     # dw1000.c never calls into dw1000_send.c, so the send half is left
-    # out -- the receive-only case dw1000.cmake documents. The build.sh
+    # out: the receive-only case dw1000.cmake documents. The build.sh
     # this replaces took both, because a glob cannot tell them apart.
     set -- "$@" $DW1000_SOURCES_CORE $DW1000_OSAL_SOURCES
 
@@ -144,7 +144,7 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
     # three places.
     #
     # It is part of DW1000_SOURCES, so most consumers get it without
-    # asking -- but DW1000_SOURCES carries _SEND too, and the line above
+    # asking, but DW1000_SOURCES carries _SEND too, and the line above
     # takes _CORE precisely to leave that out. So it is named here.
     set -- "$@" $DW1000_SOURCES_VALIDATE
     set -- "$@" $BITTERS_TAKEN

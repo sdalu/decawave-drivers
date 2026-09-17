@@ -1,10 +1,10 @@
 #!/bin/sh
 # dw1000.cmake is the manifest: the Makefile reads it through
 # scripts/manifest.sh, and CMake consumers include it. The release is the
-# same arrangement one file over -- written in <dw1000/dw1000_version.h>,
+# same arrangement one file over: written in <dw1000/dw1000_version.h>,
 # because a C header can read no other file, and parsed from there by
 # dw1000.cmake and by manifest.sh. There is no second copy of either to
-# compare against any more -- what is left to check is that they still
+# compare against any more; what is left to check is that they still
 # describe the tree, that the two parses of the version agree with the
 # compiler's, and that nothing has quietly gone back to keeping its own
 # list. Run by `make check`.
@@ -99,8 +99,8 @@ if [ -z "$ports" ]; then
 fi
 
 # --- every port is really there ---------------------------------------
-# A port whose osal.c is called something else -- chibios's is dw_osal.c
-# -- is exactly what a check on the names alone would miss.
+# A port whose osal.c is called something else (chibios's is dw_osal.c)
+# is exactly what a check on the names alone would miss.
 for p in $ports; do
     i=`$m inc $p`
     s=`$m src $p`

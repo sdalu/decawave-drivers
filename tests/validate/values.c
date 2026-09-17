@@ -17,7 +17,7 @@
  *   - it refused codes 21..24 outright
  *   - it accepted all eight preamble lengths whether the build had
  *     DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH or not, so it passed
- *     lengths dw1000_configure() then refused -- including 128, which
+ *     lengths dw1000_configure() then refused, including 128, which
  *     was the program's own default
  *
  * So the preamble-code range and the option-dependence of the preamble
@@ -74,7 +74,7 @@ static int failures;
 	}								\
     } while (0)
 
-/* Refused, and the message mentions `needle` -- so that the reason given
+/* Refused, and the message mentions `needle`, so that the reason given
  * is the specific one, not the generic list. */
 #define NO_BECAUSE(fn, in, needle)					\
     do {								\
@@ -152,7 +152,7 @@ test_plen(void)
     OK(dw1000_validate_plen, 1024, DW1000_PLEN_1024);
     OK(dw1000_validate_plen, 4096, DW1000_PLEN_4096);
 
-    /* The five proprietary ones, which must follow the build's option --
+    /* The five proprietary ones, which must follow the build's option:
      * accepted with it, and refused because of it without, naming it so a
      * caller knows what to change. */
 #if DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH
@@ -193,7 +193,7 @@ test_pac(void)
     NO(dw1000_validate_pac, 128);
 }
 
-/* The antenna delay: a distance in, ticks out, and the numbers matter --
+/* The antenna delay: a distance in, ticks out, and the numbers matter:
  * 154.6 m is the figure rpi-redskin, probe and the sniffer all use, and
  * the three used to compute it three different ways (integer decimetres,
  * float metres, and a third in spank). They must all still land on the
@@ -219,7 +219,7 @@ test_antenna_delay(void)
     else if ((v / 2) != 16475)
 	FAIL("154.6 m halved gives %u, want 16475", v / 2);
 
-    /* Integer metres would have been 154, and this is what that costs --
+    /* Integer metres would have been 154, and this is what that costs:
      * the reason the conversion is floating point. */
     if (! dw1000_validate_antenna_delay(154.0, &v, NULL))
 	FAIL("154 m refused");
@@ -277,8 +277,8 @@ test_null_out_params(void)
  * own, and the conversions have to follow it. check-validate.sh builds
  * this a third time with the constant halved: light at half speed takes
  * twice as long to cover a metre, so a metre must come out twice as many
- * ticks. Nothing else in this file holds under that value -- every other
- * number here is against the real one -- so that run does this alone.
+ * ticks. Nothing else in this file holds under that value (every other
+ * number here is against the real one), so that run does this alone.
  */
 static void
 test_speed_of_light_override(void)

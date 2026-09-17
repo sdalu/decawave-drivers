@@ -13,8 +13,8 @@
  * (commit "probe/exchange: hold received frames in a ring, not one slot"):
  * a monotonic count of frames captured, the slot being that count modulo
  * the ring depth, and a producer that never refuses. What the sniffer
- * needs it for is not probe's reason -- probe had gaps between waits in
- * which a peer's answer was discarded -- but the same shape solves it.
+ * needs it for is not probe's reason (probe had gaps between waits in
+ * which a peer's answer was discarded), but the same shape solves it.
  *
  * Here the reason is that forwarding costs far more than receiving. Under
  * double buffering the driver re-enables the receiver before calling
@@ -24,8 +24,8 @@
  * obligations). eth_send() is a blocking sendmsg(2) on a raw AF_PACKET
  * socket: doing it in there would hold the callback open across the
  * kernel's network path while the next frame is already landing in the
- * other buffer. So the callback does the one thing it must do now -- the
- * SPI read-out -- and the sendmsg happens afterwards, outside it.
+ * other buffer. So the callback does the one thing it must do now, the
+ * SPI read-out, and the sendmsg happens afterwards, outside it.
  *
  * There is no lock here, and unlike probe there does not need to be one.
  * probe's producer runs on its port's event thread while a role thread
@@ -35,7 +35,7 @@
  * capture_get() is called from the loop in main.c that called
  * dw1000_process_events() and has returned from it. bitters does run a
  * GPIO IRQ thread, but it only dispatches registered callbacks and this
- * program registers none -- it polls the interrupt's file descriptor
+ * program registers none: it polls the interrupt's file descriptor
  * itself. Nothing here is reachable from two threads at once. Were that
  * to change, this file is where the lock would go, and the comment in
  * probe/src/exchange.c explains why a mutex rather than atomics.
@@ -48,7 +48,7 @@
 
 /* Sixteen entries, at DW1000_FRAME_MAXSIZE + a length each: about 2 kB in
  * standard mode. Deeper than probe's four because the two are absorbing
- * different things -- probe covers the one or two frames a two-node
+ * different things: probe covers the one or two frames a two-node
  * exchange makes in a gap, whereas this covers however many frames arrive
  * while the host is inside sendmsg(2), with no upper bound on the traffic
  * and every frame on the channel wanted. Not a tuned number either: it is
@@ -69,7 +69,7 @@ capture_put(size_t length)
 
     /* The reported length is not trusted into a fixed slot. In standard
      * mode the chip cannot report more than DW1000_FRAME_MAXSIZE, so this
-     * is a guard rather than an expected path -- but it is the guard that
+     * is a guard rather than an expected path, but it is the guard that
      * keeps a build with proprietary long frames turned on from writing
      * 1023 bytes into a 127 byte slot, and the counter is how such a
      * build would be noticed rather than silently mangled. */

@@ -172,7 +172,7 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
     /* The asserts above are compiled out on four of the five ports, so
      * both fields are checked here as well, and before anything is
      * written to the chip: an unused value used to leave `size` at 0 or
-     * `data` unfilled, and the frame went out without its timestamp --
+     * `data` unfilled, and the frame went out without its timestamp,
      * silently, since the caller's copy was left unfilled too.
      */
     size_t size;
@@ -195,8 +195,8 @@ _dw1000_tx_prepare_delayed_embed_timestamp(
      * past the end are written where nothing transmits them, and
      * _dw1000_iovec_write() drops the same bytes from the caller's copy
      * by design. The frame would go out carrying a truncated timestamp,
-     * the caller's copy would be truncated identically -- so comparing
-     * it against TX_STAMP would agree -- and the send would report
+     * the caller's copy would be truncated identically, so comparing
+     * it against TX_STAMP would agree, and the send would report
      * success. Refuse instead, the way an unusable tx_mode above is
      * refused, and before anything is written to the chip.
      * Computed without overflow: offset alone can exceed the frame.

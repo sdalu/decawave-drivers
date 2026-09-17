@@ -13,14 +13,14 @@
  * configuration file or an operator has the same job to do every time:
  * read a channel number, a bitrate in kbps, a PRF in MHz, a preamble
  * length in symbols, and turn each into the encoded value
- * <dw1000/dw1000.h> expects -- or say why it cannot. This is that job,
+ * <dw1000/dw1000.h> expects, or say why it cannot. This is that job,
  * once, with the message.
  *
  * Each function validates ONE field and nothing else. The combination is
  * not checked here and must not be: @p dw1000_configure() already refuses
  * an inconsistent radio (a preamble code that does not go with the PRF,
  * UM §10.5) and returns -1 without touching the chip. Re-stating those
- * rules in a caller is how two copies come to disagree -- which is
+ * rules in a caller is how two copies come to disagree, which is
  * exactly what happened to the sniffer this file was lifted out of, where
  * a hand-written check accepted preamble codes the driver rejects and
  * rejected ones it accepts. So: parse each field here, hand the result to
@@ -31,8 +31,8 @@
  * only want the verdict. The strings are English, short, and say what
  * the accepted values are.
  *
- * This is host-facing convenience, not part of the driver's operation --
- * the only thing here is a value mapping and a set of message strings --
+ * This is host-facing convenience, not part of the driver's operation
+ * (the only thing here is a value mapping and a set of message strings),
  * so it is a source list of its own, @p DW1000_SOURCES_VALIDATE, the way
  * <dw1000/dw1000_state.h> is. An image with no command line need not
  * carry the strings.
@@ -105,7 +105,7 @@ bool dw1000_validate_pcode(int pcode, uint8_t *val, const char **errmsg);
  *
  * 64, 1024 and 4096 always; 128, 256, 512, 1536 and 2048 are proprietary
  * and need @p DW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH, so what this
- * accepts depends on how the driver was compiled -- and it must, since
+ * accepts depends on how the driver was compiled, and it must, since
  * @p dw1000_configure() refuses them in a build without the option. The
  * message says so when that is the reason.
  *
@@ -136,7 +136,7 @@ bool dw1000_validate_pac(int symbols, uint8_t *val, const char **errmsg);
  * The one entry point here that is not a radio field: an antenna delay is
  * a distance, and what the chip wants is that distance as ticks of
  * @p DW1000_TIME_CLOCK_HZ in sixteen bits. So this converts as well as
- * checks -- @p DW1000_METER_TO_CLOCK(), then the range -- and is the
+ * checks (@p DW1000_METER_TO_CLOCK(), then the range) and is the
  * reason that macro says to come here for a value that came from a user.
  *
  * The result is NOT halved. A round-trip figure is halved by the caller,

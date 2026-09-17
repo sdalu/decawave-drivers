@@ -65,7 +65,7 @@ typedef struct dw1000_radio_state {
  * @brief Read the radio configuration off the chip.
  *
  * SPI traffic: several register reads. Call it at start-up or between
- * exchanges, never inside one -- it takes the same bus an exchange is
+ * exchanges, never inside one: it takes the same bus an exchange is
  * using, and on a host that serialises the bus it will simply wait.
  *
  * @param[in]  dw   driver context

@@ -34,7 +34,7 @@ plen_symbols(uint8_t encoded)
     /* The other five are proprietary and their constants only exist when
      * that option is on. The CHIP still reports whatever it holds, so a
      * build without the option decodes those to 0 and the raw tx_fctrl
-     * beside it carries the truth -- which is the right answer: a value
+     * beside it carries the truth, which is the right answer: a value
      * this build cannot name is not one it should name. */
     case DW1000_PLEN_128:  return  128;
     case DW1000_PLEN_256:  return  256;

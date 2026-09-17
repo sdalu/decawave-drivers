@@ -5,8 +5,8 @@ set -eu
 
 # The release itself is fixed: it is written in the version header, which
 # is the one place it lives, and read from there by the manifest. This
-# adds the part that is in no file -- which commit the build was made
-# from -- as SemVer build metadata:
+# adds the part that is in no file (which commit the build was made
+# from) as SemVer build metadata:
 #
 #   (nothing)            the release tag, worktree clean: a release build
 #   +3.gae9c67b          three commits past the tag, at that commit
@@ -20,7 +20,7 @@ set -eu
 # cannot be known or would be somebody else's answer:
 #
 #   * no git, or a tarball with no repository in it
-#   * a tree vendored inside another project's repository -- git would
+#   * a tree vendored inside another project's repository: git would
 #     happily describe *that* repository, whose tags and dirt have
 #     nothing to do with this one. Guarded by comparing git's toplevel
 #     against this tree.
@@ -31,8 +31,8 @@ set -eu
 # An empty answer is never wrong, only less precise: it says "this is the
 # release these files say it is", which is what a tarball is.
 #
-# This script is deliberately project-agnostic -- it names no header, no
-# macro and no repository -- so the same copy serves every tree that
+# This script is deliberately project-agnostic (it names no header, no
+# macro and no repository), so the same copy serves every tree that
 # versions itself this way.
 #
 # POSIX sh, and git used only through plumbing that works in any version.

@@ -9,14 +9,14 @@
  * The null OSAL: the whole port contract, wired to nothing.
  *
  * Not a host. It exists so the core can be compiled where there is no
- * DW1000 and no RTOS -- which is what `make check` does, over every
+ * DW1000 and no RTOS, which is what `make check` does, over every
  * combination of the compile-time options, so a combination that stopped
  * compiling is found here rather than by whoever selects it. Every other
  * port needs its vendor headers to say that much, so none of them can.
  *
  * It is also the shortest thing to copy when writing a new port: the
  * symbols below are the entire contract, and the SPI transfers observe
- * the two rules the real ports learned the hard way -- a failed read
+ * the two rules the real ports learned the hard way: a failed read
  * zeroes the caller's buffer, and the first failure is latched in
  * spi->error and left for the caller to clear.
  *

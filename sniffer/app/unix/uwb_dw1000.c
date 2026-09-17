@@ -95,7 +95,7 @@ static dw1000_config_t DW0_config = {
      * toggles the host side buffer pointer as soon as rx_ok returns. Two
      * obligations follow, both met by _rx_ok() below and by capture.c:
      * the callback must not re-enable the receiver itself, and it must
-     * read the frame out before returning -- RX_BUFFER swings with the
+     * read the frame out before returning: RX_BUFFER swings with the
      * pointer. rxauto stays on beside it, as probe and rpi-redskin both
      * have it. See hw/drivers/dw1000/README.md, "Double buffered
      * receive".
@@ -106,7 +106,7 @@ static dw1000_config_t DW0_config = {
     /* rx_error is not optional here: dw1000_initialise() refuses dblbuff
      * without one and returns -1, because the overrun recovery re-arms
      * nothing by itself and the receiver would stop for good on the first
-     * overrun. rx_timeout stays NULL -- uwb_config_dw1000_radio() sets
+     * overrun. rx_timeout stays NULL: uwb_config_dw1000_radio() sets
      * the receive timeout to 0, so no timeout is ever reported.
      */
     .cb               = { .tx_done    = NULL,
@@ -133,7 +133,7 @@ _rx_ok(dw1000_t *drv, uint32_t status, size_t length, bool ranging)
 
 
 /* Every receive error, the overrun included, arrives here, and re-arming
- * is the host's job for all of them -- the driver's overrun recovery puts
+ * is the host's job for all of them: the driver's overrun recovery puts
  * the chip back in order and reports, but enables nothing. An overrun
  * (RXOVRR in the status) means frames were lost on the chip rather than in
  * the ring; it is not distinguished here because the response is the same.

@@ -4,7 +4,7 @@
 set -eu
 
 # The header is the one place the release is written, and git tags are the
-# other half of the same statement -- and nothing in the tree makes the two
+# other half of the same statement, and nothing in the tree makes the two
 # agree, so the way they come apart is ordinary: tag v1.2.0, forget to bump
 # the header, and the release build reports 1.1.1. scripts/gitversion.sh
 # cannot notice, because being *on* a tag with a clean worktree is exactly
@@ -18,8 +18,8 @@ set -eu
 #
 #   anything else              the header must be at or ahead of the
 #                              nearest tag. Ahead is the normal state
-#                              between releases -- the numbers are bumped
-#                              first and tagged later -- and a dirty
+#                              between releases (the numbers are bumped
+#                              first and tagged later), and a dirty
 #                              worktree on a tag is that bump in progress.
 #                              Behind means a release was tagged that the
 #                              header never learned about.
@@ -29,7 +29,7 @@ set -eu
 # with no v* tag in reach. Like gitversion.sh, an answer that would be
 # somebody else's is not an answer.
 #
-# Project-agnostic -- it names no header, no macro and no repository -- so
+# Project-agnostic (it names no header, no macro and no repository), so
 # the same copy serves every tree that versions itself this way. The caller
 # passes the release it read from the header.
 #

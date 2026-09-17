@@ -15,10 +15,10 @@
  * Chip mechanism, not host or bench: the wire frame, the four-frame
  * state machine and the two roles live here, driven through
  * <dw1000/dw1000.h> and the host primitives in <dw1000/probe/port.h>.
- * Nothing here prints -- dw1000_probe_port_emit() is called only for
+ * Nothing here prints: dw1000_probe_port_emit() is called only for
  * lines that are safe to emit (the READY line, and whatever @p emit_line
  * is handed after a run has finished; see dw1000_probe_twr_resp_run()
- * below) -- and nothing here knows a shell, a console or an argv. An
+ * below), and nothing here knows a shell, a console or an argv. An
  * application reports what these return however it reports anything
  * else.
  *
@@ -40,7 +40,7 @@
  * @brief What one twr_resp run produced.
  *
  * The role itself prints nothing; these counts are what an application
- * reports to its own operator, in whatever form that takes -- a shell
+ * reports to its own operator, in whatever form that takes: a shell
  * line, an argv-driven CLI's stdout, a log.
  */
 struct dw1000_probe_twr_resp_result {
@@ -76,19 +76,19 @@ struct dw1000_probe_twr_init_result {
  *
  * Emits the `READY` line directly (dw1000_probe_port_emit(), before any
  * exchange is in flight, so that is safe on its own) and then, for each
- * attempt, formats one `TWR` line and hands it to @p emit_line -- never
+ * attempt, formats one `TWR` line and hands it to @p emit_line, never
  * to dw1000_probe_port_emit() directly. dw1000_probe_port_emit() may be
  * called only between runs (see <dw1000/probe/port.h>), never between
  * the frames of an exchange; a write that blocked there would land in
  * the measurement. Where that buffering lives, and how big it is, is a
- * host memory-budget decision this library does not make -- an
+ * host memory-budget decision this library does not make: an
  * embedded application typically reuses one fixed static buffer across
  * every command that needs it (tx/rx/twr_resp alike), which is why
  * @p emit_line is a callback rather than a library-owned buffer: it
  * lets the caller supply that memory instead of this library
  * duplicating it. @p emit_line is also handed the closing `STATS` line.
  * The caller decides when it is safe to actually flush what it
- * buffered to dw1000_probe_port_emit() -- immediately after this
+ * buffered to dw1000_probe_port_emit(), immediately after this
  * function returns is that time, since the run is then over.
  *
  * IT DOES RETURN, which was not always so and is worth stating because
@@ -105,7 +105,7 @@ struct dw1000_probe_twr_init_result {
  * @param dw         the driver instance
  * @param count      how many exchanges to answer
  * @param ss         true for the two-frame single-sided estimate only
- *                   (still sends FINAL, stops there -- see probe/src/
+ *                   (still sends FINAL, stops there; see probe/src/
  *                   exchange.c's file comment on why)
  * @param own_addr   this node's address; RESPONSE answers whoever sent
  *                   the POLL, not a fixed peer, so @p peer_addr is
@@ -127,9 +127,9 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
  * @brief Initiator role: run @p warmup uncounted exchanges, then
  * @p count counted ones.
  *
- * Emits nothing -- the initiator never holds both ends' numbers (see
+ * Emits nothing: the initiator never holds both ends' numbers (see
  * <dw1000/probe/record.h>'s note on why the responder is the one that
- * emits a record) -- so there is no line to buffer or hand to a
+ * emits a record), so there is no line to buffer or hand to a
  * callback here.
  *
  * @param warmup  exchanges run first and never counted, to get the
@@ -140,7 +140,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
                           uint16_t own_addr, uint16_t peer_addr);
 
 /*===========================================================================*/
-/* Capture -- filled by the application's radio event callbacks             */
+/* Capture: filled by the application's radio event callbacks              */
 /*===========================================================================*/
 
 /**
@@ -148,7 +148,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
  *
  * Called by the APPLICATION's rx_ok callback (the one registered as
  * dw1000_config_t.cb.rx_ok), before the receiver is re-armed, and while
- * the bus lock (dw1000_probe_port_bus_lock()) is already held --
+ * the bus lock (dw1000_probe_port_bus_lock()) is already held:
  * dw1000_process_events() holds it across every callback it invokes, by
  * the contract in <dw1000/probe/port.h>. Reads the frame data, its
  * RMARKER time and its power estimate off the chip; a restart is free
@@ -157,7 +157,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
  * why this must run before dw1000_rx_start().
  *
  * The application's callback owns everything else about handling an
- * rx_ok -- counting it for its own purposes, re-arming the receiver --
+ * rx_ok (counting it for its own purposes, re-arming the receiver),
  * this call is only the part the exchange roles need.
  *
  * @param dw      the driver instance the frame arrived on
@@ -176,7 +176,7 @@ void dw1000_probe_rx_capture(dw1000_t *dw, size_t length);
  * dw1000_probe_rx_capture() above. Self-contained: an application with
  * its own reasons to count tx completions (a `probe tx` command, say)
  * keeps its own counter and calls this in addition, from the same
- * callback -- the two are unrelated and neither reads the other's.
+ * callback: the two are unrelated and neither reads the other's.
  */
 void dw1000_probe_tx_capture(void);
 

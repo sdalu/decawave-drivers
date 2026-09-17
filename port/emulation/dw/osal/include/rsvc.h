@@ -143,7 +143,7 @@ int rsvc_o(rsvc_t *rsvc, uint16_t type, void *out, size_t *outlen) {
 /**
  * Set how long a call waits for its reply.
  *
- * A request that is never answered used to be an unbounded hang -- the
+ * A request that is never answered used to be an unbounded hang: the
  * server is another program, and one that does not know a service type,
  * or has stopped, leaves the caller blocked for ever. The wait is
  * bounded instead, and a call that runs out returns

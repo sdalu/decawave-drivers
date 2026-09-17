@@ -21,7 +21,7 @@
  * the reported length out of a buffer that does not hold it would read
  * past the end. The CRC is included, as it is in the driver's own report
  * (see @p dw1000_rx_get_frame_info(); @p DW1000_CRC_LENGTH is what to
- * subtract for the payload alone) -- a sniffer forwards the frame whole,
+ * subtract for the payload alone): a sniffer forwards the frame whole,
  * so nothing is subtracted here.
  */
 struct capture_frame {
@@ -50,7 +50,7 @@ struct capture_stats {
  * MUST be called from the rx_ok callback and MUST NOT be deferred: under
  * double buffering the driver toggles the host side buffer pointer as
  * soon as that callback returns, and RX_BUFFER swings with it. This is
- * the whole reason the ring exists -- the read-out happens now, the
+ * the whole reason the ring exists: the read-out happens now, the
  * forwarding happens later.
  *
  * Never fails and never blocks: a full ring drops its oldest entry.

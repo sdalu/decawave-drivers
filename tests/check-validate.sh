@@ -1,6 +1,6 @@
 #!/bin/sh
-# <dw1000/dw1000_validate.h> turns a human radio value -- a channel
-# number, a bitrate in kbps, a PRF in MHz, a preamble length in symbols --
+# <dw1000/dw1000_validate.h> turns a human radio value (a channel
+# number, a bitrate in kbps, a PRF in MHz, a preamble length in symbols)
 # into the field dw1000_radio_t wants. It has to accept exactly what
 # _dw1000_radio_is_valid() accepts in dw1000.c, and the API exists because
 # a hand-written copy of that table got it wrong in three places (see
@@ -8,7 +8,7 @@
 #
 # Nothing here touches a chip, a driver or a port: the source is a value
 # mapping and links on its own, so this is the cheapest check in the tree
-# -- two compiles and two runs, no hardware, no threads, no clock.
+# two compiles and two runs, no hardware, no threads, no clock.
 #
 # TWICE, on purpose. Five of the eight preamble lengths are proprietary
 # and dw1000_configure() refuses them in a build without
@@ -16,7 +16,7 @@
 # depends on how the driver was compiled. A single run would check one
 # half of that and the wrong half is the one that used to be broken.
 #
-# The paths come from the manifest, like everything else here --
+# The paths come from the manifest, like everything else here;
 # tests/check-manifest.sh fails a test that spells them itself.
 #
 # POSIX sh only.
@@ -37,7 +37,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 # The third pass overrides DW1000_SPEED_OF_LIGHT_MPS, which dw1000.h
 # leaves alone when it is already defined. Halved: light at half speed
 # takes twice as long over a metre, so the conversion must double. Only
-# the override case runs in that build -- every other number in values.c
+# the override case runs in that build: every other number in values.c
 # is against the real constant.
 status=0
 for proprietary in 1 0 half-c; do

@@ -32,8 +32,8 @@ int uwb_read_frame_data(uint8_t *data, size_t length, size_t offset);
 
 /* Nothing is validated here any more. The radio fields and the antenna
  * delay are all the driver's, in <dw1000/dw1000_validate.h>, because
- * which values the chip accepts -- and what a distance in metres is in
- * ticks -- is the chip's business rather than this program's.
+ * which values the chip accepts, and what a distance in metres is in
+ * ticks, is the chip's business rather than this program's.
  */
 
 

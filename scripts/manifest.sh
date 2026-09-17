@@ -3,7 +3,7 @@
 # <dw1000/dw1000_version.h>, which is the one place the release is written.
 #
 # CMake consumers include it directly. The Makefile cannot, so it asks
-# here instead -- `SRC_CORE != sh scripts/manifest.sh core` and so on --
+# here instead (`SRC_CORE != sh scripts/manifest.sh core` and so on),
 # and shell-driven builds get the whole answer at once from
 # `make sources`, which is `vars` below. Nothing keeps a second copy, so
 # there is no second copy to drift.
@@ -109,7 +109,7 @@ ports)    cmvar DW1000_OSAL_PORTS ;;
 inc)      portvar "$1" INCLUDE_DIR ;;
 src)      portvar "$1" SOURCES ;;
 
-# The probe: record and role, free of <dw1000/dw1000.h>, and its ports --
+# The probe: record and role, free of <dw1000/dw1000.h>, and its ports.
 # tests/check-probe.sh asks here rather than naming probe/src or
 # probe/port/* itself, the same discipline check-emulation.sh keeps for
 # the driver.
@@ -142,7 +142,7 @@ objs)
 # it, worked out here where the driver's own git tree is (it is empty for a
 # tarball, and for a tree copied into your repository rather than cloned).
 # Pass it on with -DDW1000_VERSION_GIT if you want the driver to know
-# it -- unlike the options it changes no structure, so it need not reach
+# it: unlike the options it changes no structure, so it need not reach
 # every translation unit.
 vars)
     port=$1
@@ -152,7 +152,7 @@ vars)
 
     core=$d/`cmvar DW1000_SOURCES_CORE`
     send=$d/`cmvar DW1000_SOURCES_SEND`
-    # Optional, so it is NOT folded into DW1000_SOURCES -- a consumer
+    # Optional, so it is NOT folded into DW1000_SOURCES: a consumer
     # opts in by naming DW1000_SOURCES_STATE, and one that does not
     # simply ignores it. Emitted here rather than left to `make state`
     # so that a single `eval $(make sources)` gets it: a consumer that

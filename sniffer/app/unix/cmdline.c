@@ -15,7 +15,7 @@
 #include "uwb.h"
 
 /* Every value on this command line is the driver's to judge, radio
- * fields and antenna delay alike -- see <dw1000/dw1000_validate.h>.
+ * fields and antenna delay alike; see <dw1000/dw1000_validate.h>.
  */
 #define CMDLINE_DW1000_VALIDATE(_name, _var, _msg)		\
     do {							\

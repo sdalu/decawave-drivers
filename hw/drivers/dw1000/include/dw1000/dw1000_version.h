@@ -20,7 +20,7 @@
  *
  * A C header can read no other file, so if a consumer is to have the
  * version without a build step, the version has to be written where the
- * header can see it -- here. Everything else reads it from here:
+ * header can see it: here. Everything else reads it from here:
  * dw1000.cmake parses these three lines, and the Makefile asks
  * scripts/manifest.sh, which parses them too. So `make version`,
  * DW1000_VERSION and DW1000_VERSION_STRING cannot disagree, there being
@@ -50,7 +50,7 @@
     __DW1000_VERSION_XSTR(DW1000_VERSION_PATCH)
 
 /**
- * The release as one comparable integer, for @c \#if -- 1.2.3 is 10203.
+ * The release as one comparable integer, for @c \#if: 1.2.3 is 10203.
  * Each field is given two digits, so a field never reaches the next one
  * (1.1.0 is 10100, well under 1.2.0's 10200).
  */
@@ -76,7 +76,7 @@
  * What a build between releases adds to the version, and nothing (@c "")
  * for a release or wherever it could not be known.
  *
- * Passed on the compiler command line -- this tree's Makefile does it
+ * Passed on the compiler command line; this tree's Makefile does it
  * from @c scripts/gitversion.sh, and @c make @c sources hands a vendoring
  * build the same answer as @c DW1000_VERSION_GIT for it to pass on if it
  * wants to. A tree built from a tarball, or vendored into somebody else's
@@ -89,7 +89,7 @@
  *
  * Unlike the @c DW1000_WITH_* options this changes no structure and no
  * entry point, so it is the one define that need not reach every
- * translation unit -- passing it to some and not others is harmless.
+ * translation unit: passing it to some and not others is harmless.
  */
 #ifndef DW1000_VERSION_GIT
 #define DW1000_VERSION_GIT ""
@@ -97,7 +97,7 @@
 
 /**
  * The version this build actually is: the release, plus the commit when
- * it was built between releases -- @c "1.1.0+58.g3403fe0".
+ * it was built between releases: @c "1.1.0+58.g3403fe0".
  *
  * A string and not a function on purpose. There is no installed library
  * here to have been replaced underneath you: the driver is vendored, so

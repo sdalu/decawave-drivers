@@ -11,8 +11,8 @@
  *
  * FRAME MATCHING, in one predicate (frame_classify() below): a captured
  * frame is ours only if the "dwp" mark is there, the type is the one
- * being waited for, dst equals our own address, and -- except for a POLL,
- * whose seq is not yet known -- the seq matches the exchange in
+ * being waited for, dst equals our own address, and (except for a POLL,
+ * whose seq is not yet known) the seq matches the exchange in
  * progress. Anything else is ignored and the wait continues.
  *
  * WHAT WAS IGNORED IS NOW COUNTED, which is the whole of the difference
@@ -31,13 +31,13 @@
  * silently resolved:
  *
  *  1. FINAL's third word is specified as "an echo of t_sr as the
- *     initiator read it" -- but RESPONSE's payload is specified EMPTY,
+ *     initiator read it". But RESPONSE's payload is specified EMPTY,
  *     and t_sr is the responder's own local transmit time: nothing in
  *     this wire format ever carries it to the initiator for it to read
  *     and echo back. Sent as 0; nothing on the responder's side reads
  *     this word (see dw1000_probe_twr_resp_run() below).
  *  2. "Single-sided mode is the first two frames only" would leave the
- *     responder unable to learn t_sp or t_rr at all -- both are the
+ *     responder unable to learn t_sp or t_rr at all: both are the
  *     INITIATOR's own local instants, and POLL/RESPONSE's payloads are
  *     both specified empty, so no frame in a literal two-frame exchange
  *     could carry them. This implementation reads "first two frames" as
@@ -48,15 +48,15 @@
  *
  * WHAT MOVED HERE FROM THE ZEPHYR APPLICATION (see the top-level report
  * for the fuller account): the Zephyr coupling was four things, all
- * replaced --
+ * replaced:
  *
  *  - k_mutex_lock()/unlock() on the driver bus -> dw1000_probe_port_
  *    bus_lock()/unlock(), already implemented by every port;
  *  - atomic_t/atomic_get() on the rx-frame-arrived counter (and,
  *    identically, on the tx-done counter frame_send() polls) -> plain
  *    counters, read only under the bus lock. Correct because the
- *    writer -- dw1000_probe_rx_capture()/dw1000_probe_tx_capture()
- *    below -- is called from the application's radio callbacks, which
+ *    writer (dw1000_probe_rx_capture()/dw1000_probe_tx_capture()
+ *    below) is called from the application's radio callbacks, which
  *    <dw1000/probe/port.h> guarantees run with the bus lock already
  *    held (inside dw1000_process_events()); a reader that also takes
  *    the lock therefore never races the writer, and atomics bought
@@ -71,8 +71,8 @@
  * both previously in the Zephyr application's src/main.c) moved here
  * too, as dw1000_probe_rx_capture() below: it is parsed by frame_wait(),
  * which belongs with the rest of the exchange's mechanism, not with
- * bring-up. What stayed in the application is the *callback* --
- * dw1000_cb_rx_ok(), registered in dw1000_config_t.cb.rx_ok -- because
+ * bring-up. What stayed in the application is the *callback*,
+ * dw1000_cb_rx_ok(), registered in dw1000_config_t.cb.rx_ok, because
  * attaching a callback into the driver's bring-up config is an
  * application concern; it now does nothing but call
  * dw1000_probe_rx_capture() and re-arm the receiver. The same split
@@ -80,7 +80,7 @@
  * replacing the atomic counter frame_send() used to poll; the
  * application's own tx-done counter (used by a `probe tx` command that
  * has nothing to do with this exchange) is untouched and kept entirely
- * separate -- the two counters share a callback, not a variable.
+ * separate: the two counters share a callback, not a variable.
  *
  * The per-run line buffering that <dw1000/probe/port.h> requires
  * (dw1000_probe_port_emit() called "only between runs") stays a host
@@ -122,7 +122,7 @@
 
 /* Wildcard for frame_wait()'s expected_seq: legal only while waiting for
  * a POLL, the first frame of a new exchange, whose seq the responder
- * cannot know ahead of time -- it is the initiator's to pick. */
+ * cannot know ahead of time: it is the initiator's to pick. */
 #define FRAME_SEQ_ANY (-1)
 
 static void
@@ -219,7 +219,7 @@ frame_classify(const uint8_t *buf, size_t len, char want_type,
 /* Default per-frame wait: ample at bench ranges (brief's own figure). A
  * constant, not a magic number, because it is a deliberate budget, not a
  * measured one. Passed straight to dw1000_rx_set_timeout(), whose unit
- * is "UWB microseconds" (~1.0256 standard us, per the DW1000 UM) --
+ * is "UWB microseconds" (~1.0256 standard us, per the DW1000 UM),
  * close enough to a plain microsecond at this magnitude that no
  * conversion is applied. */
 #define PROBE_EXCHANGE_FRAME_TIMEOUT_US 20000U
@@ -249,7 +249,7 @@ frame_classify(const uint8_t *buf, size_t len, char want_type,
  * that never returns.
  *
  * Both are overridable at compile time, and both defaults are a harness
- * property rather than a radio one -- a bench with a different head
+ * property rather than a radio one: a bench with a different head
  * start wants a different first budget. tests/probe/exchange.c overrides
  * them to milliseconds, which is the only way a gate can prove a wait
  * ends without waiting out the wait. */
@@ -258,7 +258,7 @@ frame_classify(const uint8_t *buf, size_t len, char want_type,
 #endif
 
 /* How long to wait for a transmit's completion to be reported before
- * giving up on reading its RMARKER time -- a frame this short is on air
+ * giving up on reading its RMARKER time; a frame this short is on air
  * well under a millisecond, so this is generous slack for the
  * application's event thread/loop to run, not a measured bound. */
 #define PROBE_EXCHANGE_TX_SETTLE_TIMEOUT_US 50000U
@@ -270,13 +270,13 @@ frame_classify(const uint8_t *buf, size_t len, char want_type,
 
 
 /*======================================================================*/
-/* Capture -- filled by the application's radio event callbacks         */
+/* Capture: filled by the application's radio event callbacks          */
 /*======================================================================*/
 
 /* Both counters are plain, not atomic: the only writer is the
  * application's radio callback, called from inside
- * dw1000_process_events() -- which <dw1000/probe/port.h> guarantees
- * runs with the bus lock held -- and every reader below takes that same
+ * dw1000_process_events(), which <dw1000/probe/port.h> guarantees
+ * runs with the bus lock held, and every reader below takes that same
  * lock before looking at either counter or the frame it guards. See the
  * file comment above for why this replaces what was an atomic_t under
  * Zephyr. */
@@ -294,7 +294,7 @@ struct rx_capture {
  * The exchange is a sequence of waits with gaps between them, and a peer
  * that answers during a gap used to be lost: one slot held only the
  * newest frame, and frame_wait() wrote off everything from the gap
- * without looking at it. That cost an entire pairing -- a Unix initiator
+ * without looking at it. That cost an entire pairing: a Unix initiator
  * against a board responder resolved 0 of 20, every run, because its
  * REPORT arrived about 110 us after its FINAL while the responder took
  * some 240 us to get back into a wait. The frame had been received
@@ -381,18 +381,18 @@ heard_reset(void)
 
 /* Turn the receiver on (or off, for timeout_us == 0: dw1000_rx_set_timeout()
  * treats that as "disable", so the receiver listens with no chip-side
- * bound at all -- used only for the responder's wait for the next POLL,
+ * bound at all, used only for the responder's wait for the next POLL,
  * whose budget is seconds and does not fit the chip's 16-bit microsecond
  * field, which tops out at 65 ms. That wait is bounded, and bounded on
  * the host: frame_wait()'s deadline is what ends it. The comment that
  * used to stand here said the wait had no deadline because the bench
  * waits for READY before starting the initiator. The bench does not and
- * cannot -- see dw1000_probe_ready_format() in <dw1000/probe/record.h> --
+ * cannot (see dw1000_probe_ready_format() in <dw1000/probe/record.h>),
  * and the consequence of believing it was a responder that hung with
  * nothing printed rather than reporting what it had failed to hear.
  * See dw1000_probe_twr_resp_run() below).
  * Always starts from IDLE via dw1000_txrx_off(), which
- * dw1000_rx_set_timeout() requires (see its own doc comment) -- so a
+ * dw1000_rx_set_timeout() requires (see its own doc comment), so a
  * caller never has to reason about what a previous wait or transmit left
  * the chip in. */
 static void
@@ -412,7 +412,7 @@ rx_arm(dw1000_t *dw, uint32_t timeout_us)
  * previous wait) so the transmitter is never racing an active receiver.
  *
  * @return false if the transmit itself could not be started, or its
- *         completion was not reported within the settle window -- the
+ *         completion was not reported within the settle window; the
  *         caller's NO_RESPONSE-shaped statuses all come from here.
  */
 static bool
@@ -432,7 +432,7 @@ frame_send(dw1000_t *dw, const uint8_t *buf, size_t len, uint64_t *tx_time,
     dw1000_tx_write_frame_data(dw, txbuf, len, 0);
     /* When a reply is expected the CHIP arms the receiver at the end of
      * this transmission (WAIT4RESP), with the frame timeout set here,
-     * before TXSTRT -- nothing in software is in that path. It used to
+     * before TXSTRT: nothing in software is in that path. It used to
      * be: wait for tx_done through the event thread, then rx_arm(); and a
      * peer answering inside that turnaround was never heard. A Raspberry
      * Pi answers a POLL in 0.92 ms, the nRF52 boards in 1.49 ms, which is
@@ -474,12 +474,12 @@ frame_send(dw1000_t *dw, const uint8_t *buf, size_t len, uint64_t *tx_time,
 
 /* Wait for one frame of type @p want_type, matching @p expected_seq (or
  * FRAME_SEQ_ANY) and addressed to @p own_addr, until @p deadline
- * (dw1000_probe_port_now()-based -- the host-side backstop). Anything
+ * (dw1000_probe_port_now()-based, the host-side backstop). Anything
  * else captured meanwhile is not ours and the wait continues: the
  * application's rx_ok/rx_timeout/rx_error callbacks already re-arm the
  * receiver on every event, including a filtered-out frame or an
  * on-chip timeout, so this loop only watches the clock and the capture
- * buffer -- it never re-enables the receiver itself.
+ * buffer; it never re-enables the receiver itself.
  */
 static bool
 frame_wait(char want_type, int expected_seq, uint16_t own_addr, size_t min_words,
@@ -495,7 +495,7 @@ frame_wait(char want_type, int expected_seq, uint16_t own_addr, size_t min_words
     /* Frames captured since the previous wait ended. They are COUNTED
      * here and examined below, not discarded: the ring still holds them,
      * and a peer answering faster than this role gets back into a wait
-     * lands here. So drop_unwatched is no longer a loss -- it is the
+     * lands here. So drop_unwatched is no longer a loss: it is the
      * measure of how often the peer beat us back to the wait, which is
      * worth knowing and used to be fatal. */
     heard_bump(&heard.unwatched, seen - heard_upto);
@@ -519,7 +519,7 @@ frame_wait(char want_type, int expected_seq, uint16_t own_addr, size_t min_words
              * arrival order instead of collapsing to its last member.
              * Single-producer/single-consumer snapshot, taken under the
              * same lock the producer (dw1000_probe_rx_capture(), called
-             * from the application's rx_ok callback) writes under -- so
+             * from the application's rx_ok callback) writes under, so
              * this copy can never observe a torn write. */
             snap = rx_ring[heard_upto % RX_RING];
             heard_upto++;
@@ -544,7 +544,7 @@ frame_wait(char want_type, int expected_seq, uint16_t own_addr, size_t min_words
 
     /* heard_upto advanced as frames were consumed, so it already says
      * how far the account has followed. What is left unconsumed stays
-     * for the next wait to examine -- which is the whole point of the
+     * for the next wait to examine, which is the whole point of the
      * ring, and why it must NOT be skipped forward here. */
     return matched;
 }
@@ -561,7 +561,7 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
                           void (*emit_line)(const char *line))
 {
     (void)peer_addr; /* RESPONSE answers whoever sent the POLL, not a
-                       * fixed configured peer -- see the report. */
+                       * fixed configured peer; see the report. */
 
     const struct dw1000_probe_origin origin = {
         .node = node_name,
@@ -590,14 +590,14 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
          * the initiator; the bench does not and cannot, and what the
          * false premise bought was a responder that could not end. A
          * board that heard no POLL sat here until its console session
-         * was cut, having emitted no record and no STATS -- silence,
+         * was cut, having emitted no record and no STATS: silence,
          * where a run of no-poll records would have said which end had
          * gone deaf and what, if anything, it was hearing instead.
          *
          * The long budget covers the harness's head start; the short
          * one applies once the initiator is KNOWN to be running. That is
          * true after a POLL has been heard, and not merely after the
-         * first attempt -- which is what this used to test, on the
+         * first attempt, which is what this used to test, on the
          * premise that the first attempt would always catch the head
          * start. When the head start outgrew the budget the premise
          * failed silently and the responder spent its attempts two
@@ -623,8 +623,8 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
         result.attempted++;
 
         /* Read whatever happened, so that <dw1000/probe/record.h>'s
-         * promise -- the near end's temperature and voltage are in every
-         * record -- stays true of a no-poll record too. Read here rather
+         * promise (the near end's temperature and voltage are in every
+         * record) stays true of a no-poll record too. Read here rather
          * than before the wait, so that it is the die at the attempt and
          * not the die up to thirty seconds earlier. */
         int16_t  temp;
@@ -680,7 +680,7 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
                     rec.t_sp = get_u40le(&final.data[FRAME_HDR_LEN + 0 * FRAME_WORD_LEN]);
                     rec.t_rr = get_u40le(&final.data[FRAME_HDR_LEN + 1 * FRAME_WORD_LEN]);
                     /* word 2, the t_sr echo, is not read here: see the file
-                     * comment above -- nothing on this driver's side ever
+                     * comment above: nothing on this driver's side ever
                      * has a genuine value to check it against. */
                     rec.present |= DW1000_PROBE_F_T_SP | DW1000_PROBE_F_T_RR;
 
@@ -708,7 +708,7 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
                          * long this responder's own event processing held
                          * the bus, so it caught a Unix initiator (REPORT
                          * ~110 us after its FINAL) with dblbuff off and a
-                         * board initiator (~244 us) with it on -- one
+                         * board initiator (~244 us) with it on: one
                          * pairing at 0 of 20 either way, and which one
                          * changed when the bus timing did. Keeping the
                          * receiver *more* enabled never helped, because
@@ -773,7 +773,7 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
     struct dw1000_probe_stats stats;
     memset(&stats, 0, sizeof(stats));
     stats.tx_power_db_x10     = (int16_t)(dw1000_tx_power_to_05db(txpower_reg) * 5u);
-    stats.tx_power_req_db_x10 = -1; /* DW1000_TX_POWER_AUTO -- see the
+    stats.tx_power_req_db_x10 = -1; /* DW1000_TX_POWER_AUTO; see the
                                       * application's bring-up          */
     stats.driver_version      = DW1000_VERSION_FULL;
     stats.attempted            = result.attempted;
@@ -839,7 +839,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
                                    peer_addr, own_addr);
                 put_u40le(&final_buf[FRAME_HDR_LEN + 0 * FRAME_WORD_LEN], t_sp);
                 put_u40le(&final_buf[FRAME_HDR_LEN + 1 * FRAME_WORD_LEN], t_rr);
-                /* word 2: nothing genuine to echo -- see the file comment
+                /* word 2: nothing genuine to echo; see the file comment
                  * above. Sent as 0. */
                 put_u40le(&final_buf[FRAME_HDR_LEN + 2 * FRAME_WORD_LEN], 0);
 
@@ -872,7 +872,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
                          * send in this exchange is checked; this one was
                          * cast to void, so a REPORT that never left the
                          * chip looked exactly like one the peer failed to
-                         * hear -- the responder said `no-report` and the
+                         * hear: the responder said `no-report` and the
                          * initiator still counted the exchange as having
                          * reached REPORT. Measured 2026-09-16 on a Unix
                          * initiator against a board responder: 10 of 20

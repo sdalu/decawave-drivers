@@ -20,7 +20,7 @@
 /*
  * One pin map, the one wired on the bench: SPI0/CE0, reset on P1_18,
  * wakeup on P1_16, interrupt on P1_15. Identical to rpi-redskin/config.h
- * and to probe/app/unix/config.h, which took it from there -- so a Pi
+ * and to probe/app/unix/config.h, which took it from there, so a Pi
  * that already runs either of those runs this with nothing rewired.
  *
  * This program used to differ (wakeup on P1_22, interrupt on P1_16),

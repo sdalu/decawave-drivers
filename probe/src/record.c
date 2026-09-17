@@ -162,7 +162,7 @@ dw1000_probe_pack_power(double dbm, uint16_t *out)
 /* Each helper renders one optional or origin field into the caller's
  * scratch buffer and returns the pointer to use in the final snprintf():
  * either that buffer, or a string literal for the absent/default case.
- * None of them can overflow their own scratch buffer -- every field this
+ * None of them can overflow their own scratch buffer: every field this
  * record carries is a fixed-width integer, so 24 bytes is slack for the
  * widest of them (a signed 64-bit tick count) with room to spare.
  */
@@ -206,7 +206,7 @@ fmt_i16(char *buf, size_t len, uint32_t present, uint32_t bit, int16_t v)
 
 /* One decimal, tenths taken as a signed magnitude: the sign is taken
  * once, off the whole value, and the two digits either side of the point
- * are both magnitude -- -125 is "-12.5", not "-12.-5", and -5 is "-0.5"
+ * are both magnitude: -125 is "-12.5", not "-12.-5", and -5 is "-0.5"
  * rather than rounding to "-1.5" or dropping the sign on the fraction.
  */
 static void

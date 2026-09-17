@@ -128,7 +128,7 @@ case_cleared_bits(void)
 	.node = "D4", .role = DW1000_PROBE_ROLE_TWR_RESP, .run = "r1",
     };
     /* Leading space in the needle so that "sym_mm=-" cannot match inside
-     * "asym_mm=..." -- "asym_mm" contains "sym_mm" as a substring.
+     * "asym_mm=...": "asym_mm" contains "sym_mm" as a substring.
      */
     static const struct { uint32_t bit; const char *needle; } t[] = {
 	{ DW1000_PROBE_F_INIT_RX,   " init_rx=-"   },
@@ -333,7 +333,7 @@ case_truncation(void)
     size_t want;
 
     /* A small buffer with one guard byte right after it, in the same
-     * array -- so nothing but the compiler's own padding rules can
+     * array, so nothing but the compiler's own padding rules can
      * separate them, unlike two struct members.
      */
     char   arena[16];
@@ -526,7 +526,7 @@ case_distances_no_drift(void)
 }
 
 /* B. Responder's crystal 20 ppm fast: the three MUST disagree, and by
- * these amounts -- ss_dmm is negative, which is why the field is signed.
+ * these amounts: ss_dmm is negative, which is why the field is signed.
  */
 static const char *
 case_distances_drift(void)

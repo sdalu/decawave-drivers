@@ -10,7 +10,7 @@
 
 /*
  * Pin map for a Raspberry Pi carrying a DW1000 HAT, modelled directly on
- * rpi-redskin/config.h -- the working example of wiring this driver to
+ * rpi-redskin/config.h, the working example of wiring this driver to
  * bitters on this exact hardware. Kept identical (SPI0/CE0, reset on
  * P1_18, wakeup on P1_16, interrupt on P1_15) so a bench that already
  * has redskin wired up needs nothing rewired to also run this probe.

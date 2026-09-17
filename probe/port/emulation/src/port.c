@@ -11,8 +11,8 @@
  * dw1000_probe_port_wake(), and a line on stdout.
  *
  * "Interrupt context" here is a thread calling dw1000_probe_port_wake() while
- * this process's radio port (or, for this stage, a test) is elsewhere --
- * not a real ISR -- so an ordinary mutex is fine; a bare-metal port would
+ * this process's radio port (or, for this stage, a test) is elsewhere,
+ * not a real ISR, so an ordinary mutex is fine; a bare-metal port would
  * need something that does not block.
  *
  * The condition variable is timed against CLOCK_MONOTONIC rather than
@@ -96,11 +96,11 @@ dw1000_probe_port_wait(uint32_t timeout_us)
     }
 
     pthread_mutex_lock(&wait_lock);
-    /* A wake-up already pending -- including one that arrived before
-     * this call was made -- is consumed at once, timeout_us of 0
+    /* A wake-up already pending, including one that arrived before
+     * this call was made, is consumed at once, timeout_us of 0
      * included: the loop condition is false and pthread_cond_timedwait()
      * is never entered. Otherwise it is entered with a deadline already
-     * in the past, which returns ETIMEDOUT immediately -- the "polls"
+     * in the past, which returns ETIMEDOUT immediately: the "polls"
      * dw1000_probe_port_wait() promises for a zero timeout.
      */
     while (!wait_pending) {

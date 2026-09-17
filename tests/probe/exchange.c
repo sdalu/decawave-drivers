@@ -12,7 +12,7 @@
  *  - IT ENDS. A twr_resp run whose POLL never arrives returns, having
  *    emitted one no-poll record per attempt and a STATS line. The wait
  *    for a POLL used to be handed UINT64_MAX, on the stated grounds that
- *    the bench waits for a READY line before starting the initiator --
+ *    the bench waits for a READY line before starting the initiator,
  *    which it does not and cannot do. What that premise bought was a
  *    board that sat in the wait until its console session was cut,
  *    printing nothing at all: the observation that started this was a
@@ -27,7 +27,7 @@
  *
  * Both budgets are overridden to milliseconds below. A gate cannot prove
  * that a wait ends by waiting out a thirty-second wait, and the defaults
- * are a property of the bench's harness rather than of this code -- see
+ * are a property of the bench's harness rather than of this code; see
  * probe/src/exchange.c, which is why they are overridable at all.
  *
  * WHAT THIS DOES NOT COVER. `drop_seq` needs a frame of the right type
@@ -36,7 +36,7 @@
  * after a RESPONSE has been sent. That turn-on happens on the chip
  * (WAIT4RESP) and issues no RX_CONFIG for a medium to answer, so a stub
  * has no hook to deliver into and the frame would have to arrive through
- * a re-arm the timeout drives -- inside the same 20 ms the wait is bounded
+ * a re-arm the timeout drives, inside the same 20 ms the wait is bounded
  * by. It is left to the bench. `drop_unwatched` and `drop_overrun` are
  * likewise not forced: both are races by construction, and a test that
  * produced one on demand would be pinning its own scheduler.
@@ -108,7 +108,7 @@ struct rsvc_outhdr {                    /* server -> node, 12 bytes */
  * in osal.c), needed here for the opposite reason: a frame this test
  * injects was never transmitted by anything, so nothing has appended its
  * FCS. Delivered without one the model reports a receive error and the
- * frame never reaches a callback -- which is how the first version of
+ * frame never reaches a callback, which is how the first version of
  * this test managed to assert heard=0 against four frames it had
  * carefully queued.
  */
@@ -501,7 +501,7 @@ put_u16le(uint8_t *p, uint16_t v)
  * reported to rx_ok includes.
  *
  * Under the stub's lock, and not because the queue is refilled while a
- * role runs -- it is not. The receiver is still armed from the step
+ * role runs: it is not. The receiver is still armed from the step
  * before, so the stub thread is still taking RX_CONFIG requests and
  * still reading `queued` to decide it has nothing to deliver. Without
  * the lock that read races this write, which is what ThreadSanitizer

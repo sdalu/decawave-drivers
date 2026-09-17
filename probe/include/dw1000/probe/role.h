@@ -13,8 +13,8 @@
  * @brief   What the instrument can be asked to do.
  *
  * The set of roles is the instrument's definition, so it is here. How a
- * particular host spells the verb that selects one -- a shell subcommand,
- * an argv word, a key in a config file -- is the application's, and may
+ * particular host spells the verb that selects one (a shell subcommand,
+ * an argv word, a key in a config file) is the application's, and may
  * differ. What must not differ is the identifier printed in `role=`:
  * that is read by one parser, and a board saying `resp` where a Linux
  * host says `twr_resp` would make the parser need to know which it was

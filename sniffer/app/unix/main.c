@@ -29,7 +29,7 @@
  *
  * Under double buffering this runs with the receiver already armed and the
  * next frame landing in the other buffer, so it does the one thing that
- * cannot wait -- the read-out, inside capture_put() -- and returns. What
+ * cannot wait (the read-out, inside capture_put()) and returns. What
  * used to be here, a per-frame printf and a blocking sendmsg(2), now
  * happens in loop() below, on what the ring holds. It must not re-enable
  * the receiver: the driver already did. See capture.c.
@@ -154,7 +154,7 @@ int loop(void) {
 
 	    /* Drain what the callbacks captured. This is where the frame
 	     * leaves the program, deliberately outside the callback that
-	     * received it -- eth_send() is a blocking sendmsg(2).
+	     * received it: eth_send() is a blocking sendmsg(2).
 	     */
 	    struct capture_frame frame;
 	    while (capture_get(&frame)) {
@@ -216,7 +216,7 @@ int main(int argc, const char* argv[]) {
     
     /* Initialize UWB
      */
-    /* Metres on the command line, ticks in the chip -- and the conversion
+    /* Metres on the command line, ticks in the chip, and the conversion
      * used to be computed and thrown away. cmdline_parse() validates with
      * a NULL out parameter, so what landed here was the raw metres: an
      * explicit --tx_delay 154.6 set 154 ticks, about 0.7 m, instead of
@@ -235,7 +235,7 @@ int main(int argc, const char* argv[]) {
 
     /* Already checked, with the message, in cmdline_parse(); this is the
      * pass that writes the encoded values into the radio. The combination
-     * they make is not checked here and must not be -- that is
+     * they make is not checked here and must not be: that is
      * dw1000_configure()'s job, by way of uwb_config_dw1000_radio() below.
      */
     dw1000_validate_channel(config.channel,  &dw1000_radio.channel,  NULL);

@@ -446,7 +446,7 @@ rsvc_call_extended(rsvc_t *rsvc, uint16_t type,
 	goto send_again;
 
     /* The send failed, which in practice means the server's socket is
-     * no longer there -- a simulation shutting down unlinks it while its
+     * no longer there: a simulation shutting down unlinks it while its
      * nodes are still transmitting, so this is the ordinary end of every
      * run and not a fault to abort on. It used to be an assert, and the
      * abort came *after* the run's work was done, which made it look
@@ -471,7 +471,7 @@ rsvc_call_extended(rsvc_t *rsvc, uint16_t type,
      *
      * The server is another program. One that does not recognise a
      * service type, or that has stopped, leaves this thread blocked
-     * with nothing to wake it -- and because a node's whole job happens
+     * with nothing to wake it, and because a node's whole job happens
      * on these calls, that is a hang rather than an error.
      *
      * The deadline is absolute so that an EINTR resumes the same wait
@@ -505,7 +505,7 @@ rsvc_call_extended(rsvc_t *rsvc, uint16_t type,
 	}
 
 	if (expired) {
-	    /* The wait ran out -- but possibly at the very moment the
+	    /* The wait ran out, but possibly at the very moment the
 	     * reader was claiming this request, so who owns the entry has
 	     * to be settled before anything is torn down. The list is
 	     * that answer, and it is only meaningful under the lock:
@@ -514,7 +514,7 @@ rsvc_call_extended(rsvc_t *rsvc, uint16_t type,
 	     *    now, and it is ours to remove and report.
 	     *  - gone from it: the reader took it, under this same lock,
 	     *    and is on its way to sem_post(). It holds a pointer to
-	     *    `inprogress`, which lives on this stack -- so returning
+	     *    `inprogress`, which lives on this stack, so returning
 	     *    here would pull the semaphore out from under it. Wait
 	     *    for the post, which is a few instructions away, and
 	     *    treat the call as the success it turned out to be.
@@ -550,7 +550,7 @@ rsvc_call_extended(rsvc_t *rsvc, uint16_t type,
     /* Process reply
      */
     /* Not removed from the list here: rsvc_loop() already took it out
-     * when it matched the reply, and it had to -- leaving it in would
+     * when it matched the reply, and it had to: leaving it in would
      * let a second datagram with the same id match a waiter that has
      * gone. Removing it a second time writes through the entry's stale
      * links, which on a list of one is very nearly harmless and on a
@@ -607,8 +607,8 @@ rsvc_open(char *socket_path, char *nickname, int *err)
     /* Client address (necessary for bidirectional datagram).
      *
      * The process id alone is not enough to name it. Two connections
-     * from one process -- a test that builds a model per configuration,
-     * or anything simulating two nodes in one program -- would derive
+     * from one process (a test that builds a model per configuration,
+     * or anything simulating two nodes in one program) would derive
      * the same path, and the second bind() would fail on the first
      * one's socket. Worse, the failure path below unlinks that path, so
      * the second open would take the first connection's socket with it
@@ -727,7 +727,7 @@ rsvc_close(rsvc_t *rsvc)
      *    returns and the caller starts freeing what the handler reads.
      *
      * So it is asked to stop instead, and woken by an empty datagram to
-     * its own address -- a blocking readv() will not notice a flag on
+     * its own address: a blocking readv() will not notice a flag on
      * its own. Then joined, after which nothing else is touching any of
      * this.
      */

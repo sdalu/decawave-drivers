@@ -1,5 +1,5 @@
 #!/bin/sh
-# build.sh -- compile the Linux/Raspberry Pi probe application
+# build.sh: compile the Linux/Raspberry Pi probe application
 # usage: build.sh [-n] [-o outfile]
 #
 #   -n   print the compiler command and exit; compile nothing
@@ -9,20 +9,20 @@
 # every vendored tree and evals the result rather than naming files, so
 # a source this application did not add itself is never missed and never
 # hand-copied out of step with the manifest that actually describes it.
-# rpi-redskin/build.sh is the second half of the model -- it is the
+# rpi-redskin/build.sh is the second half of the model: it is the
 # working example of doing this for bitters AND decawave-drivers
 # together, in one gcc invocation, for exactly this hardware.
 #
-# `make sources` does not know about the probe -- it is decawave-drivers'
+# `make sources` does not know about the probe. It is decawave-drivers'
 # own addition, sitting beside the driver rather than folded into it (see
-# dw1000.cmake's own note on why) -- so its three pieces (the probe API,
+# dw1000.cmake's own note on why), so its three pieces (the probe API,
 # probe/src, and this port) are asked for directly from scripts/
 # manifest.sh, the same way tests/check-probe.sh already does.
 #
 # Environment, each overridable:
 #   DW1000     this tree (decawave-drivers); default: three directories
 #              above this script, i.e. the tree this script itself lives
-#              in -- set it only to point at a *different* checkout
+#              in; set it only to point at a *different* checkout
 #   BITTERS    the bitters tree; default $HOME/Repos/bitters
 #   CC         compiler binary                                  (cc)
 #   CCEXTRA    flags that particular binary needs
@@ -57,9 +57,9 @@ shift $((OPTIND - 1))
 command -v "$CC" >/dev/null || die "no such compiler: $CC"
 command -v make  >/dev/null || die "make(1) is needed to read the manifests"
 [ -d "$DW1000/probe/port/unix" ] \
-    || die "no probe/port/unix under $DW1000 -- wrong DW1000= ?"
+    || die "no probe/port/unix under $DW1000; wrong DW1000= ?"
 [ -d "$BITTERS" ] \
-    || die "no bitters tree at $BITTERS -- set BITTERS="
+    || die "no bitters tree at $BITTERS; set BITTERS="
 
 # The driver core and its unix OSAL, from decawave-drivers' own manifest
 # interface (dw1000.cmake, read through `make sources`). Same call
@@ -69,7 +69,7 @@ dw1000_vars=$(make -s -C "$DW1000" sources OSAL=unix) \
 eval "$dw1000_vars"
 
 # bitters, taken by subsystem: this application uses gpio, spi and delay
-# (core is always required), not i2c -- same choice rpi-redskin/build.sh
+# (core is always required), not i2c: same choice rpi-redskin/build.sh
 # makes, for the same reason: which subsystems a program takes is its own
 # choice, not the module's.
 bitters_vars=$(make -s -C "$BITTERS" sources) \
@@ -78,7 +78,7 @@ eval "$bitters_vars"
 BITTERS_TAKEN="$BITTERS_SOURCES_CORE $BITTERS_SOURCES_DELAY \
                $BITTERS_SOURCES_GPIO $BITTERS_SOURCES_SPI"
 
-# The probe: its own API, probe/src (role, record, exchange.c -- the
+# The probe: its own API, probe/src (role, record, exchange.c, the
 # state machine this application drives), and this port. Asked for
 # directly, the way tests/check-probe.sh does, because `make sources`
 # above is the driver's own interface and does not carry these.
@@ -109,7 +109,7 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
     set -- "$@" $BITTERS_CFLAGS
 
     # The compile-time options this instrument's radio configuration
-    # (probe/app/unix/main.c's probe_radio) assumes -- the driver's own
+    # (probe/app/unix/main.c's probe_radio) assumes: the driver's own
     # defaults, spelled out rather than left implicit, exactly as
     # rpi-redskin/build.sh and its Makefile do.
     set -- "$@" -DDW1000_WITH_PROPRIETARY_PREAMBLE_LENGTH=1
@@ -128,7 +128,7 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
     # ... and the optional radio-state source, which main.c's start-up
     # read-back calls into (dw1000_get_radio_state(),
     # dw1000_radio_state_format()). It is deliberately not part of
-    # DW1000_SOURCES, so a consumer that wants it names it -- and this
+    # DW1000_SOURCES, so a consumer that wants it names it, and this
     # one did not, so the link has been failing on those two symbols
     # since they were added.
     set -- "$@" $DW1000_SOURCES_STATE
