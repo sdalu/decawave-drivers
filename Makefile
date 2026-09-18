@@ -152,7 +152,7 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-manifest check-validate check-emulation check-probe	## compile the option matrix (~1 min), check the manifest, check the radio-value validation, run the emulation smoke test, run the probe tests
+check: check-options check-manifest check-validate check-emulation check-probe check-sniffer	## compile the option matrix (~1 min), check the manifest, check the radio-value validation, run the emulation smoke test, run the probe tests, run the sniffer tests
 
 # 256 compiles, tens of seconds in total, so the script reports progress
 # as it goes. CC, CFLAGS and WERROR reach it through the environment.
@@ -194,6 +194,15 @@ check-emulation:				## run the emulation smoke test (driver, port/emulation, stu
 # here does.
 check-probe:					## run the probe tests (format, and the responder against port/emulation)
 	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-probe.sh
+
+# Three of the sniffer's seven translation units were written to touch
+# neither the chip nor Linux, so they run here; the other four are a
+# Linux program for a Raspberry Pi and only build there. The script says
+# which is which and why. capture.c reaching the chip through a pair of
+# function pointers rather than calling into uwb_dw1000.c is what made
+# any of this testable: before that the sniffer had no tests at all.
+check-sniffer:					## run the sniffer tests (the frame ring, the wire header, the pcapng writer, the dissector registry and loader, and the wireshark dissector: its offsets always, and its behaviour where a Lua is installed)
+	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-sniffer.sh
 
 # --- building ---------------------------------------------------------
 
@@ -340,6 +349,6 @@ distclean: clean				## clean, plus the generated documentation
 	rm -rf doc/generated
 
 .PHONY: help portcheck check check-options check-manifest check-emulation \
-	check-probe check-validate \
+	check-probe check-sniffer check-validate \
 	lib version version-full tag ports options sources doc clean distclean \
 	state validate

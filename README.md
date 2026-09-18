@@ -307,7 +307,11 @@ Each part of the tree is documented beside itself. This is the index:
 - [`probe/DESIGN.md`](probe/DESIGN.md): the probe's exchange, record
   contract and split line.
 - [`sniffer/README.md`](sniffer/README.md): building and running the
-  UWB sniffer, which forwards captured frames over ethernet.
+  UWB sniffer, which forwards captured frames over ethernet or writes
+  them as pcapng for wireshark.
+- [`sniffer/DESIGN.md`](sniffer/DESIGN.md): the sniffer's frame ring,
+  its wire format, its dissector interface, and why four of its files
+  are portable.
 - [`AUDIT.md`](AUDIT.md): what was checked against the manual, what
   was wrong, what was measured, and what is still open.
 

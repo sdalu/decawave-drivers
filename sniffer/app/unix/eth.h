@@ -47,13 +47,21 @@ int eth_get_first_interface(char *ifname);
 int eth_init(char *ifname, uint16_t proto, uint8_t *hwaddr);
 
 /**
- * Send an ethernet packet
+ * Send an ethernet packet, as a header followed by a payload.
+ *
+ * The two are kept apart rather than concatenated by the caller: the
+ * header is wire.c's, built fresh for each frame, while the payload is
+ * the frame still in the ring slot capture.c read it into, and sendmsg(2)
+ * takes both as iovecs so neither is copied again on its way out.
  *
  * @param[in] dst	ethernet address of the remote host
+ * @param[in] hdr	header to send ahead of the payload, or NULL
+ * @param[in] hdrlen	size of @p hdr, 0 when there is none
  * @param[in] data	data to be send
  * @param[in] datalen	size of the data to send
  */
-int eth_send(const uint8_t *dst, void *data, size_t datalen);
+int eth_send(const uint8_t *dst,
+	     const void *hdr, size_t hdrlen, const void *data, size_t datalen);
 
 /**
  * Parse a string to an ethernet address.

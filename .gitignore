@@ -1,6 +1,7 @@
 *~
 *.o
 *.a
+*.so
 doc/generated
 .gitversion
 docs/*.pdf

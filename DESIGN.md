@@ -73,7 +73,8 @@ decawave-drivers
 │
 ├── probe                          a two-way-ranging instrument, built
 │                                  on the driver rather than part of it
-├── sniffer                        forwards captured frames over ethernet
+├── sniffer                        forwards captured frames over ethernet,
+│                                  or writes them as pcapng
 │
 ├── dw1000.cmake                   the file list, read by both of these
 ├── Makefile                       compile checks, vendoring, doxygen

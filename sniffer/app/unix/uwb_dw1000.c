@@ -9,6 +9,8 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <poll.h>
+#include <math.h>
+#include <string.h>
 
 #include <bitters.h>
 #include <bitters/rpi.h>
@@ -27,6 +29,8 @@
 
 static void _rx_ok(dw1000_t *drv, uint32_t status, size_t length, bool ranging);
 static void _rx_error(dw1000_t *drv, uint32_t status);
+static void _read_frame_data(uint8_t *data, size_t length, size_t offset);
+static void _read_meta(struct capture_meta *meta);
 
 
 
@@ -39,6 +43,26 @@ static void _rx_error(dw1000_t *drv, uint32_t status);
  */
 static void (*uwb_cb_rx_ok)(
 	    uint32_t status, size_t length, bool ranging) = NULL;
+
+/* The receive error account, kept here because this is where the status
+ * word arrives and nowhere else sees it.
+ */
+static struct uwb_rx_errors rx_errors;
+
+/* The chip side of capture.c's read-out seam, in both its forms. Which
+ * one uwb_capture_ops() hands back is the whole of what `--metadata`
+ * and `--no-metadata` select: with read_meta NULL the callback spends no
+ * SPI time on registers nobody asked for, and capture.c flags the frames
+ * accordingly rather than filling a block with zeroes.
+ */
+static const struct capture_ops uwb_ops_plain = {
+    .read_frame_data = _read_frame_data,
+    .read_meta       = NULL,
+};
+static const struct capture_ops uwb_ops_meta = {
+    .read_frame_data = _read_frame_data,
+    .read_meta       = _read_meta,
+};
 
 /* GPIO/SPI for DW1000
  */ 
@@ -100,7 +124,7 @@ static dw1000_config_t DW0_config = {
      * have it. See hw/drivers/dw1000/README.md, "Double buffered
      * receive".
      */
-    .dblbuff          = 1,
+    .dblbuff          = 1,	   // uwb_init() may clear it
     .tx_antenna_delay = DW1000_METER_TO_CLOCK(154.6)/2,
     .rx_antenna_delay = DW1000_METER_TO_CLOCK(154.6)/2,
     /* rx_error is not optional here: dw1000_initialise() refuses dblbuff
@@ -134,16 +158,120 @@ _rx_ok(dw1000_t *drv, uint32_t status, size_t length, bool ranging)
 
 /* Every receive error, the overrun included, arrives here, and re-arming
  * is the host's job for all of them: the driver's overrun recovery puts
- * the chip back in order and reports, but enables nothing. An overrun
- * (RXOVRR in the status) means frames were lost on the chip rather than in
- * the ring; it is not distinguished here because the response is the same.
+ * the chip back in order and reports, but enables nothing.
+ *
+ * The response is the same whatever the reason, which is why this used to
+ * discard the status word. Counting it is not about the response but
+ * about the report: an overrun (RXOVRR) means frames were received and
+ * then lost on the chip because both buffers were held, which is the
+ * host being too slow and is the number that says whether the ring and
+ * the read-out are keeping up; the rest mean a frame never decoded,
+ * which is the link. A sniffer that cannot tell the user which of those
+ * happened is asking to be trusted about the frames it did not report.
  */
 static void
 _rx_error(dw1000_t *drv, uint32_t status)
 {
-    (void)status;
+    rx_errors.total++;
+
+    /* Not mutually exclusive, and not counted as if they were: one
+     * recovery can carry several of these bits at once, and each is a
+     * separate thing that happened. So the counts sum to more than
+     * total, deliberately.
+     */
+    if (status & DW1000_FLG_SYS_STATUS_RXOVRR ) rx_errors.overrun++;
+    if (status & DW1000_FLG_SYS_STATUS_RXPHE  ) rx_errors.phy++;
+    if (status & DW1000_FLG_SYS_STATUS_RXFCE  ) rx_errors.fcs++;
+    if (status & DW1000_FLG_SYS_STATUS_RXRFSL ) rx_errors.sync++;
+    if (status & DW1000_FLG_SYS_STATUS_LDEERR ) rx_errors.lde++;
+    if (status & DW1000_FLG_SYS_STATUS_RXSFDTO) rx_errors.sfd_timeout++;
+    if (status & DW1000_FLG_SYS_STATUS_AFFREJ ) rx_errors.rejected++;
+
+    /* A call with none of the bits above is worth its own count rather
+     * than being dropped: it means the driver reported an error this
+     * program does not know how to name, and a run where that number is
+     * not zero is a run to look at the driver for.
+     */
+    if (!(status & (DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+		    DW1000_FLG_SYS_STATUS_RXOVRR)))
+	rx_errors.unexplained++;
 
     dw1000_rx_start(drv, DW1000_RX_IMMEDIATE);
+}
+
+
+/* The two read-outs capture.c reaches the chip through. Both MUST run
+ * inside the rx_ok callback: RX_BUFFER, RX_TIME, RX_FQUAL, RX_TTCKI and
+ * RX_TTCKO all swing with the double buffer pointer, which the driver
+ * toggles the moment the callback returns (hw/drivers/dw1000/README.md,
+ * "Double buffered receive"). capture.h says the same thing from the
+ * other side; this is the end that actually touches the bus.
+ */
+static void
+_read_frame_data(uint8_t *data, size_t length, size_t offset)
+{
+    dw1000_rx_read_frame_data(&DW0, data, length, offset);
+}
+
+
+/* dBm as the driver reports it, into the milli-dBm capture.h carries.
+ *
+ * The driver gives -INFINITY when the preamble accumulation count is 0,
+ * which leaves no usable estimate, and that has to stay distinguishable
+ * from a reading: CAPTURE_POWER_NONE is what says so, and a genuine
+ * value is clamped away from it rather than allowed to collide with it.
+ * Received powers are in the -100..0 dBm region, so the clamp never
+ * fires in practice; it is there because a sentinel a real reading can
+ * reach is not a sentinel.
+ */
+static int32_t
+_milli_dbm(double dbm)
+{
+    if (!isfinite(dbm))
+	return CAPTURE_POWER_NONE;
+
+    double milli = dbm * 1000.0;
+    if (milli >= (double)INT32_MAX)         return INT32_MAX;
+    if (milli <= (double)(CAPTURE_POWER_NONE + 1)) return CAPTURE_POWER_NONE + 1;
+    return (int32_t)lround(milli);
+}
+
+
+static void
+_read_meta(struct capture_meta *meta)
+{
+    dw1000_t       *drv = &DW0;
+    dw1000_rxinfo_t rxinfo;
+    double          signal, firstpath;
+    int32_t         offset;
+    uint32_t        interval;
+
+    meta->rx_time = dw1000_rx_get_rmarker_time(drv);
+
+    /* Reported raw, not through dw1000_rx_power_correction(). The
+     * correction is a curve out of UM §4.7 fig 22 mapping the estimate
+     * onto the actual level, and applying it here would leave a consumer
+     * unable to get back to what the chip said. A sniffer's job is to
+     * report; the curve is the consumer's to apply.
+     */
+    dw1000_rx_get_power_estimate(drv, &signal, &firstpath);
+    meta->power_signal    = _milli_dbm(signal);
+    meta->power_firstpath = _milli_dbm(firstpath);
+
+    /* Offset and interval rather than the ratio: the ratio is what
+     * dw1000_rx_get_clock_drift() returns, and it is a double whose
+     * zero means both "no drift" and "no reading yet" (RX_TTCKI reads 0
+     * before the first frame is demodulated). Carrying both numbers
+     * keeps those apart, and dividing is the consumer's business.
+     */
+    dw1000_rx_get_time_tracking(drv, &offset, &interval);
+    meta->clock_offset   = offset;
+    meta->clock_interval = interval;
+
+    dw1000_rx_get_info(drv, &rxinfo);
+    meta->first_path = rxinfo.first_path;
+    meta->std_noise  = rxinfo.std_noise;
+    meta->max_noise  = rxinfo.max_noise;
 }
 
 
@@ -156,10 +284,15 @@ _rx_error(dw1000_t *drv, uint32_t status)
 int
 uwb_init(struct uwb_config *uwb_cfg)
 {
-    /* Some hint about raspberry pi configuration
+    /* Some hint about raspberry pi configuration.
+     *
+     * Through INFO, so it lands on stderr: with `-w -` stdout is the
+     * pcapng stream, and this runs before the first block of it is
+     * written, so a printf here would put a line of English in front of
+     * the file's magic number.
      */
-    printf("Don't forget to run at boot-time:"
-	   " raspi-gpio set %d,%d pu\n", dw1000_reset.id, dw1000_wakeup.id);
+    INFO("Don't forget to run at boot-time:"
+	 " raspi-gpio set %d,%d pu", dw1000_reset.id, dw1000_wakeup.id);
 
     
     /*
@@ -212,6 +345,15 @@ uwb_init(struct uwb_config *uwb_cfg)
 	    cfg->tx_antenna_delay = uwb_cfg->antenna.tx_delay;
 	if (uwb_cfg->antenna.rx_delay != UINT16_MAX) 
 	    cfg->rx_antenna_delay = uwb_cfg->antenna.rx_delay;
+
+	/* rx_error stays registered either way: without double buffering
+	 * dw1000_initialise() no longer requires it, but every receive
+	 * error still leaves the receiver off and needs re-arming, and it
+	 * is still the only place the error counts come from. rxauto stays
+	 * set either way too, and in the single buffered case it is what
+	 * re-enables the receiver after a good frame.
+	 */
+	cfg->dblbuff = uwb_cfg->dblbuff ? 1 : 0;
     }
 
     dw1000_init(drv, cfg);                             // DW creation
@@ -282,12 +424,26 @@ uwb_wait_events(void)
 
 
 
-int
-uwb_read_frame_data(uint8_t *data, size_t length, size_t offset)
+const struct capture_ops *
+uwb_capture_ops(bool metadata)
 {
-    dw1000_t *drv = &DW0;
-    dw1000_rx_read_frame_data(drv, data, length, offset);
-    return 0;
+    return metadata ? &uwb_ops_meta : &uwb_ops_plain;
+}
+
+
+
+void
+uwb_rx_set_frame_filtering(uint16_t bitmask)
+{
+    dw1000_rx_set_frame_filtering(&DW0, bitmask);
+}
+
+
+
+const struct uwb_rx_errors *
+uwb_rx_errors(void)
+{
+    return &rx_errors;
 }
 
 

@@ -20,16 +20,30 @@
 #
 # Unlike the probe there is nothing here to ask the manifest for: the
 # sniffer is an application and nothing else, so it exports no sources,
-# has no port layer, and appears nowhere in dw1000.cmake. Its five
-# translation units all sit in this directory.
+# has no port layer, and appears nowhere in dw1000.cmake. Its eight
+# translation units all sit in this directory. Four of them (capture.c,
+# wire.c, pcapng.c and dissect.c) touch neither the chip nor Linux, which
+# is what lets tests/check-sniffer.sh compile and run them on any host;
+# the other four build only for the Pi.
+#
+# A ninth set of sources can come from elsewhere: see DISSECTORS= below.
 #
 # Environment, each overridable:
 #   DW1000     this tree (decawave-drivers); default: three directories
 #              above this script, i.e. the tree this script itself lives
 #              in; set it only to point at a *different* checkout
 #   BITTERS    the bitters tree; default $HOME/Repos/bitters
+#   DISSECTORS a tree of frame dissectors to compile in; default none.
+#              It must export `make -s sources` the way this tree and
+#              bitters do, setting DISSECT_SOURCES, DISSECT_INIT (the
+#              name of its registration function) and optionally
+#              DISSECT_CFLAGS, DISSECT_LIBS and DISSECT_VERSION.
+#              sniffer/dissectors/ieee802154 is a worked example and the
+#              interface's reference; sniffer/DESIGN.md says why the
+#              dissector interface is shaped as it is.
 #   CC         compiler binary                                  (cc)
 #   CCEXTRA    flags that particular binary needs
+#   OPTFLAGS   optimisation and debug flags                  (-O2 -g)
 #
 # Exit: 0 built, 1 build failed, 2 usage error.
 set -eu
@@ -46,6 +60,17 @@ top=$(CDPATH='' cd -- "$appdir/../../.." && pwd)      || exit 1
 : "${BITTERS:=$HOME/Repos/bitters}"
 : "${CC:=cc}"
 : "${CCEXTRA:=}"
+: "${DISSECTORS:=}"
+
+# -O2, not the -O0 this used to carry. Between the SPI read-out in the
+# rx_ok callback and the sendmsg(2) that follows it there is nothing else
+# running, and how much of the radio's frame rate the host can keep up
+# with is the one number this program is judged on: shipping it
+# unoptimised spends that for nothing. -g stays, because a sniffer that
+# stops sniffing on a bench is debugged where it stands. Overridable, so
+# that `OPTFLAGS='-O0 -g' sh build.sh` still gives a build to step
+# through.
+: "${OPTFLAGS:=-O2 -g}"
 
 dryrun=0 out=build/uwb-sniffer
 while getopts no: opt; do
@@ -64,6 +89,8 @@ command -v make  >/dev/null || die "make(1) is needed to read the manifests"
     || die "no dw1000.cmake under $DW1000; wrong DW1000= ?"
 [ -d "$BITTERS" ] \
     || die "no bitters tree at $BITTERS; set BITTERS="
+[ -z "$DISSECTORS" ] || [ -d "$DISSECTORS" ] \
+    || die "no dissector tree at $DISSECTORS; wrong DISSECTORS= ?"
 
 # The driver core and its unix OSAL, from decawave-drivers' own manifest
 # interface (dw1000.cmake, read through `make sources`). Same call
@@ -84,6 +111,24 @@ eval "$bitters_vars"
 BITTERS_TAKEN="$BITTERS_SOURCES_CORE $BITTERS_SOURCES_DELAY \
                $BITTERS_SOURCES_GPIO $BITTERS_SOURCES_SPI"
 
+# A tree of dissectors, if one was named. Read through the same
+# `make -s sources` interface as the driver and bitters, for the same
+# reason: the tree that owns the files is the tree that lists them. What
+# this one must export beyond its sources is DISSECT_INIT, the name of
+# the function that calls dissect_register() once per dissector; passing
+# the NAME through to the compiler is what keeps build.sh, and main.c,
+# from knowing anything protocol-specific.
+DISSECT_SOURCES= DISSECT_CFLAGS= DISSECT_LIBS= DISSECT_INIT= DISSECT_VERSION=
+if [ -n "$DISSECTORS" ]; then
+    dissect_vars=$(make -s -C "$DISSECTORS" sources) \
+        || die "cannot read the source manifest from $DISSECTORS"
+    eval "$dissect_vars"
+    [ -n "$DISSECT_SOURCES" ] \
+        || die "$DISSECTORS exports no DISSECT_SOURCES"
+    [ -n "$DISSECT_INIT" ] \
+        || die "$DISSECTORS exports no DISSECT_INIT (the registration symbol)"
+fi
+
 mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
 
 # One argument list, built up and then handed to the compiler, so -n can
@@ -93,7 +138,7 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
 # shellcheck disable=SC2086
 {
     set -- $CCEXTRA -std=c17 -D_GNU_SOURCE
-    set -- "$@" -g -O0 -Wall -Wextra -pthread
+    set -- "$@" $OPTFLAGS -Wall -Wextra -pthread
 
     set -- "$@" -I "$appdir"
     set -- "$@" $DW1000_CFLAGS
@@ -130,7 +175,18 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
 
     set -- "$@" "$appdir/main.c"     "$appdir/cmdline.c"
     set -- "$@" "$appdir/eth.c"      "$appdir/capture.c"
-    set -- "$@" "$appdir/uwb_dw1000.c"
+    set -- "$@" "$appdir/wire.c"     "$appdir/pcapng.c"
+    set -- "$@" "$appdir/dissect.c"  "$appdir/uwb_dw1000.c"
+
+    # The compile-time dissector route. SNIFFER_DISSECT_INIT is the name
+    # of the registration function, which main.c declares extern and
+    # calls under #ifdef; with no DISSECTORS= the macro is never defined
+    # and that code is not compiled at all.
+    if [ -n "$DISSECTORS" ]; then
+	set -- "$@" $DISSECT_CFLAGS
+	set -- "$@" "-DSNIFFER_DISSECT_INIT=$DISSECT_INIT"
+	set -- "$@" $DISSECT_SOURCES
+    fi
 
     # DW1000_SOURCES_CORE without _SEND: the sniffer never transmits, and
     # dw1000.c never calls into dw1000_send.c, so the send half is left
@@ -149,7 +205,12 @@ mkdir -p -- "$(dirname -- "$out")" || die "cannot create $(dirname -- "$out")"
     set -- "$@" $DW1000_SOURCES_VALIDATE
     set -- "$@" $BITTERS_TAKEN
 
-    set -- "$@" $DW1000_LIBS $BITTERS_LIBS -lpopt -lm
+    set -- "$@" $DW1000_LIBS $BITTERS_LIBS $DISSECT_LIBS -lpopt -lm
+
+    # dissect.c calls dlopen(3) for the --dissector route. Harmless where
+    # it is part of libc already (glibc 2.34 and later, and the BSDs);
+    # needed on anything older.
+    set -- "$@" -ldl
     set -- "$@" -o "$out"
 }
 
@@ -161,6 +222,12 @@ if [ "$dryrun" -eq 1 ]; then
 fi
 
 rm -f -- "$out"
+
+if [ -n "$DISSECTORS" ]; then
+    printf '%s: dissectors from %s (%s), registered by %s()\n' \
+        "$progname" "$DISSECTORS" "${DISSECT_VERSION:-no version}" \
+        "$DISSECT_INIT" >&2
+fi
 
 printf '%s: building %s (dw1000 %s%s, bitters %s%s, %s)\n' \
     "$progname" "$out" \

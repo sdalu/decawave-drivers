@@ -119,13 +119,21 @@ eth_get_first_interface(char *ifname)
 	rc = -errno;
 	goto leave;
     }
+    /* The first, and then stop. Without the break this ran to the end of
+     * the list and returned the LAST valid interface, while this
+     * function's name, its comment in eth.h and the README all promise
+     * the first: on a host with two usable interfaces the default was
+     * silently the wrong one.
+     */
     for (struct if_nameindex *ifnameidx = ifnameidx_list        ;
 	 ifnameidx->if_index != 0 || ifnameidx->if_name != NULL ;
 	 ifnameidx++) {
 	
 	if (_is_valid_interface(fd, ifnameidx->if_name, NULL) > 0) {
-	    strncpy(ifname, ifnameidx->if_name, IFNAMSIZ);
+	    strncpy(ifname, ifnameidx->if_name, IFNAMSIZ - 1);
+	    ifname[IFNAMSIZ - 1] = '\0';
 	    rc = 0;
+	    break;
 	}
     }
 
@@ -147,11 +155,18 @@ eth_init(char *ifname, uint16_t proto, uint8_t *hwaddr)
 	return -EINVAL;
     ctx->proto = proto;
     
-    /* Copy interface name */
-    int ifname_len = strlen(ifname);
+    /* Copy interface name.
+     *
+     * Into ctx->ifname, not into &eth. The two are the same address as
+     * long as ifname stays the first member of struct eth_ctx, which is
+     * how this worked; the day a field is added above it, the same line
+     * writes the interface name over whatever is there instead. A
+     * coincidence of layout is not something to keep relying on.
+     */
+    size_t ifname_len = strlen(ifname);
     if (ifname_len >= IFNAMSIZ)
 	return -EINVAL;
-    memcpy(&eth, ifname, ifname_len + 1);
+    memcpy(ctx->ifname, ifname, ifname_len + 1);
     
     /* Open RAW socket to send on */
     if ((ctx->fd = socket(AF_PACKET, SOCK_RAW, htons(ctx->proto))) < 0) {
@@ -164,7 +179,10 @@ eth_init(char *ifname, uint16_t proto, uint8_t *hwaddr)
     strncpy(if_idx.ifr_name, ctx->ifname, IFNAMSIZ);
     if (ioctl(ctx->fd, SIOCGIFINDEX, &if_idx) < 0) {
 	WARN_ERRNO("failed to get interface index");
-	return -errno;
+	int saved = errno;
+	close(ctx->fd);
+	ctx->fd = -1;
+	return -saved;
     }
     ctx->ifindex = if_idx.ifr_ifindex;
 	
@@ -173,7 +191,10 @@ eth_init(char *ifname, uint16_t proto, uint8_t *hwaddr)
     strncpy(if_mac.ifr_name, ctx->ifname, IFNAMSIZ);
     if (ioctl(ctx->fd, SIOCGIFHWADDR, &if_mac) < 0) {
 	WARN_ERRNO("failed to get MAC address");
-	return -1;
+	int saved = errno;
+	close(ctx->fd);
+	ctx->fd = -1;
+	return -saved;
     }
     memcpy(ctx->hwaddr, if_mac.ifr_hwaddr.sa_data, IFHWADDRLEN);
     if (hwaddr) {
@@ -187,12 +208,18 @@ eth_init(char *ifname, uint16_t proto, uint8_t *hwaddr)
 
 
 int
-eth_send(const uint8_t *dstaddr, void *data, size_t datalen)
+eth_send(const uint8_t *dstaddr,
+	 const void *hdr, size_t hdrlen, const void *data, size_t datalen)
 {
     struct eth_ctx *ctx = &eth;
 
+    /* When proto is 0 the type field is the payload length instead, and
+     * the payload is now the sniffer header plus the frame rather than
+     * the frame alone: a length field that counted only part of what
+     * follows would be worse than none.
+     */
     struct ether_header eh = { 
-        .ether_type = htons(ctx->proto ? ctx->proto : datalen),
+        .ether_type = htons(ctx->proto ? ctx->proto : (hdrlen + datalen)),
     };
     memcpy(eh.ether_shost, ctx->hwaddr, ETHER_ADDR_LEN);
     memcpy(eh.ether_dhost, dstaddr,     ETHER_ADDR_LEN);
@@ -202,16 +229,31 @@ eth_send(const uint8_t *dstaddr, void *data, size_t datalen)
 	.sll_halen   = ETHER_ADDR_LEN,
     };
     memcpy(socket_address.sll_addr, dstaddr, ETHER_ADDR_LEN);
-    
-    struct iovec iovec[2] = {
-	{ .iov_base = &eh,  .iov_len = sizeof(eh) },
-	{ .iov_base = data, .iov_len = datalen    },
-    };
+
+    /* Three pieces, never copied into one buffer: the ethernet header,
+     * the sniffer header wire.c encoded, and the frame still sitting in
+     * the ring slot it was read into. A --raw run passes no sniffer
+     * header and the middle iovec is simply left out.
+     */
+    struct iovec iovec[3];
+    int n = 0;
+    iovec[n].iov_base = &eh;
+    iovec[n].iov_len  = sizeof(eh);
+    n++;
+    if (hdr != NULL && hdrlen > 0) {
+	iovec[n].iov_base = (void *)hdr;
+	iovec[n].iov_len  = hdrlen;
+	n++;
+    }
+    iovec[n].iov_base = (void *)data;
+    iovec[n].iov_len  = datalen;
+    n++;
+
     struct msghdr msg = {
         .msg_name     = &socket_address,
 	.msg_namelen  = sizeof(socket_address),
 	.msg_iov      = iovec,
-        .msg_iovlen   = 2,
+        .msg_iovlen   = n,
     };
 
     if (sendmsg(ctx->fd, &msg, 0) < 0) {
