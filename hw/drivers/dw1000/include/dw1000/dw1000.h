@@ -259,9 +259,9 @@
  *  @p DW1000_RX_IDLE_ON_DELAY_ERROR asked to stay idle rather than
  *  fall back to an immediate start */
 #define DW1000_RX_ERR_TOO_LATE      (-1)
-/** A transmission is on the air: enabling the receiver on top of it is
- *  refused, nothing is written to the chip, and the completion's
- *  handler re-arms as after any send (see dw1000_process_events()) */
+/** No longer returned: a start over a transmission on the air is
+ *  recorded and honoured at the completion (dw1000_rx_start()). Kept
+ *  for a host that tests for it. */
 #define DW1000_RX_ERR_BUSY          (-2)
 /** @} */
 
@@ -446,6 +446,19 @@ typedef struct dw1000_config {
      */
     uint8_t    rxauto:1;
     /**
+     * @brief The driver keeps the receiver on
+     *
+     * Once dw1000_rx_start() has been called, dw1000_process_events()
+     * ends every pass by enabling the receiver again if it should be on
+     * and is not: after an error, a timeout, an overrun, a single
+     * buffered good frame, and a completion whose send did not ask for
+     * a response. It stays off only while a send is on the air, and
+     * after dw1000_txrx_off(). The callbacks then re-arm nothing, and a
+     * dw1000_rx_start() issued over a send is recorded and honoured at
+     * its completion rather than refused.
+     */
+    uint8_t    rx_keep_on:1;
+    /**
      * @brief Define led blink time in 14ms unit
      */
     uint8_t    leds_blink_time;
@@ -536,6 +549,16 @@ typedef struct dw1000_config {
 	 */
 	void (*rx_ok     )(dw1000_t *dw, uint32_t status,
 			   size_t length, bool ranging);
+	/** A send that never began has been found out and cleared: the
+	 *  transmitter is free again, and the host waiting for that send's
+	 *  completion can stop. Diagnosed on dw1000_tx_send(),
+	 *  dw1000_tx_start(), dw1000_rx_start() and dw1000_process_events(),
+	 *  from the chip's state read past the frame's airtime; optional.
+	 *  It runs inside the call that found the send out, which then goes
+	 *  on with its own send: do not send from it, note the loss and
+	 *  retry after that call returns, or the retry's buffer write lands
+	 *  under a frame on the air (Errata TX-2). */
+	void (*tx_dropped)(dw1000_t *dw);
     } cb;
 } dw1000_config_t;
 
@@ -562,12 +585,14 @@ struct dw1000 {
     uint8_t  ref_temp_23;   // SAR reading at 23C         (OTP 0x009)
     uint8_t  ref_temp_ant;  // SAR at antenna calibration (OTP 0x009)
 
-    uint32_t wait4resp;     // WAIT4RESP armed, cleared on RXFCG
     uint32_t sleep_mode;    // Accumulated, never written: no sleep path
     uint8_t  tx_clk_forced; // TX clock forced on (errata 1.4 3.1, TX-1)
-    uint8_t  tx_pending;    // A transmission was started and has not been
-                            //  reported done. Errata 1.4 3.3 (TX-2): the
-                            //  next frame's buffer write would corrupt it
+    uint8_t  state;         // The transceiver as the driver knows it, one
+                            //  of enum dw1000_state below: TX and TX_W4R
+                            //  are a send in progress (Errata 1.4 3.3,
+                            //  TX-2, refuses another), RX_W4R a receiver
+                            //  the chip put up itself after a send that
+                            //  expects a response
     uint32_t tx_ton;        // Preamble+SFD airtime, ticks (APS022 5.4)
     uint32_t tx_delay;      // Whole delayed-send lead, tx_ton included,
     uint32_t tx_retry_delay; // and that of its retry; 0 until the host
@@ -584,6 +609,18 @@ struct dw1000 {
                             //  while a transmission was in flight, so
                             //  the receiver reset UM 4.1.6 asks for
                             //  was put off: dw1000_rx_start() applies it
+    uint8_t  rx_wanted;     // rx_keep_on: the host asked to listen and
+                            //  has not asked to stop (dw1000_txrx_off)
+    uint8_t  rx_deferred;   // A dw1000_rx_start() came over a send on the
+                            //  air: honoured at the completion's pass
+    uint16_t tx_length;     // Frame length of the send in progress, CRC
+                            //  included, for its airtime
+    uint32_t tx_airtime;    // Airtime of the send in progress, ticks
+    uint8_t  tx_delayed;    // The send in progress waits for DX_TIME
+    uint64_t tx_suspect;    // System time at which a send in progress was
+                            //  first seen absent from the chip (no TX
+                            //  flag, transceiver not in TX); 0 otherwise.
+                            //  Past the airtime it is a dropped send.
 
     struct {
 	uint32_t sys_cfg;   // Shadow of SYS_CFG,  UM 7.2.6
@@ -592,6 +629,48 @@ struct dw1000 {
 
     uint32_t tx_power;      // Encoded TX_POWER word (UM 7.2.31)
 };
+
+/**
+ * @internal
+ * @brief The transceiver, as far as the driver knows
+ *
+ * One state in place of the flags it used to keep, so that every
+ * operation and every event is a cell of one table (DESIGN.md, "One
+ * state, one table"). IDLE is the chip doing nothing; RX the receiver
+ * up at the host's request or the driver's; RX_W4R the receiver the
+ * chip put up itself at the end of a send that expects a response; TX
+ * a send on the air; TX_W4R one that will leave the receiver up.
+ */
+enum dw1000_state {
+    DW1000_STATE_IDLE = 0,
+    DW1000_STATE_RX,
+    DW1000_STATE_RX_W4R,
+    DW1000_STATE_TX,
+    DW1000_STATE_TX_W4R,
+};
+
+/** @internal A send is in progress: another is refused (Errata TX-2) */
+static inline bool _dw1000_tx_pending(const dw1000_t *dw) {
+    return (dw->state == DW1000_STATE_TX) || (dw->state == DW1000_STATE_TX_W4R);
+}
+/** @internal The receiver is up, by the host or by WAIT4RESP */
+static inline bool _dw1000_rx_up(const dw1000_t *dw) {
+    return (dw->state == DW1000_STATE_RX) || (dw->state == DW1000_STATE_RX_W4R);
+}
+/** @internal A response is expected: by a send on the air, or by the
+ *  receiver it left up */
+static inline bool _dw1000_w4r(const dw1000_t *dw) {
+    return (dw->state == DW1000_STATE_TX_W4R) || (dw->state == DW1000_STATE_RX_W4R);
+}
+/** @internal The send is over: IDLE, or the receiver WAIT4RESP put up.
+ *  A state the good-frame branch of the same pass has already moved on
+ *  (RX or RX_W4R, the receiver being up by then) is left where it is. */
+static inline void _dw1000_tx_done_state(dw1000_t *dw) {
+    if (dw->state == DW1000_STATE_TX)
+	dw->state = DW1000_STATE_IDLE;
+    else if (dw->state == DW1000_STATE_TX_W4R)
+	dw->state = DW1000_STATE_RX_W4R;
+}
 
 
 
@@ -1259,6 +1338,41 @@ void dw1000_txrx_set_time(dw1000_t *dw, uint64_t time);
  */
 void _dw1000_txrx_off(dw1000_t *dw, uint32_t clear);
 
+/**
+ * @internal
+ * @brief Whether the send in progress never began, clearing it if so
+ *
+ * @details A TXSTRT is dropped by the chip when written into a receiver
+ *          locking onto a preamble (measured), and a delayed send can
+ *          be dropped by Errata TX-1. Either leaves tx_pending set with
+ *          no transmit flag ever raised. This looks at the chip: a TX
+ *          flag, or PMSC in TX or TX_WAIT, means the send is real. Seen
+ *          absent, the send is only suspected, the time noted; seen
+ *          absent again past its airtime and a margin, it is dropped:
+ *          tx_pending is cleared, the tx_dropped callback runs, and
+ *          true is returned. No SPI on a send that is where it should be
+ *          beyond the status word the caller already has.
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  status   SYS_STATUS, as just read
+ * @return true when a dropped send was cleared
+ */
+bool _dw1000_tx_dropped(dw1000_t *dw, uint32_t status);
+
+/**
+ * @internal
+ * @brief Book a completion the chip shows, without reporting it
+ *
+ * @details What the TXFRS branch of dw1000_process_events() records
+ *          about a finished send, minus the callback: the transmitter
+ *          is free, the forced TX clock released, and a WAIT4RESP send
+ *          has left the receiver up. For a send that is over and
+ *          unreported when the host sends again, which consumes it.
+ *
+ * @param[in]  dw       driver context
+ */
+void _dw1000_tx_release(dw1000_t *dw);
+
 
 /**
  * @brief Turn off transceiver, dropping the pending events
@@ -1271,13 +1385,39 @@ void _dw1000_txrx_off(dw1000_t *dw, uint32_t clear);
  *
  * @param dw        driver context
  */
+/** dw1000_txrx_stop(): leave the pending event status in place */
+#define DW1000_TXRX_KEEP_EVENTS         (1 << 0)
+
+/**
+ * @brief Stop the transceiver
+ *
+ * The transceiver returns to IDLE, a send or a reception in progress
+ * abandoned. Every event the transmitter or the receiver had raised goes
+ * with it, reported or not, unless @p DW1000_TXRX_KEEP_EVENTS is among
+ * @p flags. dw1000_txrx_off() and dw1000_txrx_idle() are the two
+ * settings of that flag by name.
+ *
+ * @param dw        driver context
+ * @param flags     0, or @p DW1000_TXRX_KEEP_EVENTS
+ */
+static inline void
+dw1000_txrx_stop(dw1000_t *dw, int flags)
+{
+    if (! (flags & DW1000_TXRX_KEEP_EVENTS)) {
+	dw->rx_wanted   = 0;            // rx_keep_on: the host stops listening
+	dw->rx_deferred = 0;
+    }
+    _dw1000_txrx_off(dw, (flags & DW1000_TXRX_KEEP_EVENTS) ? 0 :
+			 (DW1000_MSK_SYS_STATUS_ALL_TX     |
+			  DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+			  DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+			  DW1000_MSK_SYS_STATUS_ALL_RX_GOOD));
+}
+
 static inline void
 dw1000_txrx_off(dw1000_t *dw)
 {
-    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_TX     |
-			 DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
-			 DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
-			 DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+    dw1000_txrx_stop(dw, 0);
 }
 
 
@@ -1293,7 +1433,7 @@ dw1000_txrx_off(dw1000_t *dw)
 static inline void
 dw1000_txrx_idle(dw1000_t *dw)
 {
-    _dw1000_txrx_off(dw, 0);
+    dw1000_txrx_stop(dw, DW1000_TXRX_KEEP_EVENTS);
 }
 
 
@@ -1462,7 +1602,9 @@ void dw1000_tx_write_frame_data(dw1000_t *dw,
  * @retval  0        Transmission started
  * @retval <0        Refused; one of @ref TxError.
  *                   @p DW1000_TX_ERR_BUSY when a previous transmission
- *                   has not been reported done, and, with
+ *                   is still on the air (one that is over is consumed
+ *                   here, one that never began is cleared first, its
+ *                   tx_dropped callback run), and, with
  *                   @p DW1000_TX_DELAYED_START,
  *                   @p DW1000_TX_ERR_TOO_LATE when the chip found the
  *                   programmed time already past.
@@ -1485,7 +1627,7 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode);
  */
 static inline bool
 dw1000_tx_is_expecting_response(dw1000_t *dw) {
-    return dw->wait4resp;
+    return _dw1000_w4r(dw);
 }
 
 
@@ -1519,7 +1661,7 @@ dw1000_tx_clear_status_done(dw1000_t *dw)
     // the next frame, for a host that polls instead of calling
     // dw1000_process_events(). Without this a polling host would see
     // every send after its first refused.
-    dw->tx_pending = 0;
+    _dw1000_tx_done_state(dw);
 
     // Trigger clearing of TX frame sent event by setting it 1
     // UM §7.2.17: System Event Status Register
@@ -1650,10 +1792,11 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask);
  * @retval  0        Reception started
  * @retval  1        Reception started, but delayed start was not
  *                   respected.
- * @retval <0        Refused, one of @ref RxError: @p DW1000_RX_ERR_BUSY
- *                   with a transmission on the air (nothing written to
- *                   the chip; a pass whose status word already carries
- *                   the completion is not refused), or
+ * @retval  0        Reception started; or, with a transmission on the
+ *                   air, recorded: the receiver comes up at the
+ *                   completion's dw1000_process_events(), nothing
+ *                   written now, whatever the policy.
+ * @retval <0        Refused, one of @ref RxError:
  *                   @p DW1000_RX_ERR_TOO_LATE when
  *                   @p DW1000_RX_DELAYED_START and
  *                   @p DW1000_RX_IDLE_ON_DELAY_ERROR are both set and

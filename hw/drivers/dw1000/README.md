@@ -139,25 +139,24 @@ not the driver's business.
 
 ## Transmitting
 
-### The chip must be IDLE before a send, and which call gets you there matters
+### A send reaches IDLE itself
 
-| Situation                    | Call                 |
-| :--------------------------- | :------------------- |
-| Shutting the radio down      | `dw1000_txrx_off()`  |
-| Events pending that you want | `dw1000_txrx_idle()` |
-| From inside `rx_ok`, dblbuff | `dw1000_txrx_idle()` |
+`dw1000_tx_send()` and its variants take the transceiver to IDLE before
+writing anything, keeping the receiver's pending events, as
+`dw1000_txrx_idle()` does, and only when the receiver may be up: after
+an enable, after WAIT4RESP, or with `rxauto` set. A host that idled
+already pays nothing more, and a host need not idle at all: a responder
+answering from inside `rx_ok` in double buffered receive, the case that
+used to bite, just sends, the driver holding the frame's buffer against
+the read-out. `dw1000_txrx_off()` remains the call for shutting the
+radio down, since it clears every pending event with it, and
+`dw1000_txrx_idle()` for abandoning a send by hand; both are
+`dw1000_txrx_stop()` with and without `DW1000_TXRX_KEEP_EVENTS`.
 
-`dw1000_txrx_off()` clears every pending TX and RX event along with
-stopping the transceiver; `dw1000_txrx_idle()` stops the transceiver and
-leaves the status untouched.
-
-The third row is the one that has bitten. In double buffered mode the
-driver re-enables the receiver before calling `rx_ok`, so a responder
-answering from its callback is not in IDLE and has to stop the
-transceiver first. `dw1000_txrx_off()` there throws away the status of
-the frame being read out. The frame itself survives, the driver holding
-its buffer against exactly this, but there is no reason to ask for the
-loss.
+`dw1000_tx_start()`, the raw start under those functions, keeps the
+IDLE precondition as documented: a host writing `TX_FCTRL` and the
+buffer itself reaches IDLE itself, as the probe does with
+`dw1000_txrx_off()`.
 
 What `dw1000_txrx_idle()` keeps, the next `dw1000_process_events()`
 handles, and that pass may well run while the frame is still on the
@@ -166,54 +165,72 @@ answered with TRXOFF while a transmission is pending: TRXOFF would abort
 the send, the chip would raise no TXFRS for a frame it never finished,
 and a host waiting for the completion would wait for nothing. The
 receiver's status is dropped instead, the callback is still called, and
-the receiver reset UM 4.1.6 asks for is applied by the next
-`dw1000_rx_start()`, or by the completion itself when WAIT4RESP would
-otherwise bring the receiver up unreset. A good frame found there is read out as usual, but
-in double buffered receive the receiver is not re-enabled on top of the
-transmission; the completion's handler re-arms it, as after any send.
+the receiver reset UM 4.1.6 asks for is applied where the receiver is
+next brought up. A good frame found there is read out as usual, but in
+double buffered receive the receiver is not re-enabled on top of the
+transmission; the completion's pass brings it back. A good frame found
+beside the send's own completion, in one status word, is read out with
+the receiver off and the receiver enabled at the end of that pass, once
+the completion is booked. Measured: an enable fifty microseconds or more
+after the end of a frame is honoured every time; the pass can write one
+within a few microseconds of it, and with the enable there rpi-d lost
+about one frame in fifty over two soaks, none with it at the end of the
+pass. The manual says nothing of that instant, and whether it is the
+cause is not established; the placement rests on the soaks.
 
-The host's side of that is nothing. `dw1000_rx_start()` refuses with
-`DW1000_RX_ERR_BUSY`, writing nothing to the chip, while a send is on
-the air, so a callback that re-arms the receiver on `rx_error` or
-`rx_timeout` may keep doing so unconditionally, and the completion's
-handler re-arms as after any send. A callback running in a pass whose
-status word already carries the completion is not refused, the chip's
-TXFRS saying the send is over: a `tx_done` that leaves the re-arm to
-`rx_ok` on seeing RXFCG beside its completion keeps working.
+The host's side of that is nothing. `dw1000_rx_start()` over a send on
+the air is recorded and honoured at the completion, writing nothing to
+the chip now, so a callback that re-arms the receiver may keep doing so
+unconditionally. A callback running in a pass whose status word already
+carries the completion is not refused, the chip's TXFRS saying the send
+is over.
 
-### One frame at a time, and you must consume the completion
+### One frame at a time
 
-A send issued while a previous one has not been reported done is refused
-with `DW1000_TX_ERR_BUSY`, and nothing is written to the chip. Errata
-1.4 §3.3 (TX-2) is the reason: writing the transmit buffer while a
+A send issued while a frame is on the air is refused with
+`DW1000_TX_ERR_BUSY`, and nothing is written to the chip. Errata 1.4
+§3.3 (TX-2) is the reason: writing the transmit buffer while a
 transmission is in progress corrupts what is on the air, and that write
 happens before any later check could stop it.
 
-So every completion has to be consumed, by one of:
+That is the only refusal. A previous send whose completion the chip
+still shows is over: the new send consumes it, unreported, the host
+having chosen to send again rather than process it. Every host here
+waits for or polls its completion before sending again, so none loses
+one; a host that wants the completion reported processes events, or
+polls `dw1000_tx_is_status_done()`, before its next send. A previous
+send with no flag at all may never have begun, and is asked of the chip
+(next section). The pending flag is the driver's own, so a free
+transmitter costs no SPI; a pending one costs one status read, and the
+one SYS_STATE read only when it is neither over nor visibly on the air.
 
-| Call                            | When                        |
-| :------------------------------ | :-------------------------- |
-| `dw1000_process_events()`       | the ordinary path           |
-| `dw1000_tx_clear_status_done()` | a host that polls           |
-| `dw1000_txrx_idle()` / `_off()` | abandoning the transmission |
+### A send that never began is found out
 
-A host that does none of these will see every send after its first
-refused. That is not a new restriction so much as a newly visible one:
-such a host never learned whether its frames left, and at a send
-interval below the frame's airtime almost none of them did, with every
-call returning success. The check costs no SPI: it is a flag the driver
-already maintains. AUDIT.md carries the measurement.
+A `TXSTRT` written into an enabled receiver is dropped by the chip
+(measured: 200 raw starts into a listening receiver, 200 dropped), and
+Errata 1.4 3.1 (TX-1) drops a delayed one: no
+transmit flag is ever raised, and the flag above stays set. The driver
+notices on its own. On a `dw1000_tx_send()` or a `dw1000_tx_start()`
+that would otherwise be refused, on a `dw1000_rx_start()`, and at the
+start of every `dw1000_process_events()`, a send that is pending with no transmit flag
+and the transceiver neither in TX nor waiting to transmit (`SYS_STATE`,
+one read) is suspected, its time noted; seen so again past its airtime
+and a millisecond, it is dropped: `tx_pending` is cleared, the
+`tx_dropped` callback runs, and the call goes on as if the transmitter
+had been free. Nothing is read for a send that is where it should be.
+So a host still bounds its wait for a completion, as every host here
+does, but the transmitter frees itself the moment the host next asks
+anything of it, and `DW1000_TX_ERR_BUSY` is never a stale flag's doing.
 
-A send that never completes, Errata 1.4 3.1 (TX-1) being the documented
-way, keeps that flag set: until the host abandons it with
-`dw1000_txrx_idle()` or `dw1000_txrx_off()`, receive events are handled
-as over a send on the air and `dw1000_rx_start()` is refused. So a host
-bounds its wait for a completion, as every host here does.
-
-The start of a send clears what the transmitter raised for an earlier
-one, so a completion the chip shows while a send is pending is that
-send's; a host abandoning a send with `dw1000_txrx_idle()` need not
-clear it before the next.
+What the transmitter raised for an earlier send is gone once the next
+is enabled: UM 7.2.17 has TXFRB, TXPRS, TXPHS and TXFRS "automatically
+cleared at the next transmitter enable", so a completion the chip shows
+while a send is pending is that send's, and a host abandoning a send
+with `dw1000_txrx_idle()` need not clear anything before the next. For
+a delayed send, enabled at DX_TIME rather than at the command, the
+driver clears the four itself before the start: measured, a standing
+`TXFRS` stays set through the whole wait and is cleared only when the
+send goes out.
 
 ### A delayed-send delay is the whole lead, airtime included
 
@@ -345,6 +362,27 @@ because the both-ends-single-buffered case does not resolve at all. The
 estimators disagree in sign, so the number to expect is small and the
 direction is unsettled. See AUDIT.md.
 
+### `rx_keep_on`: the driver keeps the receiver on
+
+With `cfg->rx_keep_on` set, `dw1000_process_events()` ends every pass by
+enabling the receiver again if the host wants it on and nothing has it
+up: after an error, a timeout, an overrun, a single buffered good frame,
+and a completion whose send did not ask for a response. The host wants it
+on from its first `dw1000_rx_start()` until `dw1000_txrx_off()`;
+`dw1000_txrx_idle()` before a send does not count as stopping. The
+receiver stays off only while a send is on the air, and the pass that
+handles that send's completion brings it back. The callbacks then re-arm
+nothing, and the receiver reset UM 4.1.6 asks for is applied where the
+receiver is brought back. This is the one place the policy writes
+`RXENAB`, after every callback of the pass has run, so the order of the
+branches above it does not matter to it.
+
+A `dw1000_rx_start()` issued over a send on the air is recorded and
+honoured at the completion, and returns 0, under either policy;
+`DW1000_RX_ERR_BUSY` is never returned any more. ruby-dw1000's engine
+runs under the policy and has no re-arm of its own left; the probe and
+the SPANK firmwares still drive the receiver themselves.
+
 ### `rxauto` is a separate bit, and a host that sends keeps it off
 
 `cfg->dblbuff` and `cfg->rxauto` are independent. `rxauto` becomes
@@ -358,9 +396,8 @@ that matters: between the transceiver-off a host issues before a send
 and the send's `TXSTRT`. When that off cuts a reception, the chip
 raises the error and, with `RXAUTR` set, has the receiver back on
 within the hundred-odd microseconds the frame write takes; a `TXSTRT`
-written while the receiver is locking onto a preamble is dropped, no
-transmit flag ever raised, and the host waits for a completion that
-never comes. Measured on ruby-dw1000's two-node bench, two nodes
+written while the receiver is enabled is dropped, no transmit flag ever
+raised, and the host waits for a completion that never comes. Measured on ruby-dw1000's two-node bench, two nodes
 sending at each other every 30 ms with `dblbuff` set: one send in
 about six thousand lost with `rxauto` set, `SYS_STATE` reading RX with
 a preamble found right after the start, and none in 81216 frames with
@@ -450,9 +487,10 @@ Absences worth knowing before you design around them:
 - **No carrier-integrator clock offset** (`DRX_CAR_INT`, which is not
   even mapped), no frame-duration helpers, and no event counters
   (register 0x2F). Decawave's driver has all three.
-- **`SYS_STATE` (0x19) is mapped and never read.** The IDLE
-  preconditions this file states in prose could be checked against it
-  rather than asserted.
+- **`SYS_STATE` (0x19) is read in one place**, the dropped-send
+  diagnosis, and only when a send is pending with no transmit flag. The
+  IDLE preconditions this file states in prose could be checked against
+  it rather than asserted, at a read per send.
 
 ## Where the reasons live
 

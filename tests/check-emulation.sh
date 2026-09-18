@@ -43,7 +43,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 # Not a glob over tests/emulation: tests/check-manifest.sh exists to
 # punish a build step that discovers its own inputs, and a test added
 # here should be added here deliberately.
-tests="smoke timing dblbuff dblbuff_longframe"
+tests="smoke timing timing_dblbuff dblbuff dblbuff_longframe"
 
 status=0
 for t in $tests; do
@@ -53,6 +53,8 @@ for t in $tests; do
     case $t in
     dblbuff_longframe) file=dblbuff
 		       extra=-DDW1000_WITH_PROPRIETARY_LONG_FRAME=1 ;;
+    timing_dblbuff)    file=timing
+		       extra=-DTIMING_DBLBUFF=1 ;;
     *)		       file=$t
 		       extra= ;;
     esac

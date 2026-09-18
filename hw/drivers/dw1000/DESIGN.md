@@ -191,12 +191,17 @@ transmit buffer while a transmission is in progress corrupts what is on
 the air, and that write happens before any later check could stop it.
 The flag costs no SPI: the driver already maintains it.
 
-The consequence for a host is the completion obligation the guide
-states. The consequence for the driver is that IDLE is a documented
-precondition rather than something it enforces by writing `TRXOFF`
-before every `TXSTRT`, which is what the vendor does. Enforcing it would
-mean a `SYS_STATE` read on every send, or throwing away status the host
-may still want.
+The flag is a shadow, and a stale one used to refuse: a completion left
+standing, or a send the chip dropped. `_dw1000_tx_idle()` now asks the
+chip before refusing, once: a completion standing there is consumed by
+the new send, a send with no flag goes through `_dw1000_tx_dropped()`,
+and only a frame on the air refuses. The consequence for the driver is
+that IDLE is enforced rather than documented, the way the vendor does
+it, but with the receiver's events kept and only when the receiver may
+be up (`rx_armed`, or `rxauto` set, which re-enables it unseen): a
+`TRXOFF` a host already issued is not issued again, and no `SYS_STATE`
+is read for a send that is where it should be. `dw1000_tx_start()`, the
+raw primitive, keeps the precondition.
 
 The failure codes are distinguished because the right response differs,
 and the driver uses its own distinction: the extended send retries only
@@ -216,6 +221,56 @@ Errata RX-1 is handled by refusing a transmit that would write past TX
 index 127 while a received frame is held. It is unreachable without
 proprietary long frames, and `dw1000_tx_write_frame_data()` does not
 enforce it, because it returns void and cannot know a send will follow.
+
+## One state, one table
+
+The transceiver is one field, `dw->state`, in place of the three flags
+the driver kept until 1.4 (`tx_pending`, `wait4resp`, `rx_armed`), and
+every public operation and every event branch is a cell of the table
+below. `rx_held` (a frame being read out of the double buffer),
+`rx_reset_due` (a receiver reset owed, UM 4.1.6), `rx_wanted` (the
+host's last word under `rx_keep_on`) and `rx_deferred` (a start that
+came over a send) ride alongside; none of them says what the
+transceiver is doing.
+
+| Event or call            | IDLE                | RX / RX_W4R                    | TX / TX_W4R                            |
+| :----------------------- | :------------------ | :----------------------------- | :------------------------------------- |
+| `dw1000_tx_send()`       | start, TX or TX_W4R | TRXOFF keeping events, start   | busy; over or dropped: consume, start  |
+| `dw1000_rx_start()`      | RXENAB, RX          | RXENAB again, RX               | recorded (`rx_deferred`), stay         |
+| good frame               | (cannot happen)     | report; RX (dblbuff RXENAB) or IDLE | report, stay; no RXENAB; beside TXFRS: enable at the end of the pass |
+| error, timeout, overrun  | (cannot happen)     | TRXOFF, reset, report; IDLE    | drop status, owe reset, report; stay   |
+| TXFRS                    | stale, cleared      | (cannot happen)                | report; IDLE, or RX_W4R from TX_W4R    |
+| `dw1000_txrx_stop()`     | IDLE                | IDLE                           | abort; IDLE                            |
+| end of the pass          | `rx_deferred` or (`rx_keep_on` and `rx_wanted`): RXENAB, RX | nothing | nothing                    |
+
+RX_W4R is the receiver the chip put up itself at the end of a send
+that expected a response; it is what `dw1000_tx_is_expecting_response()`
+answers from inside `tx_done`, and it turns into RX on the first good
+frame. A start recorded over a send is honoured at the end of the
+completion's pass, whatever the policy, and a host that tests for
+`DW1000_RX_ERR_BUSY` never sees it any more. `tests/emulation/timing.c`
+runs every one of its steps in both receive modes, `TIMING_DBLBUFF`
+selecting the build.
+
+## The receiver policy, and the send the chip never began
+
+Two things the driver keeps for a host that asks. `cfg->rx_keep_on` makes
+`dw1000_process_events()` reconcile the receiver once, at the end of the
+pass, from `rx_wanted`, the host's last word (a `dw1000_rx_start()` sets
+it, `dw1000_txrx_off()` clears it), and the state: IDLE means nothing has
+the receiver up. One write at one place, after every callback, is what
+makes the branch order above irrelevant to the receiver, and the same
+place honours a `dw1000_rx_start()` that came over a send.
+
+`_dw1000_tx_dropped()` is the one read of `SYS_STATE` in the driver, and
+it happens only where a stale `tx_pending` would otherwise refuse
+something: a send with no transmit flag and the transceiver neither in
+TX nor TX_WAIT is suspected, the chip's time noted, and called dropped on
+a later sighting past its airtime and a millisecond. The two sightings
+are what keep the moment after `TXSTRT`, when the chip still reads IDLE,
+from being mistaken for a drop, without a clock read on every send. The
+airtime is computed at the start from the frame length and the bitrate,
+as a bound rather than a timestamp.
 
 ## The formulas, and where their constants come from
 
@@ -297,7 +352,9 @@ implementation one.
 are undefined. They are cheap to add and would give a host a drop count
 the driver currently cannot provide.
 
-`SYS_STATE` (0x19) is a fourth, smaller case: mapped, never read. The
-IDLE preconditions the guide states in prose could be checked against it
-instead of asserted, which would turn a documented contract into an
-enforced one at the cost of an SPI read per send.
+`SYS_STATE` (0x19) is a fourth, smaller case: mapped, and read in one
+place only, the dropped-send diagnosis, when a send is pending with no
+transmit flag to show for it. The manual (2.12) leaves that register
+file reserved and documents none of its fields; what the driver reads
+into it is the bench's measurement: 1 idle, 2 while a delayed send
+waits, 4 while a frame goes out, 5 with the receiver enabled.

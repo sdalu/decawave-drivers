@@ -188,8 +188,10 @@ dw1000_tx_set_default_delay(dw1000_t *dw, uint32_t initial, uint32_t retry)
 /**
  * @brief Send a frame
  *
- * @pre    The DW1000 is in IDLE state.
- *         The dw1000_txrx_off() function need to be called if necessary.
+ * @note   The send reaches IDLE itself, keeping the receiver's pending
+ *         events; a transceiver already idle costs it nothing more. A
+ *         completion of the previous send still standing is consumed by
+ *         this one, unreported; only a frame on the air is refused.
  *         The transmitter half of that is enforced, not assumed: a send
  *         issued while a previous one has not been reported done is
  *         refused, nothing being written to the chip. Errata 1.4 §3.3
@@ -245,8 +247,10 @@ int dw1000_tx_send(dw1000_t *dw,
 /**
  * @brief Send a frame
  *
- * @pre    The DW1000 is in IDLE state.
- *         The dw1000_txrx_off() function need to be called if necessary.
+ * @note   The send reaches IDLE itself, keeping the receiver's pending
+ *         events; a transceiver already idle costs it nothing more. A
+ *         completion of the previous send still standing is consumed by
+ *         this one, unreported; only a frame on the air is refused.
  *         The transmitter half of that is enforced, not assumed: a send
  *         issued while a previous one has not been reported done is
  *         refused, nothing being written to the chip. Errata 1.4 §3.3
@@ -305,8 +309,10 @@ int dw1000_tx_sendv(dw1000_t *dw,
 /**
  * @brief  Start sending a frame
  *
- * @pre    The DW1000 is in IDLE state.
- *         The dw1000_txrx_off() function need to be called if necessary.
+ * @note   The send reaches IDLE itself, keeping the receiver's pending
+ *         events; a transceiver already idle costs it nothing more. A
+ *         completion of the previous send still standing is consumed by
+ *         this one, unreported; only a frame on the air is refused.
  *         The transmitter half of that is enforced, not assumed: a send
  *         issued while a previous one has not been reported done is
  *         refused, nothing being written to the chip. Errata 1.4 §3.3

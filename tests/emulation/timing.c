@@ -393,6 +393,7 @@ static struct {
     bool     rx_timeout;
     uint32_t rx_timeout_status;
     int      rx_start_rc;               /* from a callback, when rearm */
+    bool     tx_dropped;
 } evt = {
     .lock = PTHREAD_MUTEX_INITIALIZER,
     .wake = PTHREAD_COND_INITIALIZER,
@@ -424,6 +425,9 @@ static void cb_rx_error(dw1000_t *dw, uint32_t status)
 static void cb_rx_timeout(dw1000_t *dw, uint32_t status)
 { (void)dw; evt.rx_timeout = true; evt.rx_timeout_status = status; }
 
+static void cb_tx_dropped(dw1000_t *dw)
+{ (void)dw; evt.tx_dropped = true; }
+
 /* Called by the model, on the rsvc reader thread or on the model's own
  * deadline thread. Signals, and nothing else.
  */
@@ -453,6 +457,7 @@ evt_reset(void)
     evt.rx_timeout = false;
     evt.rx_timeout_status = 0;
     evt.rx_start_rc = 0;
+    evt.tx_dropped = false;
 }
 
 /* Wait for the interrupt line, and leave whatever raised it unprocessed. */
@@ -498,6 +503,13 @@ wait_irq(dw1000_t *dw, unsigned timeout_ms)
 /* Steps                                                                */
 /*----------------------------------------------------------------------*/
 
+/* The receive mode this build runs the suite in: tests/check-emulation.sh
+ * builds it twice, single and double buffered, since the driver's paths
+ * differ by mode and every step has to hold in both. */
+#ifndef TIMING_DBLBUFF
+#define TIMING_DBLBUFF  0
+#endif
+
 #define PAYLOAD_LEN     20
 #define FRAME_LEN       (PAYLOAD_LEN + DW1000_CRC_LENGTH)
 #define IRQ_TIMEOUT_MS  2000
@@ -513,6 +525,13 @@ wait_irq(dw1000_t *dw, unsigned timeout_ms)
 static int     failures;
 static char    reason[256];
 static rsvc_t *g_rsvc;          /* the connection step_unanswered_call tunes */
+
+/* The rx_keep_on/manual policy is flipped per step through this: main()
+ * points it at its config before dw1000_initialise(), and a keep-on step
+ * sets rx_keep_on at its start and clears it before every return.
+ */
+static dw1000_config_t *cfgp;
+static struct dw1000_emulation *emup;      /* the model, for its knobs */
 
 #define REASON(...) (snprintf(reason, sizeof(reason), __VA_ARGS__), reason)
 
@@ -769,7 +788,8 @@ static const char *
 step_tx_while_busy(dw1000_t *dw, struct stub *s)
 {
     pthread_mutex_lock(&s->lock);
-    s->deliver = false;
+    s->deliver          = false;
+    s->tx_done_delay_ms = 100;         /* the stub completes at once: hold it, so the second send finds the first on the air */
     pthread_mutex_unlock(&s->lock);
 
     evt_reset();
@@ -812,6 +832,9 @@ step_tx_while_busy(dw1000_t *dw, struct stub *s)
     if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
 	return "no completion for the send after the idle";
 
+    pthread_mutex_lock(&s->lock);
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
     return NULL;
 }
 
@@ -885,10 +908,10 @@ step_tx_over_stale_rx_error(dw1000_t *dw, struct stub *s)
     rearm = false;
     if (!evt.rx_error)
 	return "the stale receive error was not reported";
-    if (evt.rx_start_rc != DW1000_RX_ERR_BUSY)
+    if (evt.rx_start_rc != 0)
 	return REASON("dw1000_rx_start() from rx_error over the send answered"
-		      " %d, not DW1000_RX_ERR_BUSY (%d)", evt.rx_start_rc,
-		      DW1000_RX_ERR_BUSY);
+		      " %d, not 0: a start over a send is recorded, not"
+		      " refused", evt.rx_start_rc);
     if (evt.tx_done)
 	return "the completion was reported before the frame was out";
 
@@ -1101,6 +1124,1127 @@ step_wait4resp_survives_stale_frame(dw1000_t *dw, struct stub *s)
     pthread_mutex_unlock(&s->lock);
     dw1000_txrx_off(dw);
     return NULL;
+}
+
+/* PMSC_STATE, SYS_STATE bits 16..20 (UM 7.2.35): 1 IDLE, 2 TX_WAIT,
+ * 3 RX_WAIT, 4 TX, 5 RX.
+ */
+static unsigned
+sys_state_pmsc(dw1000_t *dw)
+{
+    uint32_t v = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATE, DW1000_OFF_NONE);
+    return (v >> 16) & 0x1F;
+}
+
+/* rx_keep_on: the pass that reports a frame wait timeout re-enables the
+ * receiver by itself, with no rx_start from the test or the callbacks.
+ * On the previous driver (no rx_keep_on) PMSC is left at 1 (IDLE).
+ */
+static const char *
+step_rx_keep_on_after_timeout(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    unsigned    pmsc;
+
+    cfgp->rx_keep_on = 1;
+    rearm = false;
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    dw1000_rx_set_timeout_preamble(dw, 0);      /* RXPTO out of the way */
+    dw1000_rx_set_timeout(dw, 19500);           /* ~20 ms, 1.026 us units */
+
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS)) {
+	why = "no interrupt for the frame wait timeout";
+	goto done;
+    }
+    if (!evt.rx_timeout) {
+	why = "the rx_timeout callback was not called";
+	goto done;
+    }
+
+    pmsc = sys_state_pmsc(dw);
+    if (pmsc != 5)
+	why = REASON("PMSC reads %u after the timeout, not 5 (RX): the pass"
+		      " did not re-enable the receiver under rx_keep_on",
+		      pmsc);
+
+done:
+    dw1000_rx_set_timeout(dw, 0);
+    cfgp->rx_keep_on = 0;
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* rx_keep_on: the pass that reports a receive error re-enables the
+ * receiver by itself. On the previous driver PMSC is left at 1 (IDLE).
+ */
+static const char *
+step_rx_keep_on_after_error(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    uint32_t    status;
+    unsigned    pmsc;
+
+    cfgp->rx_keep_on = 1;
+    rearm = false;
+
+    /* Leave a bad frame in the stub. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE | DW1000_TX_NO_AUTO_CRC) != 0) {
+	why = "the uncrc'd frame was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "the uncrc'd frame did not complete";
+	goto done;
+    }
+
+    /* Get it back, and leave the error it raises unprocessed. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = true;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+    if (!wait_line(IRQ_TIMEOUT_MS)) {
+	why = "no interrupt for the bad frame";
+	goto done;
+    }
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (!(status & DW1000_FLG_SYS_STATUS_RXFCE)) {
+	why = REASON("RXFCE not in the status (0x%08" PRIx32 ") after the"
+		      " bad frame", status);
+	goto done;
+    }
+
+    /* So the re-enable's RX_CONFIG delivers nothing. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_process_events(dw);
+    if (!evt.rx_error) {
+	why = "the rx_error callback was not called";
+	goto done;
+    }
+
+    pmsc = sys_state_pmsc(dw);
+    if (pmsc != 5)
+	why = REASON("PMSC reads %u after the error, not 5 (RX): the pass"
+		      " did not re-enable the receiver under rx_keep_on",
+		      pmsc);
+
+done:
+    cfgp->rx_keep_on = 0;
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* rx_keep_on: the pass that reports a single buffered good frame
+ * re-enables the receiver by itself. On the previous driver PMSC is
+ * left at 1 (IDLE).
+ */
+static const char *
+step_rx_keep_on_after_good_frame(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    uint32_t    status;
+    unsigned    pmsc;
+
+    cfgp->rx_keep_on = 1;
+    rearm = false;
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the frame was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "the frame did not complete";
+	goto done;
+    }
+
+    /* Get it back, and leave it unprocessed. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = true;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+    if (!wait_line(IRQ_TIMEOUT_MS)) {
+	why = "no interrupt for the good frame";
+	goto done;
+    }
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (!(status & DW1000_FLG_SYS_STATUS_RXFCG)) {
+	why = REASON("RXFCG not in the status (0x%08" PRIx32 ") after the"
+		      " good frame", status);
+	goto done;
+    }
+
+    /* So the re-enable's RX_CONFIG delivers nothing. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_process_events(dw);
+    if (!evt.rx_ok) {
+	why = "the rx_ok callback was not called";
+	goto done;
+    }
+
+    pmsc = sys_state_pmsc(dw);
+    if (pmsc != 5)
+	why = REASON("PMSC reads %u after the single buffered frame, not 5"
+		      " (RX): the pass did not re-enable the receiver under"
+		      " rx_keep_on", pmsc);
+
+done:
+    cfgp->rx_keep_on = 0;
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* rx_keep_on: a completion whose send did not ask for a response brings
+ * the receiver back by itself, and so does one that did, WAIT4RESP
+ * having already brought it up on the chip. The first half fails on the
+ * previous driver.
+ */
+static const char *
+step_rx_keep_on_after_completion(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    unsigned    pmsc;
+
+    cfgp->rx_keep_on = 1;
+    rearm = false;
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    /* Nothing asked after the send. */
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+    dw1000_txrx_idle(dw);
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the send was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "no completion for the send";
+	goto done;
+    }
+    pmsc = sys_state_pmsc(dw);
+    if (pmsc != 5) {
+	why = REASON("PMSC reads %u after the completion, not 5 (RX): the"
+		      " pass did not re-enable the receiver under"
+		      " rx_keep_on", pmsc);
+	goto done;
+    }
+
+    /* A response asked for: WAIT4RESP already brings the receiver up on
+     * the chip, and the policy must still find it there.
+     */
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception (wait4resp)";
+	goto done;
+    }
+    dw1000_txrx_idle(dw);
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE | DW1000_TX_RESPONSE_EXPECTED) != 0) {
+	why = "the send expecting a response was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "no completion for the send expecting a response";
+	goto done;
+    }
+    pmsc = sys_state_pmsc(dw);
+    if (pmsc != 5)
+	why = REASON("PMSC reads %u after the wait4resp completion, not 5"
+		      " (RX)", pmsc);
+
+done:
+    cfgp->rx_keep_on = 0;
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* rx_keep_on: a dw1000_rx_start() issued over a send on the air is
+ * recorded rather than refused, nothing written to the chip until the
+ * send completes. On the previous driver the rx_start below answers
+ * DW1000_RX_ERR_BUSY.
+ */
+static const char *
+step_rx_keep_on_deferred_receive_start(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    unsigned    pmsc;
+    int         rc;
+
+    cfgp->rx_keep_on = 1;
+    rearm = false;
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 100;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the send was refused";
+	goto done;
+    }
+
+    rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+    if (rc != 0) {
+	why = REASON("dw1000_rx_start() over a send on the air answered %d,"
+		      " not 0: it should be recorded under rx_keep_on, not"
+		      " refused", rc);
+	goto done;
+    }
+    pmsc = sys_state_pmsc(dw);
+    if (pmsc != 4) {
+	why = REASON("PMSC reads %u right after the deferred rx_start, not"
+		      " 4 (TX): something was written to the chip", pmsc);
+	goto done;
+    }
+
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "no completion for the send";
+	goto done;
+    }
+    pmsc = sys_state_pmsc(dw);
+    if (pmsc != 5)
+	why = REASON("PMSC reads %u after the deferred rx_start's"
+		      " completion, not 5 (RX)", pmsc);
+
+done:
+    pthread_mutex_lock(&s->lock);
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+    cfgp->rx_keep_on = 0;
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* rx_keep_on stops asking once the host has: after dw1000_txrx_off() an
+ * event pass with nothing pending must not bring the receiver back.
+ */
+static const char *
+step_rx_keep_on_stops_at_txrx_off(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    unsigned    pmsc;
+
+    (void)s;
+
+    cfgp->rx_keep_on = 1;
+    rearm = false;
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+
+    dw1000_txrx_off(dw);
+    dw1000_process_events(dw);
+
+    pmsc = sys_state_pmsc(dw);
+    if (pmsc != 1)
+	why = REASON("PMSC reads %u after dw1000_txrx_off(), not 1 (IDLE):"
+		      " rx_keep_on re-enabled the receiver", pmsc);
+
+done:
+    cfgp->rx_keep_on = 0;
+    return why;
+}
+
+/* A send the chip drops (Errata TX-1, or a start written into an active
+ * receiver): the model does it on request, no transmit flag is ever
+ * raised, and the chip stays exactly as it was. The driver has to find
+ * that out for itself, past the send's airtime, and free the transmitter
+ * again.
+ */
+static const char *
+step_dropped_send_found_out(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    uint32_t    status;
+    unsigned    pmsc;
+    int         rc;
+
+    cfgp->rx_keep_on = 0;                       /* manual policy */
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+
+    /* The model drops the next start, as the chip does under TX-1. */
+    dw1000_emulation_drop_next_start(emup);
+    evt_reset();
+    rc = dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+			DW1000_TX_IMMEDIATE);
+    if (rc != 0) {
+	why = REASON("the dropped send answered %d, not 0: the chip drops"
+		      " such a send silently, it does not refuse it", rc);
+	goto done;
+    }
+
+    pmsc   = sys_state_pmsc(dw);
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (pmsc == 4) {
+	why = "PMSC reads 4 (TX) right after the dropped send: it was not"
+	      " dropped";
+	goto done;
+    }
+    if (status & (DW1000_FLG_SYS_STATUS_TXFRB | DW1000_FLG_SYS_STATUS_TXPRS |
+		  DW1000_FLG_SYS_STATUS_TXPHS | DW1000_FLG_SYS_STATUS_TXFRS)) {
+	why = REASON("the dropped send's status (0x%08" PRIx32 ") carries a"
+		      " transmit flag: it was not really dropped", status);
+	goto done;
+    }
+
+    /* First sighting: suspected, not yet dropped. */
+    rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+    if (rc != 0 || evt.tx_dropped) {
+	why = REASON("the first rx_start over the suspected send answered"
+		      " %d (dropped: %d): a first sighting records the start"
+		      " and drops nothing", rc, (int)evt.tx_dropped);
+	goto done;
+    }
+
+    /* Second sighting, past the airtime and the one millisecond margin:
+     * dropped, reported, and the receiver enabled.
+     */
+    usleep(3000);
+    rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+    if (rc != 0) {
+	why = REASON("the second rx_start past the dropped send's bound"
+		      " answered %d, not 0", rc);
+	goto done;
+    }
+    if (!evt.tx_dropped) {
+	why = "the tx_dropped callback was not called";
+	goto done;
+    }
+
+    /* And the transmitter really is free again. */
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the send after the dropped one was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "no completion for the send after the dropped one";
+	goto done;
+    }
+
+    /* A start recorded and already honoured (the two rx_start() calls
+     * above, over the dropped send) must not fire again at a later
+     * completion under the manual policy: one more idle/send/wait, and
+     * the receiver must not have come back up on its own.
+     */
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the closing send was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "no completion for the closing send";
+	goto done;
+    }
+    if (sys_state_pmsc(dw) != 1)
+	why = REASON("PMSC reads %u after the closing completion, not 1"
+		      " (IDLE): a start recorded and already honoured fired"
+		      " again", sys_state_pmsc(dw));
+
+done:
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* A real send held on the air by the medium's tx_done_delay_ms must not
+ * be mistaken for a dropped one, however long the diagnosis is given to
+ * keep looking.
+ */
+static const char *
+step_real_send_not_dropped(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    unsigned    pmsc;
+    int         rc;
+
+    cfgp->rx_keep_on = 0;                       /* manual policy */
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 100;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the send was refused";
+	goto done;
+    }
+
+    rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+    if (rc != 0) {
+	why = REASON("rx_start over a real send in flight answered %d, not"
+		      " 0: it is recorded, not refused", rc);
+	goto done;
+    }
+    pmsc = sys_state_pmsc(dw);
+    if (pmsc != 4) {
+	why = REASON("PMSC reads %u while the real send is in flight, not"
+		      " 4 (TX): no suspicion should have been raised", pmsc);
+	goto done;
+    }
+
+    usleep(3000);
+    rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+    if (rc != 0 || evt.tx_dropped) {
+	why = REASON("rx_start 3 ms into a real send answered %d (dropped:"
+		      " %d): a real send must not be called dropped", rc,
+		      (int)evt.tx_dropped);
+	goto done;
+    }
+
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "no completion for the real send";
+	goto done;
+    }
+    /* Recorded twice, executed once: the receiver is up at the
+     * completion, under the manual policy too. */
+    if (sys_state_pmsc(dw) != 5) {
+	why = REASON("PMSC reads %u after the completion, not 5 (RX): the"
+		      " starts recorded over the send were not honoured",
+		      sys_state_pmsc(dw));
+	goto done;
+    }
+
+done:
+    pthread_mutex_lock(&s->lock);
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+    return why;
+}
+
+/* A send needs no idle from the host: the receiver is listening, and
+ * dw1000_tx_send() takes the transceiver to IDLE itself, keeping the
+ * receiver's events. Before, the start went into the active receiver
+ * and the chip dropped it.
+ */
+static const char *
+step_send_needs_no_idle(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+
+    cfgp->rx_keep_on = 0;
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+    if (sys_state_pmsc(dw) != 5) {
+	why = "the receiver is not listening before the send";
+	goto done;
+    }
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the send from a listening receiver was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "no completion for the send from a listening receiver: the"
+	      " start went into the receiver and was dropped";
+	goto done;
+    }
+ done:
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* A completion left standing is consumed by the next send: the host
+ * that sends again rather than process it has said what it wants, and
+ * the transmitter is free. Before, the second send was refused busy.
+ */
+static const char *
+step_standing_completion_is_consumed(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    int         rc;
+
+    cfgp->rx_keep_on = 0;
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "send A was refused";
+	goto done;
+    }
+    if (!wait_line(IRQ_TIMEOUT_MS)) {
+	why = "no interrupt for send A's completion";
+	goto done;
+    }
+    /* A's completion stands, unprocessed. */
+    evt_reset();
+    rc = dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+			DW1000_TX_IMMEDIATE);
+    if (rc != 0) {
+	why = REASON("send B over A's standing completion answered %d,"
+		      " not 0", rc);
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "no completion for send B";
+	goto done;
+    }
+    if (_dw1000_tx_pending(dw)) {
+	why = "the transmitter is still held after send B's completion";
+	goto done;
+    }
+ done:
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+
+/* State follows a re-arm from rx_ok: single buffered only. The pass
+ * that reports a good frame sets dw->state to IDLE before the callback
+ * runs (see dw1000_process_events()), so that a dw1000_rx_start() the
+ * callback makes is what stands afterwards. On the old driver that
+ * state was overwritten to IDLE again after the callback had already
+ * put the receiver back up, so a send right after found IDLE, went
+ * into the listening receiver, and never completed.
+ *
+ * Double buffered's rx_ok must not re-enable the receiver itself (the
+ * swinging buffer rule), so there is nothing for a re-arm to pin down
+ * there.
+ */
+static const char *
+step_state_follows_rearm(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+
+    if (TIMING_DBLBUFF)
+	return NULL;                 /* single buffered only */
+
+    cfgp->rx_keep_on = 0;
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the frame to echo back was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "the frame to echo back did not complete";
+	goto done;
+    }
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = true;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    rearm = true;
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+    if (!wait_line(IRQ_TIMEOUT_MS)) {
+	why = "no interrupt for the good frame";
+	goto done;
+    }
+
+    /* Delivery off before the pass runs: the callback's own re-arm
+     * below must not have the stub echo the very same frame straight
+     * back. RXAUTR is off, so a second good frame arriving that fast
+     * would idle the chip again on the model's own side (UM 5.3.2)
+     * before this step gets to look, racing the very state being
+     * pinned down here rather than exercising it.
+     */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+    dw1000_process_events(dw);
+
+    if (!evt.rx_ok) {
+	why = "the rx_ok callback was not called";
+	goto done;
+    }
+    if (evt.rx_start_rc != 0) {
+	why = REASON("dw1000_rx_start() from rx_ok answered %d, not 0",
+		      evt.rx_start_rc);
+	goto done;
+    }
+    if (dw->state != DW1000_STATE_RX) {
+	why = REASON("dw->state is %u after the re-arm, not"
+		      " DW1000_STATE_RX (%d)", dw->state, DW1000_STATE_RX);
+	goto done;
+    }
+    if (sys_state_pmsc(dw) != 5) {
+	why = REASON("PMSC reads %u after the re-arm, not 5 (RX)",
+		      sys_state_pmsc(dw));
+	goto done;
+    }
+
+    rearm = false;
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the send after the re-arm was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	why = "no completion for the send after the re-arm: dw->state read"
+	      " IDLE and the start went into the listening receiver";
+
+done:
+    rearm = false;
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* A frame beside the send's own completion, in one status word, leaves
+ * the state up: double buffered only. On the old driver the pass ended
+ * at IDLE with the receiver still up on the chip, and a response
+ * expected send lost its RX_W4R.
+ */
+static const char *
+step_state_beside_completion(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    uint32_t    status;
+    int         i;
+
+    if (!TIMING_DBLBUFF)
+	return NULL;                 /* double buffered only */
+
+    cfgp->rx_keep_on = 0;
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    /* First half: a send with no response expected. */
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the frame to hold was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "the frame to hold did not complete";
+	goto done;
+    }
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = true;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+    if (!wait_line(IRQ_TIMEOUT_MS)) {
+	why = "no interrupt for the held frame";
+	goto done;
+    }
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (!(status & DW1000_FLG_SYS_STATUS_RXFCG)) {
+	why = REASON("RXFCG not in the status (0x%08" PRIx32 ")", status);
+	goto done;
+    }
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the send beside the held frame was refused";
+	goto done;
+    }
+    for (i = 0; i < 200 && !dw1000_tx_is_status_done(dw); i++)
+	usleep(10000);
+    if (!dw1000_tx_is_status_done(dw)) {
+	why = "the send beside the held frame did not complete";
+	goto done;
+    }
+    dw1000_process_events(dw);
+    if (!evt.rx_ok || !evt.tx_done) {
+	why = REASON("rx_ok=%d tx_done=%d after the pass beside the"
+		      " completion", (int)evt.rx_ok, (int)evt.tx_done);
+	goto done;
+    }
+    if (dw->state != DW1000_STATE_RX) {
+	why = REASON("dw->state is %u, not DW1000_STATE_RX (%d)",
+		      dw->state, DW1000_STATE_RX);
+	goto done;
+    }
+    if (sys_state_pmsc(dw) != 5) {
+	why = REASON("PMSC reads %u, not 5 (RX)", sys_state_pmsc(dw));
+	goto done;
+    }
+
+    /* Second half: repeat, this time expecting a response. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the second frame to hold was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "the second frame to hold did not complete";
+	goto done;
+    }
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = true;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the second reception";
+	goto done;
+    }
+    if (!wait_line(IRQ_TIMEOUT_MS)) {
+	why = "no interrupt for the second held frame";
+	goto done;
+    }
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (!(status & DW1000_FLG_SYS_STATUS_RXFCG)) {
+	why = REASON("RXFCG not in the status (0x%08" PRIx32 ") the second"
+		      " time", status);
+	goto done;
+    }
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE | DW1000_TX_RESPONSE_EXPECTED) != 0) {
+	why = "the response-expected send beside the held frame was refused";
+	goto done;
+    }
+    for (i = 0; i < 200 && !dw1000_tx_is_status_done(dw); i++)
+	usleep(10000);
+    if (!dw1000_tx_is_status_done(dw)) {
+	why = "the response-expected send did not complete";
+	goto done;
+    }
+    dw1000_process_events(dw);
+    /* The frame beside the completion is taken for the response the
+     * send expected, the two being indistinguishable here: RX, and no
+     * response expected any more. */
+    if (dw->state != DW1000_STATE_RX) {
+	why = REASON("dw->state is %u, not DW1000_STATE_RX (%d): a frame"
+		      " beside the completion stands for the response",
+		      dw->state, DW1000_STATE_RX);
+	goto done;
+    }
+    if (dw1000_tx_is_expecting_response(dw))
+	why = "dw1000_tx_is_expecting_response is true after the"
+	      " response-expected send beside the held frame";
+
+done:
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* The delayed-receive fallback keeps the state: a receive turn-on time
+ * already gone by, without DW1000_RX_IDLE_ON_DELAY_ERROR, falls back to
+ * an immediate start (dw1000_rx_start() returning 1); dw->state must
+ * say so too. On the old driver it read IDLE with the receiver
+ * actually up.
+ */
+static const char *
+step_delayed_rx_fallback_keeps_state(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    uint64_t    dx;
+    int         rc;
+
+    cfgp->rx_keep_on = 0;
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    dw1000_rx_set_timeout(dw, 0);
+    dw1000_rx_set_timeout_preamble(dw, 0);
+
+    dx = (dw1000_get_system_time(dw) - MSEC(5)) & ((1ull << DW1000_TIME_CLOCK_BITS) - 1);
+    dw1000_txrx_set_time(dw, dx);
+
+    rc = dw1000_rx_start(dw, DW1000_RX_DELAYED_START);
+    if (rc != 1) {
+	why = REASON("a late delayed receive without"
+		      " DW1000_RX_IDLE_ON_DELAY_ERROR answered %d, not 1",
+		      rc);
+	goto done;
+    }
+    if (dw->state != DW1000_STATE_RX) {
+	why = REASON("dw->state is %u, not DW1000_STATE_RX (%d)", dw->state,
+		      DW1000_STATE_RX);
+	goto done;
+    }
+    if (sys_state_pmsc(dw) != 5)
+	why = REASON("PMSC reads %u, not 5 (RX)", sys_state_pmsc(dw));
+
+done:
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* A refused delayed start is not wanted: rx_keep_on, and a delayed
+ * receive programmed in the past, refused with DW1000_RX_ERR_TOO_LATE
+ * under DW1000_RX_IDLE_ON_DELAY_ERROR. On the old driver PMSC read 5
+ * (RX) after the next pass, dw->rx_wanted having been set by the
+ * refused call.
+ */
+static const char *
+step_refused_delayed_start_not_wanted(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    uint64_t    dx;
+    int         rc;
+
+    cfgp->rx_keep_on = 1;
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    dw1000_rx_set_timeout(dw, 0);
+    dw1000_rx_set_timeout_preamble(dw, 0);
+
+    dx = (dw1000_get_system_time(dw) - MSEC(5)) & ((1ull << DW1000_TIME_CLOCK_BITS) - 1);
+    dw1000_txrx_set_time(dw, dx);
+
+    rc = dw1000_rx_start(dw, DW1000_RX_DELAYED_START |
+			      DW1000_RX_IDLE_ON_DELAY_ERROR);
+    if (rc != DW1000_RX_ERR_TOO_LATE) {
+	why = REASON("a late delayed receive with"
+		      " DW1000_RX_IDLE_ON_DELAY_ERROR answered %d, not"
+		      " DW1000_RX_ERR_TOO_LATE (%d)", rc,
+		      DW1000_RX_ERR_TOO_LATE);
+	goto done;
+    }
+    if (sys_state_pmsc(dw) != 1) {
+	why = REASON("PMSC reads %u right after the refusal, not 1 (IDLE)",
+		      sys_state_pmsc(dw));
+	goto done;
+    }
+
+    dw1000_process_events(dw);
+    if (sys_state_pmsc(dw) != 1) {
+	why = REASON("PMSC reads %u after a pass with nothing pending, not"
+		      " 1 (IDLE): the refused start was still wanted",
+		      sys_state_pmsc(dw));
+	goto done;
+    }
+    if (dw->rx_wanted != 0)
+	why = "dw->rx_wanted is set after a start refused with"
+	      " DW1000_RX_ERR_TOO_LATE";
+
+done:
+    dw1000_txrx_off(dw);
+    cfgp->rx_keep_on = 0;
+    return why;
+}
+
+/* dw1000_txrx_stop(dw, 0) stops the rx_keep_on policy along with the
+ * receiver: a start it made must not come back at the next pass. On
+ * the old driver PMSC read 5 (RX) there, dw->rx_wanted having survived
+ * the stop.
+ */
+static const char *
+step_stop_no_flags_stops_policy(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+
+    cfgp->rx_keep_on = 1;
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+
+    dw1000_txrx_stop(dw, 0);
+    dw1000_process_events(dw);
+
+    if (sys_state_pmsc(dw) != 1) {
+	why = REASON("PMSC reads %u after dw1000_txrx_stop(dw, 0), not 1"
+		      " (IDLE)", sys_state_pmsc(dw));
+	goto done;
+    }
+    if (dw->rx_wanted != 0)
+	why = "dw->rx_wanted is set after dw1000_txrx_stop(dw, 0)";
+
+done:
+    cfgp->rx_keep_on = 0;
+    return why;
+}
+
+/* A raw start into a listening receiver is dropped and found out: the
+ * model's rule (a TXSTRT written while the receiver is up is dropped
+ * silently) is never reached through dw1000_tx_send(), which idles
+ * first, so it is exercised here through the raw path
+ * (dw1000_tx_write_frame_data() / dw1000_tx_fctrl() / dw1000_tx_start())
+ * with no idle in between.
+ */
+static const char *
+step_raw_start_into_listening_dropped(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    int         rc;
+
+    cfgp->rx_keep_on = 0;
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+    if (sys_state_pmsc(dw) != 5) {
+	why = "the receiver is not listening before the raw start";
+	goto done;
+    }
+
+    dw1000_tx_write_frame_data(dw, (uint8_t *)payload, PAYLOAD_LEN, 0);
+    dw1000_tx_fctrl(dw, FRAME_LEN, 0, DW1000_TX_IMMEDIATE);
+    rc = dw1000_tx_start(dw, DW1000_TX_IMMEDIATE);
+    if (rc != 0) {
+	why = REASON("the raw start into a listening receiver answered %d,"
+		      " not 0", rc);
+	goto done;
+    }
+    if (sys_state_pmsc(dw) != 5) {
+	why = REASON("PMSC reads %u right after the raw start, not 5 (RX):"
+		      " the chip did not drop it", sys_state_pmsc(dw));
+	goto done;
+    }
+    if (dw->state != DW1000_STATE_TX) {
+	why = REASON("dw->state is %u, not DW1000_STATE_TX (%d): the"
+		      " driver does not believe it sent", dw->state,
+		      DW1000_STATE_TX);
+	goto done;
+    }
+
+    usleep(3000);
+    rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+    if (rc != 0 || evt.tx_dropped) {
+	why = REASON("the first rx_start over the suspected raw start"
+		      " answered %d (dropped: %d): a first sighting records"
+		      " the start and drops nothing", rc,
+		      (int)evt.tx_dropped);
+	goto done;
+    }
+
+    usleep(3000);
+    rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+    if (rc != 0) {
+	why = REASON("the second rx_start past the raw start's bound"
+		      " answered %d, not 0", rc);
+	goto done;
+    }
+    if (!evt.tx_dropped) {
+	why = "the tx_dropped callback was not called for the raw start"
+	      " into the listening receiver";
+	goto done;
+    }
+    if (dw->state != DW1000_STATE_RX)
+	why = REASON("dw->state is %u, not DW1000_STATE_RX (%d) after the"
+		      " raw start was found dropped", dw->state,
+		      DW1000_STATE_RX);
+
+done:
+    dw1000_txrx_off(dw);
+    return why;
 }
 
 /* A frame the chip cannot carry is refused, not truncated.
@@ -1974,14 +3118,14 @@ main(void)
     static struct dw1000_ioline ioline_reset = { .line = DW1000_IOLINE_RESET };
     static dw1000_spi_driver_t spi;
 
-    static const dw1000_config_t config = {
+    static dw1000_config_t config = {
 	.spi              = &spi,
 	.irq              = &ioline_irq,
 	.reset            = &ioline_reset,
 	.wakeup           = NULL,
 	.leds             = 0,
 	.lde_loading      = 1,
-	.dblbuff          = 0,
+	.dblbuff          = TIMING_DBLBUFF,
 	.rxauto           = 0,
 	.tx_antenna_delay = 16436,
 	.rx_antenna_delay = 16436,
@@ -1989,6 +3133,7 @@ main(void)
 	.cb.rx_ok         = cb_rx_ok,
 	.cb.rx_error      = cb_rx_error,
 	.cb.rx_timeout    = cb_rx_timeout,
+	.cb.tx_dropped    = cb_tx_dropped,
     };
 
     /* Channel 5, 64 MHz PRF, 6.8 Mbps, PAC 8, 128-symbol preamble: the
@@ -2028,6 +3173,7 @@ main(void)
 
     g_rsvc    = rsvc;
     emulation = dw1000_emulation_create(rsvc, line_cb, NULL);
+    emup      = emulation;
     ioline_irq.emulation   = emulation;
     ioline_reset.emulation = emulation;
     spi.emulation          = emulation;
@@ -2036,6 +3182,8 @@ main(void)
 	fprintf(stderr, "timing: RSVC_SEED_GET failed\n");
 	return 1;
     }
+
+    cfgp = &config;
 
     dw1000_init(&dw, &config);
     dw1000_hardreset(&dw);
@@ -2066,6 +3214,23 @@ main(void)
     step("rx start beside the completion", step_rx_start_beside_completion(&dw, &stub));
     step("owed reset before auto-rx", step_owed_reset_before_auto_rx(&dw, &stub));
     step("wait4resp survives a stale frame", step_wait4resp_survives_stale_frame(&dw, &stub));
+    step("keep-on after a timeout", step_rx_keep_on_after_timeout(&dw, &stub));
+    step("keep-on after an error", step_rx_keep_on_after_error(&dw, &stub));
+    step("keep-on after a single buffered good frame",
+	 step_rx_keep_on_after_good_frame(&dw, &stub));
+    step("keep-on after a completion", step_rx_keep_on_after_completion(&dw, &stub));
+    step("deferred receive start", step_rx_keep_on_deferred_receive_start(&dw, &stub));
+    step("keep-on stops at txrx_off", step_rx_keep_on_stops_at_txrx_off(&dw, &stub));
+    step("dropped send is found out", step_dropped_send_found_out(&dw, &stub));
+    step("a real send is not called dropped", step_real_send_not_dropped(&dw, &stub));
+    step("a send needs no idle",  step_send_needs_no_idle(&dw, &stub));
+    step("a standing completion is consumed", step_standing_completion_is_consumed(&dw, &stub));
+    step("state follows a re-arm from rx_ok", step_state_follows_rearm(&dw, &stub));
+    step("a frame beside the completion leaves the state up", step_state_beside_completion(&dw, &stub));
+    step("the delayed-receive fallback keeps the state", step_delayed_rx_fallback_keeps_state(&dw, &stub));
+    step("a refused delayed start is not wanted", step_refused_delayed_start_not_wanted(&dw, &stub));
+    step("stop with no flags stops the policy", step_stop_no_flags_stops_policy(&dw, &stub));
+    step("a raw start into a listening receiver is dropped and found out", step_raw_start_into_listening_dropped(&dw, &stub));
     step("create/destroy cycles",step_lifecycle(&dw, &stub));
     step("medium vanishes",      step_medium_vanishes(&dw, &stub));
 

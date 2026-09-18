@@ -40,9 +40,30 @@
  * host this refusal exists to tell.
  */
 static inline bool
-_dw1000_tx_idle(const dw1000_t *dw)
+_dw1000_tx_idle(dw1000_t *dw)
 {
-    return dw->tx_pending == 0;
+    if (_dw1000_tx_pending(dw)) {
+	/* Pending: over, dropped, or on the air. The chip says which. A
+	 * completion standing unreported is consumed by this send, the
+	 * host having chosen to send again rather than process it (every
+	 * host here waits for or polls its completion first, so none
+	 * loses one); dw1000_tx_start() clears its flags. A send with no
+	 * flag may never have begun (_dw1000_tx_dropped()). Only a frame
+	 * on the air refuses, Errata TX-2 being the reason. */
+	const uint32_t status =
+	    _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+	if (status & DW1000_FLG_SYS_STATUS_TXFRS)
+	    _dw1000_tx_release(dw);
+	else if (! _dw1000_tx_dropped(dw, status))
+	    return false;
+    }
+    /* IDLE, keeping the receiver's pending events, as dw1000_txrx_idle()
+     * does, and only when the receiver may be up: after an RXENAB, after
+     * WAIT4RESP, or with RXAUTR, which re-enables it behind the driver's
+     * back. A host that idled already pays nothing more. */
+    if (_dw1000_rx_up(dw) || dw->config->rxauto)
+	dw1000_txrx_idle(dw);
+    return true;
 }
 
 static inline size_t

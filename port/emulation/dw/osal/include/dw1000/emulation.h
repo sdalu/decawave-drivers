@@ -60,6 +60,16 @@ dw1000_emulation_create(rsvc_t *rsvc, void (*line_cb)(int line, void *args), voi
 void dw1000_emulation_reset(struct dw1000_emulation *e);
 
 /**
+ * Drop the next transmit start, as the chip does under Errata 1.4 3.1
+ * (TX-1) and when a start is written into an active receiver: the
+ * TXSTRT is taken and nothing follows, no transmit flag, no completion,
+ * the state unchanged. One start only; the one after goes out as usual.
+ * For a test of what a host and the driver make of a send that never
+ * began.
+ */
+void dw1000_emulation_drop_next_start(struct dw1000_emulation *e);
+
+/**
  * Stop the model's own thread.
  *
  * The model runs a thread to meet the times a host programs into DX_TIME

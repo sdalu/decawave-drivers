@@ -576,10 +576,12 @@ void _dw1000_softreset(dw1000_t *dw) {
 			0xF0);
     
     // Reset internal flags
-    dw->wait4resp     = 0;
+    dw->state         = DW1000_STATE_IDLE;
     dw->tx_clk_forced = 0;
-    dw->tx_pending    = 0;
     dw->rx_reset_due  = 0;
+    dw->rx_wanted     = 0;
+    dw->rx_deferred   = 0;
+    dw->tx_suspect    = 0;
 }
 
 
@@ -1667,7 +1669,7 @@ void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
  * @param[in]  status   the status word being processed
  */
 static inline bool _dw1000_tx_inflight(const dw1000_t *dw, uint32_t status) {
-    return dw->tx_pending && !(status & DW1000_FLG_SYS_STATUS_TXFRS);
+    return _dw1000_tx_pending(dw) && !(status & DW1000_FLG_SYS_STATUS_TXFRS);
 }
 
 /**
@@ -1755,12 +1757,89 @@ void _dw1000_rx_overrun_recover(dw1000_t *dw, uint32_t status) {
 		       (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
     _dw1000_rx_sync_dblbuff(dw);
 
-    if (! _dw1000_tx_inflight(dw, status))
-	dw->wait4resp = 0;
-
     if (cfg->cb.rx_error) {
 	cfg->cb.rx_error(dw, status);
     }
+}
+
+
+/* PMSC_STATE, SYS_STATE bits 16..20. User Manual 2.12 documents none
+ * of this: register file 0x19 is "reserved" there (7.2.27), and no
+ * table of its fields exists in the manual, the errata or the API
+ * guide. The values are ruby-dw1000's bench: 1 idle, 2 while a delayed
+ * send waits for DX_TIME, 3 for the first microseconds after an enable
+ * (the receiver's 16 us start-up, UM 7.2.15), 4 while a frame goes out
+ * (TX_STATE 1, preamble), 5 with the receiver enabled, traffic or none
+ * (RX_STATE 5). A delayed send is asked of DX_TIME as well, the two
+ * agreeing. */
+#define _PMSC_STATE(state)      (((state) >> 16) & 0x1F)
+#define _PMSC_STATE_TX_WAIT     2
+#define _PMSC_STATE_TX          4
+
+/* One millisecond of device ticks, the margin past a frame's airtime
+ * before an absent send is called dropped. The transceiver is seen IDLE
+ * for a moment after TXSTRT, before the preamble; the margin covers it
+ * many times over. */
+#define _TX_DROPPED_MARGIN      ((uint32_t)(DW1000_TIME_CLOCK_HZ / 1000))
+
+static int _dw1000_rx_start(dw1000_t *dw, int8_t rx_mode, bool host);
+
+void _dw1000_tx_release(dw1000_t *dw) {
+    _dw1000_tx_done_state(dw);          // IDLE, or the receiver WAIT4RESP put up
+    dw->tx_suspect = 0;
+    _dw1000_tx_clock_release(dw);
+}
+
+bool _dw1000_tx_dropped(dw1000_t *dw, uint32_t status) {
+    if (! _dw1000_tx_pending(dw))
+	return false;
+    if (status & (DW1000_FLG_SYS_STATUS_TXFRB | DW1000_FLG_SYS_STATUS_TXPRS |
+		  DW1000_FLG_SYS_STATUS_TXPHS | DW1000_FLG_SYS_STATUS_TXFRS)) {
+	dw->tx_suspect = 0;
+	return false;
+    }
+    const uint32_t state = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATE,
+					      DW1000_OFF_NONE);
+    const unsigned pmsc  = _PMSC_STATE(state);
+    if ((pmsc == _PMSC_STATE_TX) || (pmsc == _PMSC_STATE_TX_WAIT)) {
+	dw->tx_suspect = 0;
+	return false;
+    }
+    const uint64_t now = dw1000_get_system_time(dw);
+    if (dw->tx_delayed) {
+	// A delayed send waits for DX_TIME reading TX_WAIT (measured), a
+	// state the manual does not document; DX_TIME itself is asked as
+	// well: still ahead, less than half a period away, the send is
+	// waiting, not dropped
+	uint64_t dx = 0;
+	_dw1000_reg_read(dw, DW1000_REG_DX_TIME, DW1000_OFF_NONE,
+			 (uint8_t *)&dx, 5);
+	dx = dw1000_le64_to_cpu(dx);
+	if (((dx - now) & ((1ull << DW1000_TIME_CLOCK_BITS) - 1)) <
+	    (1ull << (DW1000_TIME_CLOCK_BITS - 1))) {
+	    dw->tx_suspect = 0;
+	    return false;
+	}
+    }
+    if (dw->tx_suspect == 0) {
+	dw->tx_suspect = now | 1;           // never 0, which means none
+	return false;
+    }
+    // Modulo the 40-bit clock, which wraps every 17.2 s: a pair of
+    // sightings straddling a wrap reads short and answers "not yet" once,
+    // the suspicion standing, and the next sighting answers right
+    const uint64_t elapsed =
+	(now - dw->tx_suspect) & ((1ull << DW1000_TIME_CLOCK_BITS) - 1);
+    if (elapsed < (uint64_t)dw->tx_airtime + _TX_DROPPED_MARGIN)
+	return false;
+
+    // Dropped: the transmitter is free, and nothing is on the air
+    dw->state      = DW1000_STATE_IDLE;
+    dw->tx_suspect = 0;
+    _dw1000_tx_clock_release(dw);
+    if (dw->config->cb.tx_dropped)
+	dw->config->cb.tx_dropped(dw);
+    return true;
 }
 
 
@@ -1777,6 +1856,12 @@ bool dw1000_process_events(dw1000_t *dw) {
     // ( TXPUTE | RXPREJ | RXRSCS ) we won't read it.
     uint32_t status =
 	_dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE); 
+
+    // A send in progress that the chip does not show, past its airtime,
+    // never began: cleared and reported here, so that the receive side
+    // below stops treating it as on the air
+    if (_dw1000_tx_pending(dw) && _dw1000_tx_dropped(dw, status))
+	processed = true;
     
     // Handle RX overrun (double buffered receive only)
     //   UM §4.3.3: a frame arrived while both buffers were still held
@@ -1840,9 +1925,24 @@ bool dw1000_process_events(dw1000_t *dw) {
 	    // means the send is over, and the receiver goes back on here
 	    // as it always did: a host that sees RXFCG beside its
 	    // completion and leaves the re-arm to rx_ok counts on it.
-	    if (! _dw1000_tx_inflight(dw, status)) {
+	    if (_dw1000_tx_pending(dw) && (status & DW1000_FLG_SYS_STATUS_TXFRS)) {
+		// Beside the send's own completion: the frame is taken for
+		// the response the send may have expected (the stale frame
+		// and the response cannot be told apart here), and the
+		// receiver is not enabled now, within microseconds of the
+		// transmitter stopping, but at the end of this pass, once the
+		// completion is booked and its flags cleared. Measured: an
+		// enable 50 us or more after the end of a frame is honoured
+		// every time; with one written here, rpi-d lost about one frame
+		// in fifty over two soaks, and none with it at the end of the
+		// pass. Whether the instant is the cause is not established.
+		// The read-out below runs with the receiver off, this once.
+		dw->state       = DW1000_STATE_TX;
+		dw->rx_deferred = 1;
+	    } else if (! _dw1000_tx_inflight(dw, status)) {
 		_dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
 				    DW1000_FLG_SYS_CTRL_RXENAB);
+		dw->state = DW1000_STATE_RX;
 	    }
 
 	    // From here to the toggle below the host side buffer belongs
@@ -1878,7 +1978,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 		clear  |=  DW1000_FLG_SYS_STATUS_AAT;
 		status &= ~DW1000_FLG_SYS_STATUS_AAT;
 		// No wait for response
-		dw->wait4resp = 0;
+		if (dw->state == DW1000_STATE_RX_W4R)
+		    dw->state = DW1000_STATE_RX;
 	    }
         }
 #endif
@@ -1889,8 +1990,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// still armed on the chip. A frame beside the completion in one
 	// status word may be either, the stale one or the response; the
 	// response is assumed, as it always was.
-	if (! _dw1000_tx_inflight(dw, status))
-	    dw->wait4resp = 0;
+	if (dw->state == DW1000_STATE_RX_W4R)
+	    dw->state = DW1000_STATE_RX;
 
 	// Effectively clearing status
 	//   In double buffered mode the bits being cleared are part of
@@ -1902,6 +2003,13 @@ bool dw1000_process_events(dw1000_t *dw) {
 	    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS,
 				DW1000_OFF_NONE, clear);
 	}
+
+	// Single buffered, the chip is idle once the frame is in, and the
+	// callback may well enable the receiver again: said before it runs,
+	// so that a start it makes is what stands afterwards. Not over a
+	// send still on the air; beside its completion the chip is idle too.
+	if (! cfg->dblbuff && ! _dw1000_tx_inflight(dw, status))
+	    dw->state = DW1000_STATE_IDLE;
 
 	// Call the corresponding callback if present
         if (cfg->cb.rx_ok) {
@@ -1956,7 +2064,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// The frame is out: the transmitter is free for the next one, and
 	// if a delayed send forced the TX clock on (Errata 1.4 §3.1) it
 	// returns to automatic sequencing
-	dw->tx_pending = 0;
+	_dw1000_tx_done_state(dw);          // IDLE, or RX_W4R: the chip's own
+	dw->tx_suspect = 0;
 	_dw1000_tx_clock_release(dw);
 
 	// HOTFIX: UM §5.4: Transmit and automatically wait for response
@@ -1983,9 +2092,13 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//  TRXOFF plus receiver reset would tear down the very receiver
 	//  WAIT4RESP had just armed, losing the expected response.
         if((dw->reg.sys_cfg & DW1000_FLG_SYS_CFG_AUTOACK) &&
-	   (status & DW1000_FLG_SYS_STATUS_AAT) && dw->wait4resp) {
+	   (status & DW1000_FLG_SYS_STATUS_AAT) &&
+	   (dw->state == DW1000_STATE_RX_W4R)) {
 	    // Turn off receiver, returning to IDLE state
-	    dw1000_txrx_off(dw);
+	    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_TX     |
+				 DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+				 DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+				 DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
 	    // Reset in case a frame was already being received
             _dw1000_rx_reset(dw);
         }
@@ -1996,11 +2109,10 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// frame ended, unreset. Take it back down, reset and re-enable it
 	// here, before a response can arrive; wait4resp stays armed, the
 	// host's tx_done reading it as usual.
-	if (dw->rx_reset_due && dw->wait4resp) {
-	    const uint32_t wait4resp = dw->wait4resp;
+	if (dw->rx_reset_due && (dw->state == DW1000_STATE_RX_W4R)) {
 	    _dw1000_txrx_off(dw, 0);
-	    dw->wait4resp = wait4resp;
-	    dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+	    _dw1000_rx_start(dw, DW1000_RX_IMMEDIATE, false);
+	    dw->state = DW1000_STATE_RX_W4R;    // still the chip's own receive
 	}
 
         // Call the corresponding callback if present
@@ -2099,6 +2211,20 @@ bool dw1000_process_events(dw1000_t *dw) {
         }
     }
 
+    // rx_keep_on: the receiver back on, once, after every callback has
+    // run, if the host wants it and nothing has it up: not over a send
+    // on the air, whose completion pass will get here too. This is the
+    // one place the policy enables the receiver, so the branches above
+    // never write RXENAB on the policy's behalf and their order does not
+    // matter to it.
+    if (dw->rx_deferred && _dw1000_rx_up(dw))
+	dw->rx_deferred = 0;                // up already, WAIT4RESP's doing
+    if ((dw->state == DW1000_STATE_IDLE) &&
+	(dw->rx_deferred || (cfg->rx_keep_on && dw->rx_wanted))) {
+	dw->rx_deferred = 0;
+	_dw1000_rx_start(dw, DW1000_RX_IMMEDIATE, false);
+    }
+
     return processed || (status & (DW1000_FLG_SYS_STATUS_RXFCG     |
 				   DW1000_FLG_SYS_STATUS_TXFRS     |
 				   DW1000_MSK_SYS_STATUS_ALL_RX_TO |
@@ -2147,8 +2273,8 @@ void _dw1000_txrx_off(dw1000_t *dw, uint32_t clear) {
     // Reset internal flags
     //   The transceiver is off, so whatever was being transmitted is
     //   over one way or the other and the next send may go ahead.
-    dw->wait4resp  = 0;
-    dw->tx_pending = 0;
+    dw->state      = DW1000_STATE_IDLE;
+    dw->tx_suspect = 0;
 
     // A delayed send may have been armed and is being cancelled here, so
     // the TX clock it forced on (Errata 1.4 §3.1) has to be released too
@@ -2213,6 +2339,7 @@ void dw1000_tx_fctrl(dw1000_t *dw, size_t length, size_t offset,
      */
     const size_t max_length = dw1000_tx_get_frame_maxsize(dw);
     DW1000_ASSERT(length <= max_length, "bad frame length");
+    dw->tx_length = (uint16_t)length;
 
     // TXBOFFS is a 10-bit field; a larger offset would corrupt the
     // neighbouring TX_FCTRL bits
@@ -2257,6 +2384,22 @@ void dw1000_tx_write_frame_data(dw1000_t *dw,
 }
 
 
+/* Airtime of the send in progress, in device ticks: preamble and SFD
+ * (tx_ton, APS022 5.4), the PHR, and the payload with its Reed-Solomon
+ * parity (48 bits per 330-bit block, UM 10.2). The PHR goes at 850 kbps
+ * except at 110 kbps, where it goes at 110. A bound, not a timestamp:
+ * dropped-send detection adds a millisecond to it. */
+static uint32_t _dw1000_tx_airtime(const dw1000_t *dw) {
+    static const uint32_t kbps[3] = { 110, 850, 6800 };
+    const unsigned br   = (dw->radio.bitrate < 3) ? dw->radio.bitrate : 2;
+    const uint64_t phr  = 21ull * DW1000_TIME_CLOCK_HZ
+			/ ((br == DW1000_BITRATE_110KBPS) ? 110000ull
+							  : 850000ull);
+    const uint64_t bits = (uint64_t)dw->tx_length * 8ull * 378ull / 330ull;
+    const uint64_t data = bits * DW1000_TIME_CLOCK_HZ / ((uint64_t)kbps[br] * 1000ull);
+    return dw->tx_ton + (uint32_t)phr + (uint32_t)data;
+}
+
 int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
     uint8_t sys_ctrl  = DW1000_FLG_SYS_CTRL_TXSTRT;
 
@@ -2269,18 +2412,23 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
     // the transmitter by hand, too late to save the frame in flight but
     // in time to say so rather than start a second one on top of it.
     //
-    // dw->tx_pending is the driver's own record, so this costs no SPI:
-    // the alternatives are a SYS_STATE read on every send, which comes
-    // straight out of the delayed-send lead budget, or a TRXOFF before
-    // every TXSTRT as the vendor does, which pays a write to hide the
-    // caller's mistake.
-    if (dw->tx_pending)
-	return DW1000_TX_ERR_BUSY;
+    // dw->tx_pending is the driver's own record, so a free transmitter
+    // costs no SPI. A pending one is asked of the chip once: a completion
+    // standing there is over and consumed by this send, a send with no
+    // flag may have been dropped (_dw1000_tx_dropped()), and only a frame
+    // on the air is refused.
+    if (_dw1000_tx_pending(dw)) {
+	const uint32_t status =
+	    _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+	if (status & DW1000_FLG_SYS_STATUS_TXFRS)
+	    _dw1000_tx_release(dw);
+	else if (! _dw1000_tx_dropped(dw, status))
+	    return DW1000_TX_ERR_BUSY;
+    }
 
     // Set wait for response flag
     if (tx_mode & DW1000_TX_RESPONSE_EXPECTED) {
 	sys_ctrl |= DW1000_FLG_SYS_CTRL_WAIT4RESP;
-        dw->wait4resp = 1;
     }
 
     // Set delayed start flag
@@ -2301,20 +2449,31 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
     if (tx_mode & DW1000_TX_DELAYED_START)
 	_dw1000_tx_clock_force(dw, true);
 
-    // What the transmitter raised for an earlier frame goes first, so
-    // that a completion the chip shows with tx_pending set is this
-    // frame's and nobody else's: dw1000_process_events() and
+    // What the transmitter raised for an earlier frame must be gone
+    // before this one is pending, so that a completion the chip shows
+    // with a send pending is this send's: dw1000_process_events() and
     // dw1000_rx_start() read TXFRS to tell a send on the air from one
     // that is over, and dw1000_txrx_idle() leaves a standing one in
-    // place by design. AAT is not among them: it belongs to a received
-    // frame, and the receive side handles it.
-    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
-			DW1000_FLG_SYS_STATUS_TXFRB | DW1000_FLG_SYS_STATUS_TXPRS |
-			DW1000_FLG_SYS_STATUS_TXPHS | DW1000_FLG_SYS_STATUS_TXFRS);
+    // place by design. UM 7.2.17 has TXFRB, TXPRS, TXPHS and TXFRS
+    // "automatically cleared at the next transmitter enable", which an
+    // immediate TXSTRT is, so nothing is written for one. A delayed
+    // send is enabled at DX_TIME, and the clearing waits for that
+    // moment (measured: a standing TXFRS stays set through the whole
+    // wait), so for it the four are cleared here, one write, rather
+    // than have a stale TXFRS read as this send's completion while it
+    // waits.
+    if (tx_mode & DW1000_TX_DELAYED_START)
+	_dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
+			    DW1000_FLG_SYS_STATUS_TXFRB | DW1000_FLG_SYS_STATUS_TXPRS |
+			    DW1000_FLG_SYS_STATUS_TXPHS | DW1000_FLG_SYS_STATUS_TXFRS);
 
     // Write to SYS_CTRL register, which will trigger transmit
     _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL, sys_ctrl);
-    dw->tx_pending = 1;
+    dw->state      = (tx_mode & DW1000_TX_RESPONSE_EXPECTED)
+		   ? DW1000_STATE_TX_W4R : DW1000_STATE_TX;
+    dw->tx_suspect = 0;
+    dw->tx_delayed = (tx_mode & DW1000_TX_DELAYED_START) ? 1 : 0;
+    dw->tx_airtime = _dw1000_tx_airtime(dw);
 
     // Perform extra check for delayed transmit
     if (tx_mode & DW1000_TX_DELAYED_START) {
@@ -2342,8 +2501,7 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
 	// as well other flags
 	_dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL,
 			   DW1000_FLG_SYS_CTRL_TRXOFF);
-	dw->wait4resp  = 0;
-	dw->tx_pending = 0;
+	dw->state      = DW1000_STATE_IDLE;
 
 	// Nothing is pending anymore: let the TX clock be sequenced again
 	// (Errata 1.4 §3.1)
@@ -2398,18 +2556,33 @@ void dw1000_rx_set_frame_filtering(dw1000_t *dw, uint16_t bitmask) {
 }
 
 
-int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
-    // Not over a transmission. A host re-arming from an rx_error or
-    // rx_timeout callback while its own send is on the air (an event
-    // the receiver raised before the send, see dw1000_process_events())
-    // would enable the receiver on top of it: refused, with nothing
-    // written to the chip, and the completion's handler re-arms as
-    // after any send. tx_pending alone cannot say: the TXFRS branch
-    // clears it, and runs after the good-frame one, so a callback in
-    // a pass whose status word already carries the completion would
-    // be refused for a send that is over. TXFRS on the chip says.
-    if (dw->tx_pending && ! dw1000_tx_is_status_done(dw))
-	return DW1000_RX_ERR_BUSY;
+/* The start itself. A host's call (host true) speaks for the host: it
+ * clears a start recorded over a send, and under rx_keep_on it says
+ * the host wants to listen, on the paths that leave the receiver up. The
+ * driver's own starts, at the end of a pass and at a WAIT4RESP
+ * completion, say nothing of the kind. */
+static int _dw1000_rx_start(dw1000_t *dw, int8_t rx_mode, bool host) {
+    const bool wanted = host && dw->config->rx_keep_on;
+
+    // Not over a transmission on the air: recorded, and honoured at the
+    // end of the completion's dw1000_process_events(). A pending send
+    // that is over, or that never began, is cleared here first.
+    if (_dw1000_tx_pending(dw)) {
+	const uint32_t status =
+	    _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+	if (! (status & DW1000_FLG_SYS_STATUS_TXFRS) &&
+	    ! _dw1000_tx_dropped(dw, status)) {
+	    if (host) {
+		dw->rx_deferred = 1;
+		if (wanted)
+		    dw->rx_wanted = 1;
+	    }
+	    return 0;
+	}
+    }
+    // A start the host makes now supersedes one it recorded over a send
+    if (host)
+	dw->rx_deferred = 0;
 
     // A receiver reset owed from an error or timeout handled while a
     // transmission was in flight (UM §4.1.6): applied now that the
@@ -2426,41 +2599,46 @@ int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
 
     // Trigger receiving by writting to SYS_CTRL
     // UM §7.2.15: System Control Register
-    // We will just access the 2 lower bytes to 
+    // We will just access the 2 lower bytes to
     //  enable radio, and delayed received if requested
     uint16_t sys_ctrl = DW1000_FLG_SYS_CTRL_RXENAB;
     if (rx_mode & DW1000_RX_DELAYED_START) {
         sys_ctrl |= DW1000_FLG_SYS_CTRL_RXDLYE ;
     }
     _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE, sys_ctrl);
+    dw->state = DW1000_STATE_RX;
 
-    // Perform extra check for delayed receive
+    // Check for errors if delayed start was requested
     if (rx_mode & DW1000_RX_DELAYED_START) {
-	// Read 1 byte at offset 3 to get the 4th byte out of 5
-	uint8_t sys_status = _dw1000_reg_read8(dw, DW1000_REG_SYS_STATUS, 3); 
-	// If delay has passed start RX immediately
-	// unless DW1000_RX_IDLE_ON_DELAY_ERROR is set in rx_mode
+	// UM §7.2.17: System Event Status Register
+	//  => HPDWARN is in the 4th byte
+	uint8_t sys_status = _dw1000_reg_read8(dw, DW1000_REG_SYS_STATUS, 3);
         if ((sys_status & (DW1000_FLG_SYS_STATUS_HPDWARN >> 24)) != 0)  {
-	    // Return to an off (idle) state, dropping the receive groups
-	    // only: dw1000_txrx_off() also clears ALL_TX, and a TXFRS
-	    // raised since the last dw1000_process_events() would go with
-	    // it, so the tx_done callback would never fire. The TX and RX
-	    // error branches of the event loop restrict the clear set for
-	    // the same reason.
+	    // Too late: back to IDLE, dropping what the receiver raised
 	    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
 			         DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
 			         DW1000_MSK_SYS_STATUS_ALL_RX_TO);
-	    // Keep it off on error if requested
+	    // Stay idle if asked: the host did not want the receiver
+	    // on at any other time, so it is not wanted either
             if (rx_mode & DW1000_RX_IDLE_ON_DELAY_ERROR)
 		return DW1000_RX_ERR_TOO_LATE;
 	    // Fallback to immediate start
 	    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
 				DW1000_FLG_SYS_CTRL_RXENAB);
+	    dw->state = DW1000_STATE_RX;
+	    if (wanted)
+		dw->rx_wanted = 1;
 	    return 1;
         }
     }
 
+    if (wanted)
+	dw->rx_wanted = 1;
     return 0;
+}
+
+int dw1000_rx_start(dw1000_t *dw, int8_t rx_mode) {
+    return _dw1000_rx_start(dw, rx_mode, true);
 }
 
 

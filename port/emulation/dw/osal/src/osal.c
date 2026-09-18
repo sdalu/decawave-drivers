@@ -81,6 +81,7 @@ struct e_deadline {
 };
 
 struct dw1000_emulation {
+    bool drop_next_start;               /* dw1000_emulation_drop_next_start() */
     pthread_mutex_t	mutex;
     rsvc_t 		*rsvc;
     void               (*line_cb)(int line, void *args);
@@ -1073,7 +1074,7 @@ dw1000_emulation_create(rsvc_t *rsvc,
 
     E_REG_ATTACH(e, EUI,         TODO);
     E_REG_ATTACH(e, PANADR,      TODO);
-    E_REG_ATTACH(e, SYS_STATE,   TODO);
+    E_REG_ATTACH(e, SYS_STATE,   SINGLE);
     E_REG_ATTACH(e, RX_SNIFF,    TODO);
     E_REG_ATTACH(e, ACK_RESP_T,  TODO);
     E_REG_ATTACH(e, ACC_MEM,     TODO);
@@ -1133,6 +1134,12 @@ void dw1000_emulation_destroy(struct dw1000_emulation *e) {
     pthread_cond_destroy(&e->timer_cond);
     pthread_mutex_destroy(&e->mutex);
     free(e);
+}
+
+void dw1000_emulation_drop_next_start(struct dw1000_emulation *e) {
+    pthread_mutex_lock(&e->mutex);
+    e->drop_next_start = true;
+    pthread_mutex_unlock(&e->mutex);
 }
 
 void dw1000_emulation_reset(struct dw1000_emulation *e) {
@@ -1584,6 +1591,39 @@ int dw1000_emulation_send(struct dw1000_emulation *e) {
      * reports the frame sent (DW1000_RSVC_TX_DONE).
      */
 
+    /* Asked for by dw1000_emulation_drop_next_start(): the start is
+     * taken and nothing happens, as under Errata TX-1.
+     */
+    if (e->drop_next_start) {
+	e->drop_next_start = false;
+	EMU_WARNING("transmit start dropped on request");
+	DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_TXSTRT);
+	DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_TXDLYS);
+	DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_SFCST);
+	E_REG_IC_WRITE32_KEY(e, sys_ctrl, SYS_CTRL);
+	pthread_mutex_unlock(&e->mutex);
+	return 0;
+    }
+
+    /* A TXSTRT written while the receiver is on is dropped, no flag
+     * raised and nothing sent: measured on ruby-dw1000's bench, 200
+     * raw starts into a listening receiver with no traffic, 200
+     * dropped (SYS_STATE 0x4x050500 before and after, the chip still
+     * receiving), which is also how one send in six thousand was lost
+     * with RXAUTR set. The driver's contract is IDLE before a send, and
+     * a host that breaks it now loses the frame the way the chip loses
+     * it, rather than the run.
+     */
+    if (E_IS_STATE(e, RX) || E_IS_STATE(e, RX_WAIT)) {
+	EMU_WARNING("transmit start dropped (state=%s)", E_GET_STATE_STR(e));
+	DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_TXSTRT);
+	DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_TXDLYS);
+	DW1000_CLR_FLG(sys_ctrl, SYS_CTRL_SFCST);
+	E_REG_IC_WRITE32_KEY(e, sys_ctrl, SYS_CTRL);
+	pthread_mutex_unlock(&e->mutex);
+	return 0;
+    }
+
     // Sanity check
     DW1000_ASSERT(E_IS_STATE(e, IDLE),
 		  "transmit started from idle");
@@ -1657,6 +1697,10 @@ int dw1000_emulation_send(struct dw1000_emulation *e) {
     if (!delayed) {
 	e->tx_rawst = 0;
 	E_REG_IC_WRITE40_KEY(e, sys_status, SYS_STATUS);
+	/* The flags the enable cleared may have held the line up: settle
+	 * IRQS now, as the chip would, so that this send's completion is a
+	 * rising edge of its own. */
+	(void)e_irq_update(e);
 	pthread_mutex_unlock(&e->mutex);
 	return e_tx_engage(e);
     }
@@ -1866,6 +1910,28 @@ void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
      */
     if (reg == DW1000_REG_SYS_STATUS)
 	e_status_derived(e);
+
+    /* SYS_STATE is the model's own state, spelled the way the chip was
+     * seen to spell it. User Manual 2.12 documents none of it (register
+     * file 0x19 is reserved there): the values are ruby-dw1000's bench,
+     * 0x00040001 while a frame goes out, 0x4x050500 with the receiver
+     * enabled (traffic or none), 0x00020000 while a delayed send waits
+     * for DX_TIME, 0x00010000 idle, and PMSC 3 for the first
+     * microseconds after an enable; so PMSC_STATE in bits 16..20 is 4
+     * in TX, 5 in RX, 2 in TX_WAIT, 1 idle, TX_STATE in bits 0..3 is 1
+     * in TX, RX_STATE in bits 8..12 is 5 in RX. RX_WAIT 3 and INIT 0
+     * are this model's own, by analogy.
+     */
+    if (reg == DW1000_REG_SYS_STATE) {
+	uint32_t pmsc = 0, txs = 0, rxs = 0;
+	if      (E_IS_STATE(e, IDLE))    pmsc = 1;
+	else if (E_IS_STATE(e, TX_WAIT)) pmsc = 2;
+	else if (E_IS_STATE(e, RX_WAIT)) pmsc = 3;
+	else if (E_IS_STATE(e, TX))    { pmsc = 4; txs = 1; }
+	else if (E_IS_STATE(e, RX))    { pmsc = 5; rxs = 5; }
+	E_REG_IC_WRITE40_KEY(e, (uint64_t)((pmsc << 16) | (rxs << 8) | txs),
+			     SYS_STATE);
+    }
 
     E_REG_HOST_READ_IDX(e, reg, offset, data, datalen );
     pthread_mutex_unlock(&e->mutex);
