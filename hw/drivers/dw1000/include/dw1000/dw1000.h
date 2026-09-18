@@ -482,7 +482,9 @@ typedef struct dw1000_config {
      * completion has the receiver enabled at the end of the pass, once
      * the completion is booked. Set, it is enabled where the frame is
      * handled, before the read-out, as the driver did before 2084ca2.
-     * For INVESTIGATE.md entry 1 only; leave clear.
+     * A bench knob, settled 2026-09-18 (DW1000.md, "A buffer toggle
+     * that moves the host off the chip's buffer under a live
+     * receiver"); leave clear.
      */
     uint8_t    rx_enable_early:1;
 #endif
@@ -646,7 +648,7 @@ struct dw1000 {
     uint32_t tx_airtime;    // Airtime of the send in progress, ticks
     uint8_t  tx_delayed;    // The send in progress waits for DX_TIME
 #if DW1000_WITH_DEBUG
-    uint32_t dbg_pass[3];   // Bench knob, INVESTIGATE.md 1b: SYS_STATUS
+    uint32_t dbg_pass[3];   // Bench trace (DW1000_DUPLEX_TRACE): SYS_STATUS
                             //  as dw1000_process_events() read it on
                             //  entry, after the double buffered clear,
                             //  after the HRBPT toggle (0: not reached)

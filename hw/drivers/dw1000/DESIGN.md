@@ -179,6 +179,62 @@ is `static inline` in `dw1000.c` and tagged `@internal`, like every
 `_dw1000_` helper here, so an application cannot reach it; what it
 reports arrives through `dw1000_rx_get_power_estimate()`.
 
+### What the error and timeout branches drop
+
+Both branches drop one mask, `rx_drop`, built once above them:
+`ALL_RX_ERR` and `ALL_RX_TO` always, and the good-frame bits
+(`ALL_RX_GOOD`) only when no good frame was reported in the same pass.
+The `TRXOFF` and the UM 4.1.6 receiver reset are unchanged by that
+condition: they still happen unless a transmission is in flight, in
+which case the status is dropped without the `TRXOFF` and the reset is
+owed to `dw1000_rx_start()`. The reset after an error is a requirement
+of the manual, not a matter of what the pass saw.
+
+Once the reset is applied, and before the callback, the receiver goes
+back on when the policy wants it (`rx_keep_on` and a listen asked for),
+through the same `_dw1000_rx_start()` the end of the pass would use:
+the end of the pass is only a few register accesses later, but every
+microsecond the receiver is down after an error is a preamble missed,
+and the sync inside the start keeps whatever was completed into the
+other buffer meanwhile. Not over a send in flight, whose completion's
+pass brings the receiver back. A host without the policy still finds
+the receiver down in `rx_error` and re-arms it there, as before.
+
+The condition is the double buffer's. When the `RXFCG` branch of the
+same pass has run it has already cleared the good-frame bits,
+re-enabled the receiver and toggled `HRBPT`, so the swinging bits read
+in the error branch are the *next* buffer's, and a frame that landed
+there while `rx_ok` ran carries an `RXFCG` no branch has reported.
+Written over, it is gone: `_dw1000_txrx_off()`'s own
+`_dw1000_rx_sync_dblbuff()`, whose guard is exactly a frame the host
+has not been told about, then reads the latch the clear has just
+removed, issues `HRBPT` and hands that buffer back to the chip unread.
+One frame lost with no callback and no counter.
+
+Reaching it takes `RXAUTR` set. With the bit clear the receiver is idle
+after a good frame and after an error alike, so no error can stand
+beside an `RXFCG` in one snapshot; the bit is kept clear for senders
+and set by the raw receiving roles, which is why 43 000 traced duplex
+passes never showed the case. The reproduction is deterministic
+in the emulation instead: `tests/emulation/dblbuff.c`,
+`step_error_beside_a_good_frame`, delivers a good frame, then one
+failed in its PHY header through `dw1000_emulation_fail_next_frame()`,
+then a third from inside `rx_ok`, and asks that the third still be
+reported. A second step, `step_receiver_back_before_rx_error`, runs
+the same word with the policy on and asks that `rx_error` already
+finds the receiver listening (`PMSC_STATE` 5) with a fourth frame
+complete, and that the two passes after it report the third and the
+fourth in order.
+
+The rule both of these obey, and the one the receiver-enable placement
+was measuring without knowing it (`DW1000.md`, "A buffer toggle that
+moves the host off the chip's buffer under a live receiver"): never
+toggle `HRBPT` off the chip's buffer with the receiver enabled, and let
+every `RXENAB` after a toggle go through `_dw1000_rx_sync_dblbuff()`.
+The end-of-pass enable is the driver's because it does; an enable
+written before the toggle skips it, and the pass that did that lost the
+next frame unread and the one after to an overrun.
+
 ### Overrun recovery
 
 A third frame arriving while both buffers are held is an overrun.

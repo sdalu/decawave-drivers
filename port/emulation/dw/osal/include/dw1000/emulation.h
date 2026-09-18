@@ -70,6 +70,23 @@ void dw1000_emulation_reset(struct dw1000_emulation *e);
 void dw1000_emulation_drop_next_start(struct dw1000_emulation *e);
 
 /**
+ * Fail the next frame delivered to the model in its PHY header, as the
+ * chip does when the header does not decode (UM 4.3.2, 4.3.3, 7.2.17):
+ * RXPRD, RXSFDD, RXPHD and RXPHE are raised and none of RXDFR, RXFCG
+ * and RXFCE, ICRBP stays where it is and the receive buffer keeps what
+ * it held; with RXAUTR set the receiver goes back to hunting preamble,
+ * with it clear it goes idle. One frame only; the one after it is
+ * received as usual.
+ *
+ * None of those four bits is part of the double buffered swinging set,
+ * so the error stands in the status word whichever buffer the host is
+ * on. For a test of a receive error read in the same word as a good
+ * frame's RXFCG, which the model's own bad-FCS error cannot produce,
+ * RXFCE swinging with RXFCG.
+ */
+void dw1000_emulation_fail_next_frame(struct dw1000_emulation *e);
+
+/**
  * Stop the model's own thread.
  *
  * The model runs a thread to meet the times a host programs into DX_TIME

@@ -173,12 +173,15 @@ double buffered receive the receiver is not re-enabled on top of the
 transmission; the completion's pass brings it back. A good frame found
 beside the send's own completion, in one status word, is read out with
 the receiver off and the receiver enabled at the end of that pass, once
-the completion is booked. Measured: an enable fifty microseconds or more
-after the end of a frame is honoured every time; the pass can write one
-within a few microseconds of it, and with the enable there rpi-d lost
-about one frame in fifty over two soaks, none with it at the end of the
-pass. The manual says nothing of that instant, and whether it is the
-cause is not established; the placement rests on the soaks.
+the completion is booked, through `dw1000_rx_start()` and the buffer
+pointer sync it runs first. That sync is why: before the stale frame was
+told apart (`222e9f8`), an enable written inside that pass followed by
+the pass's own `HRBPT` left the host pointer off the chip's buffer under
+a live receiver, and rpi-d lost about one frame in fifty that way, none
+with the enable at the end of the pass (`DW1000.md`, "A buffer toggle
+that moves the host off the chip's buffer under a live receiver"). The
+chip's enable timing was not involved; since that fix the two placements
+lose alike, and the end-of-pass one stays.
 
 The host's side of that is nothing. `dw1000_rx_start()` over a send on
 the air is recorded and honoured at the completion, writing nothing to

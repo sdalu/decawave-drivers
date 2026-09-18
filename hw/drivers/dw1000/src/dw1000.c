@@ -2000,14 +2000,22 @@ bool dw1000_process_events(dw1000_t *dw) {
 		// Beside the send's own completion: the frame is taken for
 		// the response the send may have expected (the stale frame
 		// and the response cannot be told apart here), and the
-		// receiver is not enabled now, within microseconds of the
-		// transmitter stopping, but at the end of this pass, once the
-		// completion is booked and its flags cleared. Measured: an
-		// enable 50 us or more after the end of a frame is honoured
-		// every time; with one written here, rpi-d lost about one frame
-		// in fifty over two soaks, and none with it at the end of the
-		// pass. Whether the instant is the cause is not established.
-		// The read-out below runs with the receiver off, this once.
+		// receiver is not enabled now but at the end of this pass,
+		// once the completion is booked and its flags cleared, through
+		// _dw1000_rx_start() and the buffer pointer sync it runs
+		// first. That sync is the point: an enable written here and
+		// a toggle after it leave the host pointer off the chip's
+		// buffer under a live receiver, and the pass that does that
+		// loses the next frame unread and the one after to an
+		// overrun. Before the stale frame was told apart above, the
+		// stale pass toggled exactly so, and rpi-d lost about one
+		// frame in fifty with the enable written here against none
+		// at the end of the pass (doc/bench/2026-09-18-hunt/
+		// hunt-placement.md, 2026-09-18); the chip's enable timing was
+		// not involved, and since that fix the two placements lose
+		// alike. rx_enable_early is kept as the bench knob that
+		// measured it. The read-out below runs with the receiver off,
+		// this once.
 		dw->state       = DW1000_STATE_TX;
 		dw->rx_deferred = 1;
 	    } else if (! _dw1000_tx_inflight(dw, status)) {
@@ -2212,6 +2220,23 @@ bool dw1000_process_events(dw1000_t *dw) {
     }
 
     
+    // What the timeout and error branches below drop, on top of their own
+    // bits: the frame-ready flags a failed frame leaves behind, unless a
+    // good frame was reported in this same pass. That branch has cleared
+    // them already, re-enabled the receiver and toggled HRBPT, so the
+    // swinging bits now read here are the *next* buffer's, and a frame
+    // that landed there while rx_ok ran carries an RXFCG no branch has
+    // seen: written over, it is gone, and the sync inside the off would
+    // then find nothing latched and hand the buffer back to the chip
+    // unread. Reproduced in port/emulation (tests/emulation/dblbuff.c,
+    // step_error_beside_a_good_frame, 2026-09-18): RXAUTR set, RXPHE
+    // beside RXFCG in one snapshot, the frame delivered during rx_ok
+    // lost with no callback for it.
+    const uint32_t rx_drop = DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
+			     DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
+			     ((status & DW1000_FLG_SYS_STATUS_RXFCG)
+			      ? 0 : DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+
     // Handle frame reception/preamble detect timeout events
     if (status & DW1000_MSK_SYS_STATUS_ALL_RX_TO) {
 	// No plain status write here: _dw1000_txrx_off() below clears a
@@ -2231,14 +2256,10 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// the frame on the air with no TXFRS ever raised for it (UM
 	// §7.2.15), and the reset below is owed to dw1000_rx_start()
 	if (_dw1000_tx_inflight(dw, status)) {
-	    _dw1000_rx_drop_status(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
-				       DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
-				       DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+	    _dw1000_rx_drop_status(dw, rx_drop);
 	    dw->rx_reset_due = 1;
 	} else {
-	    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
-				 DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
-				 DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+	    _dw1000_txrx_off(dw, rx_drop);
 	}
 
 	// HOTFIX: UM §4.1.6: RX Message timestamp
@@ -2248,6 +2269,17 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//    (It is not necessary to do this for RXPTO and RXSFDTO)"
         if (! _dw1000_tx_inflight(dw, status))
             _dw1000_rx_reset(dw);
+
+	// The receiver back on here, once the reset is applied and before
+	// the callback, when the policy wants it: the end of the pass
+	// would do the same a few register accesses later, and every
+	// microsecond the receiver is down after an error is a preamble
+	// missed. Not over a send in flight, whose completion's pass does
+	// it; the sync inside the start keeps a frame completed into the
+	// other buffer while the good-frame branch of this pass ran.
+	if (! _dw1000_tx_inflight(dw, status) &&
+	    cfg->rx_keep_on && dw->rx_wanted)
+	    _dw1000_rx_start(dw, DW1000_RX_IMMEDIATE, false);
 
         // Call the corresponding callback if present
         if (cfg->cb.rx_timeout) {
@@ -2277,14 +2309,10 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// the frame on the air with no TXFRS ever raised for it (UM
 	// §7.2.15), and the reset below is owed to dw1000_rx_start()
 	if (_dw1000_tx_inflight(dw, status)) {
-	    _dw1000_rx_drop_status(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
-				       DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
-				       DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+	    _dw1000_rx_drop_status(dw, rx_drop);
 	    dw->rx_reset_due = 1;
 	} else {
-	    _dw1000_txrx_off(dw, DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
-				 DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
-				 DW1000_MSK_SYS_STATUS_ALL_RX_GOOD);
+	    _dw1000_txrx_off(dw, rx_drop);
 	}
 
 	// HOTFIX: UM §4.1.6: RX Message timestamp
@@ -2294,6 +2322,17 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//    (It is not necessary to do this for RXPTO and RXSFDTO)"
         if (! _dw1000_tx_inflight(dw, status))
             _dw1000_rx_reset(dw);
+
+	// The receiver back on here, once the reset is applied and before
+	// the callback, when the policy wants it: the end of the pass
+	// would do the same a few register accesses later, and every
+	// microsecond the receiver is down after an error is a preamble
+	// missed. Not over a send in flight, whose completion's pass does
+	// it; the sync inside the start keeps a frame completed into the
+	// other buffer while the good-frame branch of this pass ran.
+	if (! _dw1000_tx_inflight(dw, status) &&
+	    cfg->rx_keep_on && dw->rx_wanted)
+	    _dw1000_rx_start(dw, DW1000_RX_IMMEDIATE, false);
 
         // Call the corresponding callback if present
         if (cfg->cb.rx_error) {

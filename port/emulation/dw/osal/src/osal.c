@@ -82,6 +82,7 @@ struct e_deadline {
 
 struct dw1000_emulation {
     bool drop_next_start;               /* dw1000_emulation_drop_next_start() */
+    bool fail_next_frame;               /* dw1000_emulation_fail_next_frame() */
     pthread_mutex_t	mutex;
     rsvc_t 		*rsvc;
     void               (*line_cb)(int line, void *args);
@@ -1142,6 +1143,12 @@ void dw1000_emulation_drop_next_start(struct dw1000_emulation *e) {
     pthread_mutex_unlock(&e->mutex);
 }
 
+void dw1000_emulation_fail_next_frame(struct dw1000_emulation *e) {
+    pthread_mutex_lock(&e->mutex);
+    e->fail_next_frame = true;
+    pthread_mutex_unlock(&e->mutex);
+}
+
 void dw1000_emulation_reset(struct dw1000_emulation *e) {
     /* Under the mutex, like every other writer of this state. A host can
      * drive the reset line at any moment, including while the rsvc
@@ -2008,6 +2015,55 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	 * timeout, which UM 7.2.40.9 ends at preamble detection.
 	 */
 	e_deadline_disarm(e, E_DEADLINE_RXTO);
+
+	/* Asked for by dw1000_emulation_fail_next_frame(): this one ends
+	 * in the PHY header.
+	 *
+	 * UM 4.3.3 and 7.2.17: the preamble was found, the SFD was found
+	 * and the PHY header was decoded and rejected, so RXPRD, RXSFDD
+	 * and RXPHD stand beside RXPHE and nothing past the header ever
+	 * happened -- no LDE run, no RXDFR, no RXFCG, and no RXFCE
+	 * either, the FCS of a frame whose length and rate were never
+	 * read being nothing the chip can check.
+	 *
+	 * Nothing is written to the receive registers and ICRBP does not
+	 * move (UM 4.3.2 moves it for "a new frame with good CRC" and
+	 * nothing else), so the buffer keeps what it held. The overrun of
+	 * UM 4.3.5 is below rather than above this for the same reason: a
+	 * frame that fails in its header never asks for a buffer.
+	 *
+	 * All four bits are outside the swinging set of UM table 7 -- the
+	 * passthrough mask above carries them -- so they land in both
+	 * register sets and a host reads RXPHE whichever buffer it is on.
+	 * That is the point of the knob: it puts a receive error in the
+	 * same status word as a good frame's RXFCG, which no error the
+	 * model raises on its own can do, RXFCE being part of the very
+	 * set RXFCG swings with.
+	 */
+	if (e->fail_next_frame) {
+	    e->fail_next_frame = false;
+	    EMU_WARNING("frame failed in its PHY header on request (RXPHE)");
+
+	    uint32_t phe_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
+	    DW1000_SET_FLG(phe_status, SYS_STATUS_RXPRD);
+	    DW1000_SET_FLG(phe_status, SYS_STATUS_RXSFDD);
+	    DW1000_SET_FLG(phe_status, SYS_STATUS_RXPHD);
+	    DW1000_SET_FLG(phe_status, SYS_STATUS_RXPHE);
+	    E_REG_IC_WRITE32_KEY(e, phe_status, SYS_STATUS);
+
+	    /* UM 7.2.6: RXAUTR re-enables the receiver after a reception
+	     * failure in both buffering modes, and this is a failure.
+	     * Without it the chip goes idle and waits for the host.
+	     */
+	    if (e_rx_auto_reenable(e, false)) {
+		e_rx_arm_timeouts(e, e_clock_full());
+	    } else {
+		E_SET_STATE(e, IDLE);
+	    }
+
+	    edge = e_irq_update(e);
+	    goto done;
+	}
 
 	/* Overrun. UM 4.3.5: the IC has filled one buffer, moved to the
 	 * other and filled that too, and come back to a buffer the host
