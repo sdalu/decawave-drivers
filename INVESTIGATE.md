@@ -7,9 +7,10 @@ established; `AUDIT.md` what was checked against the manual. This
 file holds what neither can claim yet, so that the next session
 starts from the last one's evidence rather than from the symptom.
 
-An entry leaves this file when its experiment has been run, whichever
-way it went: a settled cause goes to `DW1000.md`, a refuted one stays
-there under "Unexplained" with the refutation attached.
+An entry leaves this file when its experiment has been run, or when
+evidence already collected settles it, whichever way it went: a
+settled cause goes to `DW1000.md`, a refuted one stays there under
+"Unexplained" with the refutation attached.
 
 ## The bench's own numbers, for reading the rest
 
@@ -38,7 +39,7 @@ stronger for a second.
 
 ## Settled on 2026-09-18
 
-Five entries left this file that day; their answers are in
+Six entries left this file that day; their answers are in
 `DW1000.md`:
 
 - the 2 of 50 on rpi-c, and the link that seemed to favour rpi-d: the
@@ -54,48 +55,21 @@ Five entries left this file that day; their answers are in
   swinging status bits are the chip's live flags, not the buffer's;
   the driver now tells the stale frame apart and 0 of 48 runs
   duplicate against 13 and 11 before ("With the buffer pointers
-  aligned").
+  aligned");
+- the frame in a hundred lost by the receiver enable sitting inside
+  the event pass, entry 1 of this file: not the chip's enable timing
+  but the pre-`222e9f8` stale pass's `HRBPT` toggle under a receiver
+  the early enable had already brought up, which skipped the
+  buffer-pointer sync the end-of-pass enable runs first; the driver
+  keeps the end-of-pass placement and keeps `cfg->rx_enable_early` as
+  a `DW1000_WITH_DEBUG` bench knob, and the firmware experiment that
+  was owed is not needed ("A buffer toggle that moves the host off the
+  chip's buffer under a live receiver"; the trace analysis that
+  settled it is `doc/bench/2026-09-18-hunt/hunt-placement.md`).
 
-## 1. One frame in fifty less, by where the receiver enable sits
-
-**Seen.** With the receiver enabled inside the event pass that
-carries both a received frame and the host's own send completion,
-rpi-d received 47 or fewer of 50 in five runs of seventeen; with the
-enable moved to the end of that pass, none of twelve below 48
-(2026-09-17). The statistical experiment below was run on 2026-09-18:
-288 duplex runs, the placement alternated run by run (a bench knob,
-`cfg->rx_enable_early`, under `DW1000_WITH_DEBUG`), every frame's arrival traced so that the
-harness's start skew could be taken out (`DW1000.md`, "The bench").
-Scattered losses, the skew removed:
-
-| | inside the pass | end of the pass |
-| :-- | :-- | :-- |
-| rpi-d | 64 of 4557 frames | 28 of 4520 |
-| rpi-c | 72 of 4672 | 49 of 4675 |
-
-z = 3.7 on rpi-d, 2.1 on rpi-c: the effect is real, about one frame
-in a hundred, and the driver keeps the end-of-pass placement. Not
-chance, then; the mechanism is still not established. One thing more
-was learnt the same day: those runs paced the two bursts from the end
-of each send, so the frames drifted through collision a few times a
-run; with the bursts on an absolute schedule and half a gap apart, 24
-runs lost nothing with either placement (`DW1000.md`, "The bench").
-So the frame the in-pass enable loses is one that arrives on top of, or
-within microseconds of, this node's own send, which narrows where the
-mechanistic experiment should look.
-
-**Ruled out.** That the enable itself goes unheard (300 of 300 at
-fifty microseconds and beyond, `DW1000.md`); chance.
-
-**Not ruled out.** An enable written *inside* fifty microseconds of
-the frame end, which the pass reaches when the completion is already
-in the status word it has just read; the Pi cannot place a write
-there on purpose.
-
-**Next.** The mechanistic experiment only: a host fast enough to write
-`RXENAB` at a chosen offset from `TXFRS`, sweeping 0 to 50 µs, with a
-scope on the IRQ line or the redskin firmware in place of the Pi.
-Cost: firmware work; not a ruby-dw1000 job.
+The entries below keep the numbers they were given, so that the
+references to them elsewhere in the tree still point where they did;
+the numbering starts at 2 because entry 1 is settled above.
 
 ## 2. The counter gains 2.5 to 3.4 ppm of the lead at a delayed send, and not during its wait
 

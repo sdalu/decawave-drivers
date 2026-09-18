@@ -1,0 +1,456 @@
+diff --git a/port/emulation/dw/osal/include/dw1000/emulation.h b/port/emulation/dw/osal/include/dw1000/emulation.h
+index 019ddac..c34c1b8 100644
+--- a/port/emulation/dw/osal/include/dw1000/emulation.h
++++ b/port/emulation/dw/osal/include/dw1000/emulation.h
+@@ -69,6 +69,23 @@ void dw1000_emulation_reset(struct dw1000_emulation *e);
+  */
+ void dw1000_emulation_drop_next_start(struct dw1000_emulation *e);
+ 
++/**
++ * Fail the next frame delivered to the model in its PHY header, as the
++ * chip does when the header does not decode (UM 4.3.2, 4.3.3, 7.2.17):
++ * RXPRD, RXSFDD, RXPHD and RXPHE are raised and none of RXDFR, RXFCG
++ * and RXFCE, ICRBP stays where it is and the receive buffer keeps what
++ * it held; with RXAUTR set the receiver goes back to hunting preamble,
++ * with it clear it goes idle. One frame only; the one after it is
++ * received as usual.
++ *
++ * None of those four bits is part of the double buffered swinging set,
++ * so the error stands in the status word whichever buffer the host is
++ * on. For a test of a receive error read in the same word as a good
++ * frame's RXFCG, which the model's own bad-FCS error cannot produce,
++ * RXFCE swinging with RXFCG.
++ */
++void dw1000_emulation_fail_next_frame(struct dw1000_emulation *e);
++
+ /**
+  * Stop the model's own thread.
+  *
+diff --git a/port/emulation/dw/osal/src/osal.c b/port/emulation/dw/osal/src/osal.c
+index 63f6083..9bbf728 100644
+--- a/port/emulation/dw/osal/src/osal.c
++++ b/port/emulation/dw/osal/src/osal.c
+@@ -82,6 +82,7 @@ struct e_deadline {
+ 
+ struct dw1000_emulation {
+     bool drop_next_start;               /* dw1000_emulation_drop_next_start() */
++    bool fail_next_frame;               /* dw1000_emulation_fail_next_frame() */
+     pthread_mutex_t	mutex;
+     rsvc_t 		*rsvc;
+     void               (*line_cb)(int line, void *args);
+@@ -1142,6 +1143,12 @@ void dw1000_emulation_drop_next_start(struct dw1000_emulation *e) {
+     pthread_mutex_unlock(&e->mutex);
+ }
+ 
++void dw1000_emulation_fail_next_frame(struct dw1000_emulation *e) {
++    pthread_mutex_lock(&e->mutex);
++    e->fail_next_frame = true;
++    pthread_mutex_unlock(&e->mutex);
++}
++
+ void dw1000_emulation_reset(struct dw1000_emulation *e) {
+     /* Under the mutex, like every other writer of this state. A host can
+      * drive the reset line at any moment, including while the rsvc
+@@ -2009,6 +2016,55 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
+ 	 */
+ 	e_deadline_disarm(e, E_DEADLINE_RXTO);
+ 
++	/* Asked for by dw1000_emulation_fail_next_frame(): this one ends
++	 * in the PHY header.
++	 *
++	 * UM 4.3.3 and 7.2.17: the preamble was found, the SFD was found
++	 * and the PHY header was decoded and rejected, so RXPRD, RXSFDD
++	 * and RXPHD stand beside RXPHE and nothing past the header ever
++	 * happened -- no LDE run, no RXDFR, no RXFCG, and no RXFCE
++	 * either, the FCS of a frame whose length and rate were never
++	 * read being nothing the chip can check.
++	 *
++	 * Nothing is written to the receive registers and ICRBP does not
++	 * move (UM 4.3.2 moves it for "a new frame with good CRC" and
++	 * nothing else), so the buffer keeps what it held. The overrun of
++	 * UM 4.3.5 is below rather than above this for the same reason: a
++	 * frame that fails in its header never asks for a buffer.
++	 *
++	 * All four bits are outside the swinging set of UM table 7 -- the
++	 * passthrough mask above carries them -- so they land in both
++	 * register sets and a host reads RXPHE whichever buffer it is on.
++	 * That is the point of the knob: it puts a receive error in the
++	 * same status word as a good frame's RXFCG, which no error the
++	 * model raises on its own can do, RXFCE being part of the very
++	 * set RXFCG swings with.
++	 */
++	if (e->fail_next_frame) {
++	    e->fail_next_frame = false;
++	    EMU_WARNING("frame failed in its PHY header on request (RXPHE)");
++
++	    uint32_t phe_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
++	    DW1000_SET_FLG(phe_status, SYS_STATUS_RXPRD);
++	    DW1000_SET_FLG(phe_status, SYS_STATUS_RXSFDD);
++	    DW1000_SET_FLG(phe_status, SYS_STATUS_RXPHD);
++	    DW1000_SET_FLG(phe_status, SYS_STATUS_RXPHE);
++	    E_REG_IC_WRITE32_KEY(e, phe_status, SYS_STATUS);
++
++	    /* UM 7.2.6: RXAUTR re-enables the receiver after a reception
++	     * failure in both buffering modes, and this is a failure.
++	     * Without it the chip goes idle and waits for the host.
++	     */
++	    if (e_rx_auto_reenable(e, false)) {
++		e_rx_arm_timeouts(e, e_clock_full());
++	    } else {
++		E_SET_STATE(e, IDLE);
++	    }
++
++	    edge = e_irq_update(e);
++	    goto done;
++	}
++
+ 	/* Overrun. UM 4.3.5: the IC has filled one buffer, moved to the
+ 	 * other and filled that too, and come back to a buffer the host
+ 	 * has still not released with HRBPT. The frame in progress is
+diff --git a/tests/emulation/dblbuff.c b/tests/emulation/dblbuff.c
+index 5a34b2d..70ccbe1 100644
+--- a/tests/emulation/dblbuff.c
++++ b/tests/emulation/dblbuff.c
+@@ -426,10 +426,151 @@ static struct {
+ #endif
+ } rx_probe;
+ 
++/* What step_error_beside_a_good_frame() records.
++ *
++ * Separate from rx_probe: that one is about a frame held across
++ * dw1000_txrx_off(), this one about what the driver's pass does with a
++ * frame that lands while rx_ok is running. Both ride the same rx_ok
++ * callback, which the config has to carry for every step.
++ */
++static struct {
++    bool     active;
++    bool     pass2;             /* which pass is running now          */
++    unsigned rx_ok;             /* rx_ok callbacks, over both passes  */
++    unsigned rx_error;          /* rx_error callbacks, likewise       */
++    unsigned rx_ok_2;           /* ... and how many in the second     */
++    unsigned rx_error_2;
++    int      id_ok;             /* frame the first rx_ok was handed   */
++    int      id_ok_2;           /* ... and the one in the second pass */
++    int      host_in, ic_in;    /* the pointers, entering rx_ok       */
++    bool     third_taken;       /* the model completed the third frame */
++    uint32_t st_cb_entry;       /* SYS_STATUS entering rx_ok          */
++    uint32_t st_cb_third;       /* ... once the third frame was in    */
++    uint32_t st_error;          /* the word rx_error was handed       */
++} err_probe;
++
++/* The medium, reachable from inside a callback: the third frame is asked
++ * for there rather than by the step, which is the whole point.
++ */
++static struct stub *g_stub;
++
++/* Bounded waits. A step that hangs tells nobody anything, so each of
++ * these gives up after two seconds and its caller turns that into a
++ * REASON naming what was waited for.
++ */
++#define WAIT_STEPS      1000
++#define WAIT_SLEEP_US   2000            /* 1000 x 2 ms = 2 s */
++
++/* Until every bit of `bits` stands in SYS_STATUS. The word actually read
++ * is handed back either way: on a timeout it is the evidence.
++ */
++static bool
++wait_for_status(dw1000_t *dw, uint32_t bits, uint32_t *got)
++{
++    for (int i = 0 ; i < WAIT_STEPS ; i++) {
++	uint32_t st = sys_status(dw);
++	if ((st & bits) == bits) {
++	    *got = st;
++	    return true;
++	}
++	usleep(WAIT_SLEEP_US);
++    }
++    *got = sys_status(dw);
++    return false;
++}
++
++/* Until the IC has moved off the buffer it was on, which is how the
++ * model says it has taken a frame and written it away.
++ */
++static bool
++wait_for_ic_move(dw1000_t *dw, int ic_before)
++{
++    for (int i = 0 ; i < WAIT_STEPS ; i++) {
++	int host, ic;
++	buffer_pointers(dw, &host, &ic);
++	if (ic != ic_before)
++	    return true;
++	usleep(WAIT_SLEEP_US);
++    }
++    return false;
++}
++
++/* Ask the medium for a burst without going through dw1000_rx_start().
++ *
++ * deliver() is the way a step does it; this is the way a callback does
++ * it. Inside rx_ok the driver is part way through a pass, has already
++ * re-enabled the receiver and holds the buffer being read out, and
++ * dw1000_rx_start() would apply the driver's own receive policy on top
++ * of that. RXENAB written straight into SYS_CTRL is what hrbpt() above
++ * does for HRBPT: the one register write the chip needs, and the model
++ * asks the medium for frames on every receiver enable, which is what
++ * makes the burst arrive.
++ */
++static void
++deliver_from_callback(dw1000_t *dw, struct stub *s, unsigned n)
++{
++    pthread_mutex_lock(&s->lock);
++    s->burst = n;
++    pthread_mutex_unlock(&s->lock);
++
++    _dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
++			DW1000_FLG_SYS_CTRL_RXENAB);
++}
++
++/* rx_ok, for step_error_beside_a_good_frame().
++ *
++ * The first call is the one that matters: the driver has re-enabled the
++ * receiver and is holding the first frame's buffer for this read-out, so
++ * a third frame asked for here lands in the other buffer while the
++ * callback runs, which is step 3 of the finding's trigger.
++ */
++static void
++err_probe_rx_ok(dw1000_t *dw, uint32_t status)
++{
++    err_probe.rx_ok++;
++    if (err_probe.pass2) {
++	err_probe.rx_ok_2++;
++	err_probe.id_ok_2 = buffered_frame_id(dw);
++	return;
++    }
++    if (err_probe.rx_ok > 1)
++	return;
++
++    err_probe.st_cb_entry = status;
++    err_probe.id_ok       = buffered_frame_id(dw);
++    buffer_pointers(dw, &err_probe.host_in, &err_probe.ic_in);
++
++    deliver_from_callback(dw, g_stub, 1);
++    err_probe.third_taken = wait_for_ic_move(dw, err_probe.ic_in);
++    err_probe.st_cb_third = sys_status(dw);
++}
++
++static void
++cb_rx_error_probe(dw1000_t *dw, uint32_t status)
++{
++    (void)dw;
++
++    if (! err_probe.active)
++	return;
++
++    err_probe.rx_error++;
++    if (err_probe.pass2)
++	err_probe.rx_error_2++;
++    else
++	err_probe.st_error = status;
++}
++
+ static void
+ cb_rx_probe(dw1000_t *dw, uint32_t status, size_t len, bool rng)
+ {
+-    (void)status; (void)len; (void)rng;
++    (void)len; (void)rng;
++
++    if (err_probe.active) {
++	err_probe_rx_ok(dw, status);
++	return;
++    }
++
++    (void)status;
+ 
+     if (! rx_probe.active)
+ 	return;
+@@ -496,6 +637,11 @@ cb_rx_probe(dw1000_t *dw, uint32_t status, size_t len, bool rng)
+ static const dw1000_config_t *g_config;
+ static struct dw1000_radio    g_radio;
+ 
++/* The model itself, for the one step that reaches past the registers to
++ * ask it for a frame it would never produce on its own.
++ */
++static struct dw1000_emulation *g_emulation;
++
+ static const char *
+ restart(dw1000_t *dw)
+ {
+@@ -1018,6 +1164,147 @@ step_rx_start_keeps_a_queued_frame(dw1000_t *dw, struct stub *s)
+     return NULL;
+ }
+ 
++/* A receive error standing in the same status word as a good frame.
++ *
++ * doc/bench/2026-09-18-hunt/hunt-driver.md, finding 4: the receive bits
++ * that are NOT in the double buffered swinging set (RXPHE here, and
++ * RXRFSL, RXSFDTO, AFFREJ, LDEERR, RXRFTO, RXPTO with it) can stand in
++ * the same SYS_STATUS word as a good frame's RXFCG, and
++ * dw1000_process_events() runs its branches over one snapshot in a fixed
++ * order. The RXFCG branch goes first: it re-enables the receiver,
++ * reports the frame and toggles HRBPT -- after which the other buffer's
++ * swinging bits, a second frame's RXFCG included, are what the host
++ * reads. The error branch then runs on the same snapshot: TRXOFF, and
++ * ALL_RX_GOOD written into SYS_STATUS, which clears that second frame's
++ * RXFCG and RXDFR although no branch has reported it, after which
++ * _dw1000_txrx_off()'s own _dw1000_rx_sync_dblbuff() finds nothing left
++ * to protect and issues HRBPT, handing the buffer back. The frame is
++ * gone with no callback and no counter.
++ *
++ * Three frames make the case: one good and unreported, one that fails in
++ * its PHY header (dw1000_emulation_fail_next_frame(), the model raising
++ * no such error on its own), and a third delivered from inside rx_ok,
++ * where the receiver the branch has just re-enabled is listening. The
++ * third one is the one that must survive, and this step asks only that
++ * it is still reported somehow: visible in SYS_STATUS when the pass
++ * ends, or handed to rx_ok by the pass after it.
++ *
++ * rxauto matters and is why the finding's own trigger is not quite
++ * reproducible as written: with RXAUTR clear the receiver is idle once a
++ * good frame is in, so no error can arrive to stand beside its RXFCG.
++ * The config this file runs has it set, which UM 4.3.1 recommends
++ * alongside the double buffer anyway.
++ */
++static const char *
++step_error_beside_a_good_frame(dw1000_t *dw, struct stub *s)
++{
++    unsigned    first;
++    int         host, ic;
++    uint32_t    st_one, st_two, st_after;
++    const char *why;
++
++    if ((why = restart(dw)) != NULL)
++	return why;
++
++    pthread_mutex_lock(&s->lock);
++    first = s->next_id;
++    pthread_mutex_unlock(&s->lock);
++
++    memset(&err_probe, 0, sizeof(err_probe));
++    g_stub = s;
++
++    /* Frame 1: good, completed into the host's buffer, unreported. */
++    deliver(dw, s, 1);
++    if (! wait_for_status(dw, DW1000_FLG_SYS_STATUS_RXFCG, &st_one))
++	return REASON("no RXFCG for the first frame within 2 s"
++		      " (status 0x%08" PRIx32 ")", st_one);
++    printf("    status after frame 1        : 0x%08" PRIx32 "\n", st_one);
++
++    /* Frame 2: fails in its PHY header, so RXPHE joins that RXFCG. */
++    dw1000_emulation_fail_next_frame(g_emulation);
++    deliver(dw, s, 1);
++    if (! wait_for_status(dw, DW1000_FLG_SYS_STATUS_RXFCG |
++			      DW1000_FLG_SYS_STATUS_RXPHE, &st_two))
++	return REASON("RXPHE never stood beside RXFCG within 2 s"
++		      " (status 0x%08" PRIx32 "): the knob did not raise a"
++		      " PHY header error", st_two);
++    printf("    status after frame 2        : 0x%08" PRIx32 "\n", st_two);
++
++    /* The premise. Without a frame held in the other buffer -- pointers
++     * apart -- the RXFCG branch has nothing to toggle onto and this step
++     * proves nothing, whichever way it ends.
++     */
++    buffer_pointers(dw, &host, &ic);
++    if (host == ic)
++	return REASON("HSRBP and ICRBP are both %d: the good frame is not"
++		      " waiting in a buffer of its own", host);
++    if (st_two & DW1000_FLG_SYS_STATUS_RXOVRR)
++	return REASON("an overrun stands in 0x%08" PRIx32 ": that is a"
++		      " different path through the pass", st_two);
++
++    /* The pass. rx_ok asks the medium for frame 3 and waits for the
++     * model to complete it, which is the finding's step 3.
++     */
++    err_probe.active = true;
++    bool processed   = dw1000_process_events(dw);
++
++    printf("    status inside rx_ok, entry  : 0x%08" PRIx32 "\n",
++	   err_probe.st_cb_entry);
++    printf("    status inside rx_ok, frame 3: 0x%08" PRIx32 "\n",
++	   err_probe.st_cb_third);
++    printf("    status handed to rx_error   : 0x%08" PRIx32 "\n",
++	   err_probe.st_error);
++
++    st_after = sys_status(dw);
++    buffer_pointers(dw, &host, &ic);
++    printf("    status after the first pass : 0x%08" PRIx32
++	   " (HSRBP %d, ICRBP %d)\n", st_after, host, ic);
++
++    if (! processed)
++	return "dw1000_process_events() reported nothing for a word"
++	       " carrying both a good frame and a receive error";
++    if (err_probe.rx_ok == 0)
++	return "the rx_ok callback never ran for the good frame";
++    if (err_probe.id_ok != (int)first)
++	return REASON("rx_ok was handed frame %d, want %u",
++		      err_probe.id_ok, first);
++    if (err_probe.rx_error == 0)
++	return "the rx_error callback never ran for RXPHE";
++    if (! err_probe.third_taken)
++	return REASON("the model did not complete a third frame within 2 s"
++		      " of rx_ok asking for one (status 0x%08" PRIx32 "):"
++		      " nothing landed while the pass was running",
++		      err_probe.st_cb_third);
++
++    /* The pass after it. Frame 3 is still owed to the host: either it is
++     * in the status word the pass left behind, or this second pass hands
++     * it to rx_ok. Anything else and it was dropped between the two.
++     */
++    err_probe.pass2 = true;
++    dw1000_process_events(dw);
++    err_probe.active = false;
++
++    printf("    second pass                 : %u rx_ok, %u rx_error\n",
++	   err_probe.rx_ok_2, err_probe.rx_error_2);
++
++    if (st_after & DW1000_FLG_SYS_STATUS_RXFCG)
++	return NULL;                    /* still queued, still reportable */
++    if (err_probe.rx_ok_2 > 0) {
++	if (err_probe.id_ok_2 != (int)(first + 2))
++	    return REASON("the second pass reported frame %d, want %u",
++			  err_probe.id_ok_2, first + 2);
++	return NULL;
++    }
++
++    return REASON("frame %u is gone: RXFCG stood with RXPHE (0x%08" PRIx32
++		  "), the pass left 0x%08" PRIx32 " with no RXFCG and the"
++		  " pointers aligned (%d,%d), and the second pass raised"
++		  " %u rx_ok and %u rx_error",
++		  first + 2, st_two, st_after, host, ic,
++		  err_probe.rx_ok_2, err_probe.rx_error_2);
++}
++
++
+ #if DW1000_WITH_PROPRIETARY_LONG_FRAME
+ /* Errata 1.4 3.2 (RX-1): a long transmit while a frame is held.
+  *
+@@ -1165,7 +1452,7 @@ main(void)
+ 	 */
+ 	.cb.tx_done       = cb_nothing,
+ 	.cb.rx_ok         = cb_rx_probe,
+-	.cb.rx_error      = cb_nothing,
++	.cb.rx_error      = cb_rx_error_probe,
+ 	.cb.rx_timeout    = cb_nothing,
+     };
+ 
+@@ -1229,8 +1516,9 @@ main(void)
+     dw1000_rx_set_timeout(&dw, 0);
+     dw1000_rx_set_timeout_preamble(&dw, 0);
+ 
+-    g_config = &config;
+-    g_radio  = radio;
++    g_config    = &config;
++    g_radio     = radio;
++    g_emulation = emulation;
+ 
+     step("aligned at reset",        step_aligned_at_reset(&dw, &stub));
+     step("one frame moves ICRBP",   step_one_frame_moves_ic(&dw, &stub));
+@@ -1247,6 +1535,8 @@ main(void)
+                                     step_hold_survives_txrx_off(&dw, &stub));
+     step("a queued frame survives rx_start",
+                                     step_rx_start_keeps_a_queued_frame(&dw, &stub));
++    step("an error beside a good frame",
++                                    step_error_beside_a_good_frame(&dw, &stub));
+ 
+     dw1000_txrx_off(&dw);
+     /* The three steps, in the order dw1000/emulation.h insists on:
