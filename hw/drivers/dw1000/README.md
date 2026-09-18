@@ -472,10 +472,18 @@ not see it".
 
 ### `dw1000_rx_start()` syncs the buffer pointers
 
-Pass `DW1000_RX_NO_DBLBUFF_SYNC` when you are enabling the receiver under
-a frame you still hold. The driver suppresses the sync by itself for the
-window between reporting a frame and releasing it, so the ordinary paths
-are safe; the flag is for a host doing its own sequencing.
+Only when they have come apart for no reason. The sync reads the whole
+status word, and a misalignment that carries `RXFCG` or `RXDFR` is a
+frame the chip has completed into the host's buffer and nobody has
+processed, not a fault to repair: the pointers are left as they are,
+since the toggle would hand that frame back to the chip unread. A start
+over a queued frame keeps it, and the `dw1000_process_events()` that
+follows reports it.
+
+`DW1000_RX_NO_DBLBUFF_SYNC` is therefore not needed for either case the
+driver can recognise: a frame being read out is covered by `rx_held`, and
+a frame reported by the chip and not yet reported to the host by the test
+above. The flag remains for a host doing its own sequencing.
 
 ## What the driver does not do
 

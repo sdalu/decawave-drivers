@@ -1007,19 +1007,36 @@ void _dw1000_rx_sync_dblbuff(dw1000_t *dw) {
 	return;
 
     // UM §7.2.17: System Event Status Register
-    //  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS),
-    //     we will read the 1 byte at offset 3
-    //     which contains the ICRBP (31) and HSRBP (30) flags    
-    uint8_t sys_stat = _dw1000_reg_read8(dw, DW1000_REG_SYS_STATUS, 3); 
-    const bool ic   = sys_stat & (1 << (DW1000_SFT_SYS_STATUS_ICRBP - 24));
-    const bool host = sys_stat & (1 << (DW1000_SFT_SYS_STATUS_HSRBP - 24));
-    if (ic != host) {
-	// UM §7.2.15: System Control Register
-	//  => Only accessing last byte of SYS_CTRL (where is HRBPT flag)
-	//     Trigger buffer toggle by writting 1 to HRBPT
-        _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3 ,
-			  (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
-    }
+    //  => Status is a 5 bytes register (DW1000_REG_SYS_STATUS), the
+    //     first 4 of which carry ICRBP (31) and HSRBP (30), and RXFCG
+    //     (14) and RXDFR (13) below. The whole word rather than the one
+    //     byte at offset 3 that the pointers need: three more bytes on
+    //     a read already made, one SPI transaction either way.
+    const uint32_t sys_stat =
+	_dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    const bool ic   = sys_stat & DW1000_FLG_SYS_STATUS_ICRBP;
+    const bool host = sys_stat & DW1000_FLG_SYS_STATUS_HSRBP;
+    if (ic == host)
+	return;
+
+    // Nor while the chip has reported a frame the host has not been told
+    // about. With the pointers apart the swinging bits are the host
+    // buffer's latch rather than the chip's own flags (DW1000.md, "With
+    // the buffer pointers aligned, the swinging status bits are the
+    // chip's flags, not the buffer's"), so an RXFCG or RXDFR read here
+    // is a frame completed into that buffer and not yet processed:
+    // ICRBP != HSRBP is what the driver itself calls the normal state
+    // for one, not a misalignment to repair, and the toggle would hand
+    // the frame back to the chip unread, its RXFCG swinging out with it.
+    if (sys_stat & (DW1000_FLG_SYS_STATUS_RXFCG |
+		    DW1000_FLG_SYS_STATUS_RXDFR))
+	return;
+
+    // UM §7.2.15: System Control Register
+    //  => Only accessing last byte of SYS_CTRL (where is HRBPT flag)
+    //     Trigger buffer toggle by writting 1 to HRBPT
+    _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3 ,
+		       (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
 }
 
 
@@ -1788,6 +1805,18 @@ void _dw1000_rx_overrun_recover(dw1000_t *dw, uint32_t status) {
 static int _dw1000_rx_start(dw1000_t *dw, int8_t rx_mode, bool host);
 
 void _dw1000_tx_release(dw1000_t *dw) {
+    // The send is over and nobody will be told: its flags stop being
+    // this send's here, so they go with it. UM 7.2.17 has TXFRB, TXPRS,
+    // TXPHS and TXFRS "automatically cleared at the next transmitter
+    // enable", and a TXSTRT the chip drops -- into a listening receiver,
+    // or under Errata TX-1 -- is not one, so the next send would inherit
+    // them and both tests for "is this send real" read them: the TXFRS
+    // branch of dw1000_process_events() would book a completion for a
+    // frame that never left, and _dw1000_tx_dropped() would take a
+    // standing TXFRB for proof the send is on the air. AAT goes with
+    // them, as it does in that branch.
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
+			DW1000_MSK_SYS_STATUS_ALL_TX);
     _dw1000_tx_done_state(dw);          // IDLE, or the receiver WAIT4RESP put up
     dw->tx_suspect = 0;
     _dw1000_tx_clock_release(dw);
@@ -2054,7 +2083,18 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// callback may well enable the receiver again: said before it runs,
 	// so that a start it makes is what stands afterwards. Not over a
 	// send still on the air; beside its completion the chip is idle too.
-	if (! cfg->dblbuff && ! _dw1000_tx_inflight(dw, status))
+	//
+	// A send that expects a response is the exception: beside its own
+	// completion the chip is not idle at all, having put its WAIT4RESP
+	// receiver up the moment the frame ended. Left alone here, the
+	// TX_W4R is what _dw1000_tx_done_state() turns into RX_W4R in the
+	// TXFRS branch of this same pass, so dw1000_tx_is_expecting_response()
+	// answers true and the receiver reset owed under UM §4.1.6 is applied
+	// there; written over with IDLE it was neither, and the next send went
+	// into a listening receiver, where the chip drops it. (The double
+	// buffered branch above settles the same case its own way.)
+	if (! cfg->dblbuff && ! _dw1000_tx_inflight(dw, status) &&
+	    (dw->state != DW1000_STATE_TX_W4R))
 	    dw->state = DW1000_STATE_IDLE;
 
 	// Call the corresponding callback if present

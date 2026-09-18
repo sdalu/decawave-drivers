@@ -263,11 +263,18 @@ transceiver is doing.
 RX_W4R is the receiver the chip put up itself at the end of a send
 that expected a response; it is what `dw1000_tx_is_expecting_response()`
 answers from inside `tx_done`, and it turns into RX on the first good
-frame. A start recorded over a send is honoured at the end of the
-completion's pass, whatever the policy, and a host that tests for
-`DW1000_RX_ERR_BUSY` never sees it any more. `tests/emulation/timing.c`
-runs every one of its steps in both receive modes, `TIMING_DBLBUFF`
-selecting the build.
+frame. "Report, stay" holds for a good frame beside a TX_W4R in single
+buffered receive as well: that branch takes the transceiver to IDLE once
+the transmitter is off the air, but not over a send that expects a
+response, whose TX_W4R the TXFRS branch of the same pass turns into
+RX_W4R. The chip has its own receiver up by then, so a state written to
+IDLE there had `dw1000_tx_is_expecting_response()` answering false, left
+an owed receiver reset unapplied, and cost the next send, whose start
+went into a listening receiver. A start recorded over a send is honoured
+at the end of the completion's pass, whatever the policy, and a host
+that tests for `DW1000_RX_ERR_BUSY` never sees it any more.
+`tests/emulation/timing.c` runs every one of its steps in both receive
+modes, `TIMING_DBLBUFF` selecting the build.
 
 ## The receiver policy, and the send the chip never began
 

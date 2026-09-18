@@ -1701,10 +1701,19 @@ dw1000_tx_clear_status_done(dw1000_t *dw)
     // every send after its first refused.
     _dw1000_tx_done_state(dw);
 
-    // Trigger clearing of TX frame sent event by setting it 1
+    // Trigger clearing of the TX events by setting them to 1
     // UM §7.2.17: System Event Status Register
+    //
+    // All of them, not TXFRS alone: TXFRB, TXPRS and TXPHS are
+    // "automatically cleared at the next transmitter enable", and a
+    // TXSTRT the chip drops (into a listening receiver, or under Errata
+    // TX-1) is not one. Left standing, any one of them is read by
+    // _dw1000_tx_dropped() as proof the next send is on the air, so the
+    // drop is never found out and every send after it is refused
+    // DW1000_TX_ERR_BUSY. AAT goes with them, as it does in the TXFRS
+    // branch of dw1000_process_events().
     _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
-		       DW1000_FLG_SYS_STATUS_TXFRS);
+		       DW1000_MSK_SYS_STATUS_ALL_TX);
 }
 
 

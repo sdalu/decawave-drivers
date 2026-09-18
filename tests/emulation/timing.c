@@ -1678,6 +1678,151 @@ done:
     return why;
 }
 
+/* The transmit flags of a completion that is consumed rather than
+ * reported are cleared where the send stops being this send's, so that
+ * a start the chip drops inherits nothing from it. UM 7.2.17 has the
+ * four "automatically cleared at the next transmitter enable", and a
+ * start the chip drops is never one.
+ *
+ * Half A: a completion left standing is consumed by the next send,
+ * whose start the model drops. The pass that follows must not book the
+ * stale TXFRS as that send's completion: a tx_done for a frame that
+ * never left.
+ *
+ * Half B: a polling host acknowledges with dw1000_tx_clear_status_done(),
+ * which must leave none of TXFRB, TXPRS and TXPHS standing either.
+ * _dw1000_tx_dropped() takes any of the four as proof the send is on
+ * the air, so with one of them there the drop is never found out and
+ * every later send is refused DW1000_TX_ERR_BUSY for ever.
+ */
+static const char *
+step_dropped_start_after_a_consumed_completion(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    unsigned    tx_before, tx_after;
+    uint32_t    status;
+    int         i, rc;
+
+    cfgp->rx_keep_on = 0;                       /* manual policy */
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    /*-- Half A: the completion consumed by the next send -------------*/
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "A: the first send was refused";
+	goto done;
+    }
+    for (i = 0; i < 200 && !dw1000_tx_is_status_done(dw); i++)
+	usleep(10000);
+    if (!dw1000_tx_is_status_done(dw)) {
+	why = "A: the first send did not complete";
+	goto done;
+    }
+    /* Deliberately not processed: the completion stands on the chip. */
+
+    dw1000_emulation_drop_next_start(emup);
+    pthread_mutex_lock(&s->lock);
+    tx_before = s->tx_count;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    rc = dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+			DW1000_TX_IMMEDIATE);
+    if (rc != 0) {
+	why = REASON("A: the send over the standing completion answered %d,"
+		      " not 0", rc);
+	goto done;
+    }
+    usleep(100000);
+    pthread_mutex_lock(&s->lock);
+    tx_after = s->tx_count;
+    pthread_mutex_unlock(&s->lock);
+    if (tx_after != tx_before) {
+	why = "A: the send meant to be dropped reached the medium";
+	goto done;
+    }
+
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    dw1000_process_events(dw);
+    if (evt.tx_done) {
+	why = REASON("A: tx_done for a start the chip dropped (status"
+		      " 0x%08" PRIx32 "): the consumed completion's flags"
+		      " were still there", status);
+	goto done;
+    }
+
+    /*-- Half B: the polling host's acknowledgement -------------------*/
+    dw1000_txrx_off(dw);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "B: the first send was refused";
+	goto done;
+    }
+    for (i = 0; i < 200 && !dw1000_tx_is_status_done(dw); i++)
+	usleep(10000);
+    if (!dw1000_tx_is_status_done(dw)) {
+	why = "B: the first send did not complete";
+	goto done;
+    }
+    dw1000_tx_clear_status_done(dw);            /* the polling host's ack */
+
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (status & (DW1000_FLG_SYS_STATUS_TXFRB | DW1000_FLG_SYS_STATUS_TXPRS |
+		  DW1000_FLG_SYS_STATUS_TXPHS | DW1000_FLG_SYS_STATUS_TXFRS)) {
+	why = REASON("B: dw1000_tx_clear_status_done() left 0x%08" PRIx32
+		      ": a transmit flag of the acknowledged send stands",
+		      status);
+	goto done;
+    }
+
+    dw1000_emulation_drop_next_start(emup);
+    evt_reset();
+    rc = dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+			DW1000_TX_IMMEDIATE);
+    if (rc != 0) {
+	why = REASON("B: the send meant to be dropped answered %d, not 0",
+		      rc);
+	goto done;
+    }
+
+    /* Well past the frame's airtime and the detector's millisecond, and
+     * with the two sightings _dw1000_tx_dropped() asks for. */
+    for (i = 0; i < 5 && !evt.tx_dropped; i++) {
+	usleep(20000);
+	dw1000_process_events(dw);
+    }
+    if (!evt.tx_dropped) {
+	why = "B: the dropped start was never found out";
+	goto done;
+    }
+
+    /* And the transmitter really is free again, not refused for ever. */
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    rc = dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+			DW1000_TX_IMMEDIATE);
+    if (rc != 0) {
+	why = REASON("B: the send after the dropped one answered %d"
+		      " (DW1000_TX_ERR_BUSY is %d)", rc, DW1000_TX_ERR_BUSY);
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	why = "B: no completion for the send after the dropped one";
+
+done:
+    dw1000_txrx_off(dw);
+    dw1000_process_events(dw);
+    dw1000_txrx_off(dw);
+    return why;
+}
+
 /* A send needs no idle from the host: the receiver is listening, and
  * dw1000_tx_send() takes the transceiver to IDLE itself, keeping the
  * receiver's events. Before, the start went into the active receiver
@@ -2022,6 +2167,142 @@ step_state_beside_completion(dw1000_t *dw, struct stub *s)
     if (dw1000_tx_is_expecting_response(dw))
 	why = "dw1000_tx_is_expecting_response is true after the"
 	      " response-expected send beside the held frame";
+
+done:
+    dw1000_txrx_off(dw);
+    return why;
+}
+
+/* The single buffered twin of the step above: a good frame beside a
+ * response-expected send's own completion must not cost the send its
+ * TX_W4R. Single buffered, the good-frame branch takes the transceiver
+ * to IDLE once the transmitter is off the air, and it used to do so over
+ * TX_W4R, leaving _dw1000_tx_done_state() nothing to turn into RX_W4R:
+ * the state read IDLE with the chip's own WAIT4RESP receiver up, and the
+ * send that followed went into it and was dropped.
+ */
+static const char *
+step_state_beside_completion_single(dw1000_t *dw, struct stub *s)
+{
+    const char *why = NULL;
+    uint32_t    status;
+    unsigned    tx_before, tx_after;
+    int         i;
+
+    if (TIMING_DBLBUFF)
+	return NULL;                 /* single buffered only */
+
+    cfgp->rx_keep_on = 0;
+
+    /* A frame for the receiver to hold, sent now and looped back below. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the frame to hold was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "the frame to hold did not complete";
+	goto done;
+    }
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = true;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0) {
+	why = "dw1000_rx_start did not start the reception";
+	goto done;
+    }
+    if (!wait_line(IRQ_TIMEOUT_MS)) {
+	why = "no interrupt for the held frame";
+	goto done;
+    }
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (!(status & DW1000_FLG_SYS_STATUS_RXFCG)) {
+	why = REASON("RXFCG not in the status (0x%08" PRIx32 ")", status);
+	goto done;
+    }
+
+    /* The response-expected send, beside that standing frame. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver = false;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE | DW1000_TX_RESPONSE_EXPECTED) != 0) {
+	why = "the response-expected send beside the held frame was refused";
+	goto done;
+    }
+    for (i = 0; i < 200 && !dw1000_tx_is_status_done(dw); i++)
+	usleep(10000);
+    if (!dw1000_tx_is_status_done(dw)) {
+	why = "the response-expected send did not complete";
+	goto done;
+    }
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if ((status & (DW1000_FLG_SYS_STATUS_RXFCG | DW1000_FLG_SYS_STATUS_TXFRS))
+	!= (DW1000_FLG_SYS_STATUS_RXFCG | DW1000_FLG_SYS_STATUS_TXFRS)) {
+	why = REASON("the status word does not carry both RXFCG and TXFRS"
+		      " (0x%08" PRIx32 "): the case under test never arose",
+		      status);
+	goto done;
+    }
+
+    dw1000_process_events(dw);
+    if (!evt.rx_ok || !evt.tx_done) {
+	why = REASON("rx_ok=%d tx_done=%d after the pass beside the"
+		      " completion", (int)evt.rx_ok, (int)evt.tx_done);
+	goto done;
+    }
+
+    /* The chip put its own WAIT4RESP receiver up at the end of the
+     * frame, and the state has to say so: RX_W4R, or RX if the frame
+     * beside the completion stood for the response. Never IDLE. */
+    if ((dw->state != DW1000_STATE_RX_W4R) &&
+	(dw->state != DW1000_STATE_RX)) {
+	why = REASON("dw->state is %u, neither DW1000_STATE_RX_W4R (%d) nor"
+		      " DW1000_STATE_RX (%d): the WAIT4RESP send lost its"
+		      " state to the good frame beside its completion",
+		      dw->state, DW1000_STATE_RX_W4R, DW1000_STATE_RX);
+	goto done;
+    }
+    if (sys_state_pmsc(dw) != 5) {
+	why = REASON("PMSC reads %u, not 5 (RX): the chip's own WAIT4RESP"
+		      " receiver is not up", sys_state_pmsc(dw));
+	goto done;
+    }
+
+    /* And the send that follows is taken to IDLE first, so it reaches
+     * the medium instead of being dropped into a listening receiver. */
+    pthread_mutex_lock(&s->lock);
+    tx_before = s->tx_count;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE) != 0) {
+	why = "the send after the WAIT4RESP one was refused";
+	goto done;
+    }
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done) {
+	why = "no completion for the send after the WAIT4RESP one: its start"
+	      " went into a listening receiver";
+	goto done;
+    }
+    pthread_mutex_lock(&s->lock);
+    tx_after = s->tx_count;
+    pthread_mutex_unlock(&s->lock);
+    if (tx_after == tx_before)
+	why = "the send after the WAIT4RESP one never reached the medium";
 
 done:
     dw1000_txrx_off(dw);
@@ -2568,6 +2849,11 @@ step_rx_frame_beats_timeout(dw1000_t *dw, struct stub *s)
     pthread_mutex_lock(&s->lock);
     s->deliver = false;
     pthread_mutex_unlock(&s->lock);
+    /* The good-frame branch re-enabled the receiver, so another frame
+     * landed behind the one reported and is queued unprocessed;
+     * dw1000_rx_start() keeps such a frame now rather than discarding
+     * it, so the step drops it here instead of leaving it to the next. */
+    dw1000_txrx_off(dw);
     return NULL;
 }
 
@@ -3223,10 +3509,14 @@ main(void)
     step("keep-on stops at txrx_off", step_rx_keep_on_stops_at_txrx_off(&dw, &stub));
     step("dropped send is found out", step_dropped_send_found_out(&dw, &stub));
     step("a real send is not called dropped", step_real_send_not_dropped(&dw, &stub));
+    step("a dropped start after a consumed completion",
+	 step_dropped_start_after_a_consumed_completion(&dw, &stub));
     step("a send needs no idle",  step_send_needs_no_idle(&dw, &stub));
     step("a standing completion is consumed", step_standing_completion_is_consumed(&dw, &stub));
     step("state follows a re-arm from rx_ok", step_state_follows_rearm(&dw, &stub));
     step("a frame beside the completion leaves the state up", step_state_beside_completion(&dw, &stub));
+    step("a frame beside the completion leaves a single buffered WAIT4RESP up",
+	 step_state_beside_completion_single(&dw, &stub));
     step("the delayed-receive fallback keeps the state", step_delayed_rx_fallback_keeps_state(&dw, &stub));
     step("a refused delayed start is not wanted", step_refused_delayed_start_not_wanted(&dw, &stub));
     step("stop with no flags stops the policy", step_stop_no_flags_stops_policy(&dw, &stub));

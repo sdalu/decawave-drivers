@@ -962,6 +962,62 @@ step_hold_survives_txrx_off(dw1000_t *dw, struct stub *s)
 }
 
 
+/* dw1000_rx_start() on a receiver that already holds a frame the host
+ * has not been told about yet. The transition table's cell for it in RX
+ * is "RXENAB again, RX", and the call reports success;
+ * _dw1000_rx_sync_dblbuff() used to read ICRBP != HSRBP as a
+ * misalignment to repair and issue HRBPT, which hands that frame back to
+ * the chip with its RXFCG swinging out behind it, so nothing is left to
+ * show it existed. rx_held guards only the read-out window, which a
+ * frame reported by the chip and not yet reported to the host has not
+ * reached.
+ */
+static const char *
+step_rx_start_keeps_a_queued_frame(dw1000_t *dw, struct stub *s)
+{
+    unsigned    first;
+    int         host, ic, rc;
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
+
+    pthread_mutex_lock(&s->lock);
+    first = s->next_id;
+    pthread_mutex_unlock(&s->lock);
+
+    deliver(dw, s, 1);
+
+    /* The premise: a frame is queued and unprocessed, so the pointers
+     * differ and the chip's RXFCG stands. Without that this step proves
+     * nothing, whichever way it ends.
+     */
+    buffer_pointers(dw, &host, &ic);
+    if (host == ic)
+	return REASON("HSRBP and ICRBP are both %d: no frame is queued, so"
+		      " nothing is at risk", host);
+    if (!(sys_status(dw) & DW1000_FLG_SYS_STATUS_RXFCG))
+	return "RXFCG is not set for the queued frame";
+
+    rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+    if (rc != 0)
+	return REASON("dw1000_rx_start() over the queued frame answered %d,"
+		      " not 0", rc);
+
+    memset(&rx_probe, 0, sizeof(rx_probe));
+    rx_probe.active = true;
+    bool processed  = dw1000_process_events(dw);
+    rx_probe.active = false;
+
+    if (! processed || ! rx_probe.called)
+	return "no rx_ok for the queued frame: dw1000_rx_start() handed it"
+	       " back to the chip unread";
+    if (rx_probe.id_before != (int)first)
+	return REASON("the callback was handed frame %d, want %u",
+		      rx_probe.id_before, first);
+    return NULL;
+}
+
 #if DW1000_WITH_PROPRIETARY_LONG_FRAME
 /* Errata 1.4 3.2 (RX-1): a long transmit while a frame is held.
  *
@@ -1189,6 +1245,8 @@ main(void)
 #endif
     step("frame held across txrx_off",
                                     step_hold_survives_txrx_off(&dw, &stub));
+    step("a queued frame survives rx_start",
+                                    step_rx_start_keeps_a_queued_frame(&dw, &stub));
 
     dw1000_txrx_off(&dw);
     /* The three steps, in the order dw1000/emulation.h insists on:
