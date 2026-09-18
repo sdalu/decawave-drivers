@@ -167,7 +167,8 @@ the send, the chip would raise no TXFRS for a frame it never finished,
 and a host waiting for the completion would wait for nothing. The
 receiver's status is dropped instead, the callback is still called, and
 the receiver reset UM 4.1.6 asks for is applied by the next
-`dw1000_rx_start()`. A good frame found there is read out as usual, but
+`dw1000_rx_start()`, or by the completion itself when WAIT4RESP would
+otherwise bring the receiver up unreset. A good frame found there is read out as usual, but
 in double buffered receive the receiver is not re-enabled on top of the
 transmission; the completion's handler re-arms it, as after any send.
 
@@ -202,6 +203,17 @@ such a host never learned whether its frames left, and at a send
 interval below the frame's airtime almost none of them did, with every
 call returning success. The check costs no SPI: it is a flag the driver
 already maintains. AUDIT.md carries the measurement.
+
+A send that never completes, Errata 1.4 3.1 (TX-1) being the documented
+way, keeps that flag set: until the host abandons it with
+`dw1000_txrx_idle()` or `dw1000_txrx_off()`, receive events are handled
+as over a send on the air and `dw1000_rx_start()` is refused. So a host
+bounds its wait for a completion, as every host here does.
+
+The start of a send clears what the transmitter raised for an earlier
+one, so a completion the chip shows while a send is pending is that
+send's; a host abandoning a send with `dw1000_txrx_idle()` need not
+clear it before the next.
 
 ### A delayed-send delay is the whole lead, airtime included
 

@@ -579,6 +579,7 @@ void _dw1000_softreset(dw1000_t *dw) {
     dw->wait4resp     = 0;
     dw->tx_clk_forced = 0;
     dw->tx_pending    = 0;
+    dw->rx_reset_due  = 0;
 }
 
 
@@ -1653,21 +1654,6 @@ void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
 
 /**
  * @internal
- * @brief Drop what the receiver raised, leaving the transceiver alone
- *
- * @details The status side of _dw1000_txrx_off(): the receive-side bits
- *          in @p clear are cleared, through the masked write the
- *          swinging set needs in double buffered receive, and the
- *          buffer pointers are realigned when frame bits are among
- *          them. No TRXOFF: this is for an event found while a
- *          transmission is in flight, which TRXOFF would abort with no
- *          TXFRS ever raised for it (UM §7.2.15).
- *
- * @param[in]  dw       driver context
- * @param[in]  clear    event status bits to clear
- */
-/**
- * @internal
  * @brief Whether a transmission is still on the air
  *
  * @details dw->tx_pending alone says a send was started and not yet
@@ -1684,6 +1670,21 @@ static inline bool _dw1000_tx_inflight(const dw1000_t *dw, uint32_t status) {
     return dw->tx_pending && !(status & DW1000_FLG_SYS_STATUS_TXFRS);
 }
 
+/**
+ * @internal
+ * @brief Drop what the receiver raised, leaving the transceiver alone
+ *
+ * @details The status side of _dw1000_txrx_off(): the receive-side bits
+ *          in @p clear are cleared, through the masked write the
+ *          swinging set needs in double buffered receive, and the
+ *          buffer pointers are realigned when frame bits are among
+ *          them. No TRXOFF: this is for an event found while a
+ *          transmission is in flight, which TRXOFF would abort with no
+ *          TXFRS ever raised for it (UM §7.2.15).
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  clear    event status bits to clear
+ */
 static void _dw1000_rx_drop_status(dw1000_t *dw, uint32_t clear) {
     if (dw->config->dblbuff) {
 	_dw1000_rx_clear_status_dblbuff(dw, clear);
@@ -1882,8 +1883,14 @@ bool dw1000_process_events(dw1000_t *dw) {
         }
 #endif
 
-	// Clear wait4resp internal flag
-	dw->wait4resp = 0;
+	// Clear wait4resp internal flag: the receiver this frame came
+	// through was the one WAIT4RESP had armed. Not over a send on the
+	// air, though: that frame predates the send, whose WAIT4RESP is
+	// still armed on the chip. A frame beside the completion in one
+	// status word may be either, the stale one or the response; the
+	// response is assumed, as it always was.
+	if (! _dw1000_tx_inflight(dw, status))
+	    dw->wait4resp = 0;
 
 	// Effectively clearing status
 	//   In double buffered mode the bits being cleared are part of
@@ -1982,6 +1989,19 @@ bool dw1000_process_events(dw1000_t *dw) {
 	    // Reset in case a frame was already being received
             _dw1000_rx_reset(dw);
         }
+
+	// A receiver reset owed from an error handled while this send was
+	// on the air is applied by dw1000_rx_start(), which WAIT4RESP
+	// bypasses: the chip enabled the receiver by itself the moment the
+	// frame ended, unreset. Take it back down, reset and re-enable it
+	// here, before a response can arrive; wait4resp stays armed, the
+	// host's tx_done reading it as usual.
+	if (dw->rx_reset_due && dw->wait4resp) {
+	    const uint32_t wait4resp = dw->wait4resp;
+	    _dw1000_txrx_off(dw, 0);
+	    dw->wait4resp = wait4resp;
+	    dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+	}
 
         // Call the corresponding callback if present
         if (cfg->cb.tx_done) {
@@ -2280,6 +2300,17 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
     // path below, or in _dw1000_txrx_off(), whichever comes first.
     if (tx_mode & DW1000_TX_DELAYED_START)
 	_dw1000_tx_clock_force(dw, true);
+
+    // What the transmitter raised for an earlier frame goes first, so
+    // that a completion the chip shows with tx_pending set is this
+    // frame's and nobody else's: dw1000_process_events() and
+    // dw1000_rx_start() read TXFRS to tell a send on the air from one
+    // that is over, and dw1000_txrx_idle() leaves a standing one in
+    // place by design. AAT is not among them: it belongs to a received
+    // frame, and the receive side handles it.
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
+			DW1000_FLG_SYS_STATUS_TXFRB | DW1000_FLG_SYS_STATUS_TXPRS |
+			DW1000_FLG_SYS_STATUS_TXPHS | DW1000_FLG_SYS_STATUS_TXFRS);
 
     // Write to SYS_CTRL register, which will trigger transmit
     _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_SYS_CTRL, sys_ctrl);

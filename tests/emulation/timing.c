@@ -987,6 +987,122 @@ step_rx_start_beside_completion(dw1000_t *dw, struct stub *s)
     return NULL;
 }
 
+/* The receiver reset owed from an error handled over a send is applied
+ * before WAIT4RESP's automatic receive, which does not go through
+ * dw1000_rx_start(); and the send's WAIT4RESP survives the pass.
+ */
+static const char *
+step_owed_reset_before_auto_rx(dw1000_t *dw, struct stub *s)
+{
+    uint32_t status;
+    int      i;
+
+    /* A bad frame in the stub, then latched and left unprocessed. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE | DW1000_TX_NO_AUTO_CRC) != 0)
+	return "the uncrc'd frame was refused";
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "the uncrc'd frame did not complete";
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver = true;
+    pthread_mutex_unlock(&s->lock);
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0)
+	return "dw1000_rx_start did not start the reception";
+    if (!wait_line(IRQ_TIMEOUT_MS))
+	return "no interrupt for the bad frame";
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (!(status & DW1000_FLG_SYS_STATUS_RXFCE))
+	return REASON("RXFCE not in the status (0x%08" PRIx32 ")", status);
+
+    /* A send expecting a response, the pass over it, the completion. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 100;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE | DW1000_TX_RESPONSE_EXPECTED) != 0)
+	return "the send expecting a response was refused";
+    dw1000_process_events(dw);
+    if (!evt.rx_error)
+	return "the stale receive error was not reported";
+    if (!dw->rx_reset_due)
+	return "the receiver reset was not put off over the send";
+    if (!dw1000_tx_is_expecting_response(dw))
+	return "the pass over the send forgot its WAIT4RESP";
+
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "no completion for the send expecting a response";
+    if (dw->rx_reset_due)
+	return "the owed receiver reset was not applied at the completion:"
+	       " WAIT4RESP brought the receiver up unreset";
+    if (!dw1000_tx_is_expecting_response(dw))
+	return "the completion's re-enable dropped WAIT4RESP";
+
+    (void)i;
+    dw1000_txrx_off(dw);
+    return NULL;
+}
+
+/* A good frame processed over a send expecting a response does not
+ * take the send's WAIT4RESP with it: that frame predates the send.
+ */
+static const char *
+step_wait4resp_survives_stale_frame(dw1000_t *dw, struct stub *s)
+{
+    uint32_t status;
+
+    /* A good frame, latched and left unprocessed: the stub holds the
+     * good frame the previous step sent last. */
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = true;
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    evt_reset();
+    if (dw1000_rx_start(dw, DW1000_RX_IMMEDIATE) != 0)
+	return "dw1000_rx_start did not start the reception";
+    if (!wait_line(IRQ_TIMEOUT_MS))
+	return "no interrupt for the good frame";
+    status = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
+    if (!(status & DW1000_FLG_SYS_STATUS_RXFCG))
+	return REASON("RXFCG not in the status (0x%08" PRIx32 ")", status);
+
+    pthread_mutex_lock(&s->lock);
+    s->deliver          = false;
+    s->tx_done_delay_ms = 100;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_txrx_idle(dw);
+    evt_reset();
+    if (dw1000_tx_send(dw, (uint8_t *)payload, PAYLOAD_LEN,
+		       DW1000_TX_IMMEDIATE | DW1000_TX_RESPONSE_EXPECTED) != 0)
+	return "the send expecting a response was refused";
+    dw1000_process_events(dw);
+    if (!evt.rx_ok)
+	return "the stale frame was not reported";
+    if (!dw1000_tx_is_expecting_response(dw))
+	return "the stale frame took the send's WAIT4RESP with it";
+    if (!wait_irq(dw, IRQ_TIMEOUT_MS) || !evt.tx_done)
+	return "no completion for the send expecting a response";
+
+    pthread_mutex_lock(&s->lock);
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+    dw1000_txrx_off(dw);
+    return NULL;
+}
+
 /* A frame the chip cannot carry is refused, not truncated.
  *
  * dw1000_tx_fctrl() clamps an over-long length, which is right for a
@@ -1948,6 +2064,8 @@ main(void)
     step("tx while busy",        step_tx_while_busy(&dw, &stub));
     step("tx over a stale rx error", step_tx_over_stale_rx_error(&dw, &stub));
     step("rx start beside the completion", step_rx_start_beside_completion(&dw, &stub));
+    step("owed reset before auto-rx", step_owed_reset_before_auto_rx(&dw, &stub));
+    step("wait4resp survives a stale frame", step_wait4resp_survives_stale_frame(&dw, &stub));
     step("create/destroy cycles",step_lifecycle(&dw, &stub));
     step("medium vanishes",      step_medium_vanishes(&dw, &stub));
 
