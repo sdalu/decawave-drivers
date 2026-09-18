@@ -459,6 +459,16 @@ typedef struct dw1000_config {
      */
     uint8_t    rx_keep_on:1;
     /**
+     * @brief Bench knob: enable the receiver inside the event pass
+     *
+     * Double buffered, a good frame reported beside the host's own
+     * completion has the receiver enabled at the end of the pass, once
+     * the completion is booked. Set, it is enabled where the frame is
+     * handled, before the read-out, as the driver did before 2084ca2.
+     * For INVESTIGATE.md entry 1 only; leave clear.
+     */
+    uint8_t    rx_enable_early:1;
+    /**
      * @brief Define led blink time in 14ms unit
      */
     uint8_t    leds_blink_time;
@@ -617,6 +627,14 @@ struct dw1000 {
                             //  included, for its airtime
     uint32_t tx_airtime;    // Airtime of the send in progress, ticks
     uint8_t  tx_delayed;    // The send in progress waits for DX_TIME
+    uint32_t dbg_pass[3];   // Bench knob, INVESTIGATE.md 1b: SYS_STATUS
+                            //  as dw1000_process_events() read it on
+                            //  entry, after the double buffered clear,
+                            //  after the HRBPT toggle (0: not reached)
+    uint16_t tx_late_flags; // Bytes 3..4 of SYS_STATUS at the last
+                            //  too-late refusal (HPDWARN bit 3, TXPUTE
+                            //  bit 10): kept for a probe, since the
+                            //  TRXOFF of the refusal clears them
     uint64_t tx_suspect;    // System time at which a send in progress was
                             //  first seen absent from the chip (no TX
                             //  flag, transceiver not in TX); 0 otherwise.

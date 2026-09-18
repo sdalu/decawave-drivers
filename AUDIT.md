@@ -46,6 +46,14 @@ candidate, a receiver going deaf after an overrun, was measured and
 turned out to be two faults in ruby-dw1000's test rather than anything
 here.
 
+A fourth round, 2026-09-17 and 18, was neither audit nor bug hunt but
+measurement: what the chip does at the transitions the driver used to
+leave to the host, read off the bench when ruby-dw1000's two-node
+tests lost one send in a thousand. The numbers are in
+[`DW1000.md`](DW1000.md), which gathers what is established about the
+chip from the manual, the errata and the bench, each finding graded by
+its source; the driver as of `2084ca2` is what they led to.
+
 **Open** now holds no defect at all. What is left there is settled
 results kept for the next reader, one measurement that would close the
 last uncertainty, and the latent notes.
@@ -58,6 +66,13 @@ tests and the two probe tests, and `clang --analyze` reports nothing.
 The option matrix was 256 combinations when the audit ran and is 128
 now, `DW1000_WITH_DWM1000_EVK_COMPATIBILITY` having been dropped in
 `c58f953`.
+
+## Measured: the transceiver's transitions
+
+Moved to [`DW1000.md`](DW1000.md), which holds every established
+behaviour of the chip graded by its source; the fourth round's
+measurements are its Transmit, Receive and "Unexplained" entries. The
+driver work they led to is `2084ca2`.
 
 ## Open
 

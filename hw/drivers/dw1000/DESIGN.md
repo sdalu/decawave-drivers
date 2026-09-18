@@ -9,7 +9,9 @@ repository-wide shape (the port contract, the build, the checks),
 
 The audit against the User Manual and the Errata, which is where every
 register value was checked and where the open questions live, is
-[`../../../AUDIT.md`](../../../AUDIT.md). This file does not repeat it.
+[`../../../AUDIT.md`](../../../AUDIT.md), and the chip's established
+behaviour, graded by source, is [`../../../DW1000.md`](../../../DW1000.md).
+This file repeats neither.
 
 ## The four sources
 
@@ -149,6 +151,21 @@ appears in `dw1000_reg.h` exactly once, in
 `DW1000_MSK_SYS_STATUS_ALL_DBLBUFF`, which is this driver's aggregate
 over two manual-named bits (`RXDFR | RXFCG`) and takes the house
 spelling because the manual names no such group.
+
+### The flags that are not the buffer's
+
+With `HSRBP == ICRBP` the swinging status bits read as the chip's
+record of its last reception, not as the host's buffer's latch: no
+status write clears them, the next receiver enable does, and the
+receive registers meanwhile select the host's buffer (`DW1000.md`,
+"With the buffer pointers aligned"). A frame read out with the
+receiver off is followed by exactly that state, and the pass after it
+would report the previous frame again. `dw1000_process_events()`
+therefore takes `RXFCG` with the pointers aligned and none of
+`RXPRD|RXSFDD|RXPHD` set as stale: it strips the bits from the word it
+works on, reports nothing, toggles nothing, and lets the enable that
+ends the pass reset them. Measured, not read: 24 of 24 duplicates over
+96 runs had that shape, and 0 of 48 runs duplicate with the check.
 
 ### The registers that do not swing
 

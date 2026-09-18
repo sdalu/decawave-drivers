@@ -314,11 +314,47 @@ Each part of the tree is documented beside itself. This is the index:
   are portable.
 - [`AUDIT.md`](AUDIT.md): what was checked against the manual, what
   was wrong, what was measured, and what is still open.
+- [`DW1000.md`](DW1000.md): what the chip does, as established from
+  the manual, the errata and the bench, each finding graded by its
+  source.
+- [`INVESTIGATE.md`](INVESTIGATE.md): what is still open about the
+  chip and the bench, with the evidence so far and the experiment
+  that would settle each.
 
 Running `doxygen` at the top of the tree writes HTML and LaTeX into
-`doc/generated`, which is not tracked. `docs/` is the vendor shelf: the
-manuals, the errata and the application notes, as published. `doc/bench/`
-holds raw measurement output that AUDIT.md cites.
+`doc/generated`, which is not tracked. `doc/bench/` holds raw
+measurement output that AUDIT.md cites.
+
+### The vendor documents
+
+`docs/` is the vendor shelf: the manuals, the errata and the
+application notes, as published. It is ignored by git, because
+Decawave's documents carry a copyright notice and no licence to
+redistribute them; fetch them from Qorvo, which now owns Decawave.
+Each link below serves the PDF directly, and was checked on
+2026-09-18 by downloading it and reading the document's own title
+page. "On the shelf" is the revision AUDIT.md and DW1000.md cite;
+"served" is what the link returned that day. Qorvo serves only the
+current revision, so an older manual (2.12, 2.15) can no longer be had
+from them.
+
+| Document | On the shelf | Served | Where |
+| :------- | :----------- | :----- | :---- |
+| DW1000 User Manual | 2.18 (also 2.12 and 2.15, cited by page) | 2.18 | [da007967](https://www.qorvo.com/products/d/da007967) |
+| DW1000 Errata | 1.4, April 2021 | 1.4 | [da007968](https://www.qorvo.com/products/d/da007968) |
+| DWM1000 module data sheet | | 2.0, March 2026 | [da007948](https://www.qorvo.com/products/d/da007948), which Qorvo lists as the DW1000 datasheet but which serves the module's |
+| DW1000 Device Driver API Guide | 2.1 | 2.14, inside "DW1000 API with STM32F10x Application Examples" | [ra006746](https://www.qorvo.com/products/r/ra006746), a software package, not a PDF |
+| APH001, DW1000 hardware design guide | 1.1 | 1.2 | [da008428](https://www.qorvo.com/products/d/da008428) |
+| APH005, power source selection | 1.00 | 1.3 | [da008429](https://www.qorvo.com/products/d/da008429) |
+| APS006 part 1, channel effects on range and timestamp accuracy | 1.03 | 1.04 | [da008440](https://www.qorvo.com/products/d/da008440) |
+| APS011, sources of error in two-way ranging | 1.0 | 1.2 | [da008446](https://www.qorvo.com/products/d/da008446) |
+| APS012, production tests | 1.5 | 1.8 | [da008447](https://www.qorvo.com/products/d/da008447) |
+| APS013, the implementation of two-way ranging | 2.0 | 2.4 | [ra007039](https://www.qorvo.com/products/r/ra007039) |
+| APS014, antenna delay calibration | 1.01 | 1.3 | [da008449](https://www.qorvo.com/products/d/da008449) |
+| APS022, debugging DW1000-based products and systems | 1.4 | 1.4 | [da008452](https://www.qorvo.com/products/d/da008452) |
+
+The [product page][6] lists them all under Documents and Software,
+should an identifier above move.
 
 ## License
 

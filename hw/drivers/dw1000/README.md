@@ -12,7 +12,9 @@ documents: [`../../../README.md`](../../../README.md) for the API, the
 build and the options; [`DESIGN.md`](DESIGN.md) for how the core works
 inside and why it departs from Decawave's driver;
 [`../../../AUDIT.md`](../../../AUDIT.md) for the audit against the User
-Manual and the Errata, including what is still open.
+Manual and the Errata, including what is still open;
+[`../../../DW1000.md`](../../../DW1000.md) for what the chip does,
+each finding graded as spec, errata or measurement.
 
 ## Four facts that shape everything else
 
@@ -500,5 +502,6 @@ Absences worth knowing before you design around them:
 | How the core is built, and why         | `DESIGN.md`                       |
 | Why the driver differs from Decawave's | `DESIGN.md`, and `AUDIT.md`       |
 | What is still wrong or unverified      | `AUDIT.md`, "Open"                |
-| What a measurement actually was        | `AUDIT.md`                        |
+| What the chip does, and how we know    | `DW1000.md`                       |
+| What a measurement actually was        | `DW1000.md`, then `AUDIT.md`      |
 | What the API promises                  | the header, which is the contract |

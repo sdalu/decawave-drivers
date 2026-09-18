@@ -582,6 +582,7 @@ void _dw1000_softreset(dw1000_t *dw) {
     dw->rx_wanted     = 0;
     dw->rx_deferred   = 0;
     dw->tx_suspect    = 0;
+    dw->tx_late_flags = 0;
 }
 
 
@@ -1856,6 +1857,8 @@ bool dw1000_process_events(dw1000_t *dw) {
     // ( TXPUTE | RXPREJ | RXRSCS ) we won't read it.
     uint32_t status =
 	_dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE); 
+    dw->dbg_pass[0] = status;
+    dw->dbg_pass[1] = dw->dbg_pass[2] = 0;
 
     // A send in progress that the chip does not show, past its airtime,
     // never began: cleared and reported here, so that the receive side
@@ -1878,6 +1881,35 @@ bool dw1000_process_events(dw1000_t *dw) {
 		    DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
 		    DW1000_MSK_SYS_STATUS_ALL_RX_TO   |
 		    DW1000_FLG_SYS_STATUS_RXOVRR);
+    }
+
+    // Double buffered, a good frame shown with the two buffer pointers
+    // on the same buffer and none of the detect bits set is not a frame.
+    // Measured 2026-09-18 (rpi-c and rpi-d, 24 of 24 duplicates over 96
+    // runs, INVESTIGATE.md 1b): with the pointers aligned the swinging
+    // bits read as the chip's own flags of its last reception, which no
+    // status write clears (a masked clear written there reads back set)
+    // and which the next receiver enable resets, while the receive
+    // registers still select the host's buffer. A frame read out with
+    // the receiver off, over a send on the air or beside its
+    // completion, is followed by exactly that: the toggle lands the host
+    // on the buffer the chip parked on after that frame, the previous
+    // frame is still there, and the pass that follows would report it a
+    // second time with this frame's flags. RXPRD, RXSFDD and RXPHD are
+    // single instances, cleared with every frame reported and set by
+    // any reception since, so their absence beside RXFCG is the mark.
+    // Nothing to clear and nothing to toggle: the enable that ends this
+    // pass (rx_keep_on, or a start recorded over the send) resets the
+    // flags, and a host that re-arms from its callbacks has the
+    // completion in this same pass to do it from, as it always had.
+    if (cfg->dblbuff && (status & DW1000_FLG_SYS_STATUS_RXFCG) &&
+	(((status & DW1000_FLG_SYS_STATUS_HSRBP) != 0) ==
+	 ((status & DW1000_FLG_SYS_STATUS_ICRBP) != 0)) &&
+	! (status & (DW1000_FLG_SYS_STATUS_RXPRD  |
+		     DW1000_FLG_SYS_STATUS_RXSFDD |
+		     DW1000_FLG_SYS_STATUS_RXPHD))) {
+	status &= ~(DW1000_FLG_SYS_STATUS_RXFCG | DW1000_FLG_SYS_STATUS_RXDFR |
+		    DW1000_FLG_SYS_STATUS_LDEDONE);
     }
 
     // Handle RX good frame event
@@ -1925,7 +1957,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 	    // means the send is over, and the receiver goes back on here
 	    // as it always did: a host that sees RXFCG beside its
 	    // completion and leaves the re-arm to rx_ok counts on it.
-	    if (_dw1000_tx_pending(dw) && (status & DW1000_FLG_SYS_STATUS_TXFRS)) {
+	    if (_dw1000_tx_pending(dw) && (status & DW1000_FLG_SYS_STATUS_TXFRS) &&
+		! cfg->rx_enable_early) {
 		// Beside the send's own completion: the frame is taken for
 		// the response the send may have expected (the stale frame
 		// and the response cannot be told apart here), and the
@@ -1999,6 +2032,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//   are masked around the write (UM §4.3.3, figure 14)
 	if (cfg->dblbuff) {
 	    _dw1000_rx_clear_status_dblbuff(dw, clear);
+	    dw->dbg_pass[1] = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS,
+						 DW1000_OFF_NONE);
 	} else {
 	    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS,
 				DW1000_OFF_NONE, clear);
@@ -2043,6 +2078,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 		//     flag) Trigger buffer toggle by writting 1 to HRBPT
 		_dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, 3 ,
 				  (1 << (DW1000_SFT_SYS_CTRL_HRBPT - 24)));
+		dw->dbg_pass[2] = _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS,
+						     DW1000_OFF_NONE);
 	    }
         }
     }
@@ -2491,6 +2528,7 @@ int dw1000_tx_start(dw1000_t *dw, int tx_mode) {
         tx_ok = _dw1000_reg_read16(dw, DW1000_REG_SYS_STATUS, off);
         if ((tx_ok & msk) == 0)
             return 0;
+	dw->tx_late_flags = tx_ok & msk;
 
 	// From official deca_device.c:
 	// Transmit Delayed Send set over Half a Period away or Power Up error
