@@ -29,7 +29,8 @@ The two receive rows were taken with a harness that started its two
 nodes one after the other, so they mix link loss with the prefix of
 the peer's burst the later node never listened for (`DW1000.md`, "The
 bench, for scale"; settled 2026-09-18). With the nodes started
-together the scattered loss is under one frame in fifty on either node.
+together, and their bursts kept half a gap apart on an absolute
+schedule, the same soak loses nothing at all.
 
 The transmit side is closed. Everything below is about receiving, or
 about a claim in `DW1000.md` that rests on one bench and would be
@@ -74,7 +75,14 @@ Scattered losses, the skew removed:
 
 z = 3.7 on rpi-d, 2.1 on rpi-c: the effect is real, about one frame
 in a hundred, and the driver keeps the end-of-pass placement. Not
-chance, then; the mechanism is still not established.
+chance, then; the mechanism is still not established. One thing more
+was learnt the same day: those runs paced the two bursts from the end
+of each send, so the frames drifted through collision a few times a
+run; with the bursts on an absolute schedule and half a gap apart, 24
+runs lost nothing with either placement (`DW1000.md`, "The bench").
+So the frame the in-pass enable loses is one that arrives on top of, or
+within microseconds of, this node's own send, which narrows where the
+mechanistic experiment should look.
 
 **Ruled out.** That the enable itself goes unheard (300 of 300 at
 fifty microseconds and beyond, `DW1000.md`); chance.
