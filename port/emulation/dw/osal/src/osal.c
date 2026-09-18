@@ -103,6 +103,20 @@ struct dw1000_emulation {
     int			rbp_ic;
     unsigned		pending;
 
+    /* The chip's own flags of its last completed reception: the swinging
+     * status bits it wrote for that frame (RXDFR|RXFCG|LDEDONE, or
+     * RXDFR|RXFCE|LDEDONE for a bad CRC), kept beside the two register
+     * sets rather than in either of them.
+     *
+     * DW1000.md, "With the buffer pointers aligned, the swinging status
+     * bits are the chip's flags, not the buffer's" (measured 2026-09-18,
+     * rpi-c and rpi-d): with the two pointers on one buffer, what a host
+     * reads in those bits is this record and not that buffer's latched
+     * set, a status write does not clear it, and the next receiver
+     * enable resets it. TRXOFF does not, nor does HRBPT.
+     */
+    uint32_t		rx_live;
+
     /* Set the first time the medium server cannot be reached. A running
      * simulation ends by taking the server down while its nodes are
      * still going, so this is the ordinary end of a run: it is said once
@@ -198,6 +212,21 @@ static void e_irq_fire(struct dw1000_emulation *e);
 
 
 E_DEFINE_PASSTHROUGH(SYS_STATUS, 0xff, 0x1b, 0xff, 0xff, 0xff);
+
+/* The swinging bits of SYS_STATUS: the four of UM table 7, the ones the
+ * passthrough mask above leaves out of the write that reaches both sets.
+ * All four live in byte 1 of the register, which is what lets a host
+ * read or write be patched a byte at a time below.
+ */
+#define E_MSK_SYS_STATUS_SWING						\
+    (DW1000_FLG_SYS_STATUS_LDEDONE | DW1000_FLG_SYS_STATUS_RXDFR |	\
+     DW1000_FLG_SYS_STATUS_RXFCG   | DW1000_FLG_SYS_STATUS_RXFCE)
+
+#define E_SYS_STATUS_SWING_BYTE	1
+
+_Static_assert((E_MSK_SYS_STATUS_SWING & ~(0xffu << (8 * E_SYS_STATUS_SWING_BYTE))) == 0,
+	       "the swinging bits are confined to one byte of SYS_STATUS");
+
 
 /* SYS_STATUS is write-one-to-clear, except where it is not. UM 7.2.17
  * calls five of its bits READ ONLY, each maintained by the chip and each
@@ -590,6 +619,69 @@ static char *e_state[] = {
 		    E_GET_STATE_STR(e), __func__);			\
 	(e)->state = E_STATE_##_state;					\
     } while(0)
+
+
+/*-- The chip's flags of its last reception ----------------------------*/
+
+/* DW1000.md, "With the buffer pointers aligned, the swinging status bits
+ * are the chip's flags, not the buffer's" (measured 2026-09-18, rpi-c
+ * and rpi-d, double buffered with RXAUTR clear). One of its three
+ * observations is modelled here, the third: with the two pointers on
+ * one buffer the host reads the chip's own flags. Of the other two, the
+ * clear that takes with the receiver off is what the register sets
+ * already did, and the clear that does not take with the receiver on is
+ * not modelled at all (port/emulation/README.md, "Still not modelled").
+ *
+ * The record is set where a reception completes, cleared on every
+ * receiver turn-on, and read at the host's own access: a status write,
+ * a TRXOFF and an HRBPT all leave it alone. It is deliberately not put
+ * into either register set. Writing it into storage would make the
+ * chip's flags part of a buffer's latch, which is the very thing the
+ * measurement says they are not, and would carry them into IRQS, whose
+ * behaviour with the pointers aligned nothing measured.
+ *
+ * The mutex must be held for all three.
+ */
+static void e_rx_live_set(struct dw1000_emulation *e, uint32_t sys_status) {
+    e->rx_live = sys_status & E_MSK_SYS_STATUS_SWING;
+}
+
+static void e_rx_live_clear(struct dw1000_emulation *e) {
+    e->rx_live = 0;
+}
+
+/* What a host read of SYS_STATUS shows in those bits.
+ *
+ * With the pointers on one buffer and nothing outstanding they are the
+ * record, whatever the set the host is on holds; the rest of the word,
+ * and every access with the pointers apart, is the storage as before.
+ * Patched in the bytes on their way out rather than in the storage
+ * itself, for the reason above. @p offset and @p length are the host's,
+ * so a read of part of the register is covered too.
+ *
+ * "Nothing outstanding" is what the measured case is: the IC parked on
+ * the buffer a toggle has just released, no frame waiting to be read.
+ * The other way the two pointers come together is the wrap-around of UM
+ * 4.3.5, both buffers held by the host and the IC back where it started
+ * (`pending` 2); there the set the host is on is that buffer's own latch
+ * and must read as such, or the frame waiting in it could never be seen.
+ */
+static void e_status_live_view(struct dw1000_emulation *e, size_t offset,
+			       uint8_t *data, size_t length) {
+    if (!e->dblbuff || (e->rbp_host != e->rbp_ic) || (e->pending != 0))
+	return;
+    if ((offset > E_SYS_STATUS_SWING_BYTE) ||
+	((offset + length) <= E_SYS_STATUS_SWING_BYTE))
+	return;
+
+    const uint8_t mask = (uint8_t)(E_MSK_SYS_STATUS_SWING >>
+				   (8 * E_SYS_STATUS_SWING_BYTE));
+    const uint8_t live = (uint8_t)(e->rx_live >>
+				   (8 * E_SYS_STATUS_SWING_BYTE));
+    uint8_t      *byte = &data[E_SYS_STATUS_SWING_BYTE - offset];
+
+    *byte = (uint8_t)((*byte & ~mask) | (live & mask));
+}
 
 
 /*-- Airtime and timing constants --------------------------------------*/
@@ -1188,6 +1280,9 @@ void dw1000_emulation_reset(struct dw1000_emulation *e) {
     e->rbp_ic   = 0;
     e->pending  = 0;
 
+    // Nothing has been received, so there are no flags of a last one
+    e_rx_live_clear(e);
+
     // Clear everything
     for (int i = 0 ; i < DW1000_COUNT_REGISTERS ; i++) {
 	struct e_register *r = &e->reg[i];
@@ -1296,6 +1391,16 @@ static uint64_t e_ticks_per_psym(struct dw1000_emulation *e) {
  * be held.
  */
 static void e_rx_arm_timeouts(struct dw1000_emulation *e, uint64_t from_full) {
+    /* Every receiver turn-on passes through here, and only a turn-on
+     * does: the host's RXENAB, a delayed receive coming due, the
+     * WAIT4RESP receiver at the end of a send, and the three RXAUTR
+     * re-enables. So this is where the chip's flags of the last
+     * reception go: "The next receiver enable resets them" (DW1000.md,
+     * "With the buffer pointers aligned, the swinging status bits are
+     * the chip's flags, not the buffer's").
+     */
+    e_rx_live_clear(e);
+
     uint32_t sys_cfg  = E_REG_IC_READ32_KEY(e, SYS_CFG);
     uint16_t pretoc   = E_REG_IC_READ16_KEY(e, DRX_CONF, DRX_PRETOC);
     uint16_t fwto     = E_REG_IC_READ16_KEY(e, RX_FWTO);
@@ -1817,7 +1922,7 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
     bool send = false;
     bool recv = false;
     pthread_mutex_lock(&e->mutex);
-    
+
     E_REG_HOST_WRITE_IDX(e, reg, offset, data, datalen);
 
     if (reg == DW1000_REG_SYS_CFG) {
@@ -1941,6 +2046,15 @@ void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
     }
 
     E_REG_HOST_READ_IDX(e, reg, offset, data, datalen );
+
+    /* And the swinging bits of SYS_STATUS are the chip's flags of its
+     * last reception, not the set's storage, whenever the two buffer
+     * pointers are on one buffer: patched into the answer on its way
+     * out, the storage untouched.
+     */
+    if (reg == DW1000_REG_SYS_STATUS)
+	e_status_live_view(e, offset, data, datalen);
+
     pthread_mutex_unlock(&e->mutex);
 }
 
@@ -2151,6 +2265,14 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	    
 	// Write status
 	E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
+
+	/* The same swinging bits, kept as the chip's own record of this
+	 * reception: with the two pointers on one buffer that record is
+	 * what a host reads, and not the set it is on. Set here, where
+	 * the reception completes, and undone by the next receiver
+	 * enable, the RXAUTR one below included.
+	 */
+	e_rx_live_set(e, sys_status);
 
         EMU_DEBUG("RSVC INT <RX_DONE> commited to registers");
 

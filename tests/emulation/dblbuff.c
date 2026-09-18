@@ -117,6 +117,14 @@ struct stub {
     unsigned sent;                      /* frames actually sent */
     int      corrupt;                   /* index in the burst to damage,
 					 * or -1 for none */
+
+    /* When set, the completion of a send is held back this long before
+     * it is sent, so that a step can act on the chip while the frame is
+     * still on the air. Copied from timing.c's stub, which is where the
+     * mechanism comes from; step_stale_frame_told_apart() is the one
+     * step here that needs a send it can run an event pass under.
+     */
+    unsigned tx_done_delay_ms;
 };
 
 static void
@@ -170,10 +178,44 @@ stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
     memcpy(&in, payload, paylen < sizeof(in) ? paylen : sizeof(in));
 
     switch (in.type) {
-    case DW1000_RSVC_TX:
-	/* Nothing here transmits; answer so nothing hangs. */
+    case DW1000_RSVC_TX: {
+	uint64_t now = dw1000_emulation_clock();
+	uint64_t stamp;
+	unsigned delay_ms;
+
+	/* The model asserts, for an immediate send, that TX_STAMP less
+	 * its own TX_ANTD lands on a 512-tick boundary. So round first,
+	 * then add the antenna delay the node supplied, which is the
+	 * convention port/emulation/README.md states (timing.c's stub
+	 * does the same, and for the same reason).
+	 */
+	stamp = (DW1000_CLOCK_ROUNDUP(now) + in.tx.antenna_delay)
+	        & ((1ull << DW1000_TIME_CLOCK_BITS) - 1);
+
+	pthread_mutex_lock(&s->lock);
+	delay_ms = s->tx_done_delay_ms;
+	pthread_mutex_unlock(&s->lock);
+
 	stub_send(s, peer, peerlen, RSVC_UWB_IO, id, 0, 0, NULL, 0);
+
+	/* The frame is on the air for this long. The stub serves one
+	 * request at a time, so nothing else is delivered meanwhile,
+	 * which is what a step running an event pass over its own send
+	 * wants: the only frame in play is the one already buffered.
+	 */
+	if (delay_ms)
+	    usleep(delay_ms * 1000);
+
+	memset(&out, 0, sizeof(out));
+	out.drvid             = in.drvid;
+	out.type              = DW1000_RSVC_TX_DONE;
+	out.tx_done.timestamp = stamp;
+	stub_send(s, peer, peerlen, RSVC_UWB_IO, 0, 0,
+		  RSVC_HDR_FLG_INTERRUPT, &out,
+		  offsetof(struct dw1000_driver_iopkt, tx_done.timestamp) +
+		  sizeof(out.tx_done.timestamp));
 	break;
+    }
 
     case DW1000_RSVC_RX_CONFIG: {
 	unsigned n, first;
@@ -467,6 +509,19 @@ static struct {
     int      later_id[2];       /* ... and the frames they were handed */
 } err_probe;
 
+/* What step_stale_frame_told_apart() records: how many times each
+ * callback ran over the two passes, and which frame rx_ok was handed.
+ * Like the two probes above it rides the callbacks the config carries
+ * for every step, and does nothing while its step is not running.
+ */
+static struct {
+    bool     active;
+    unsigned rx_ok;
+    unsigned tx_done;
+    int      id_ok;                     /* the frame the first rx_ok got */
+    int      id_again;                  /* ... and what a second was handed */
+} stale_probe;
+
 /* The medium, reachable from inside a callback: the third frame is asked
  * for there rather than by the step, which is the whole point.
  */
@@ -478,6 +533,13 @@ static struct stub *g_stub;
  */
 #define WAIT_STEPS      1000
 #define WAIT_SLEEP_US   2000            /* 1000 x 2 ms = 2 s */
+
+/* How long the medium holds a send on the air for the one step that runs
+ * an event pass under one. Long enough for that pass (a read-out over
+ * SPI, which is a function call here) and far short of the two seconds
+ * the waits above give up after.
+ */
+#define TX_HOLD_MS      100
 
 /* Until every bit of `bits` stands in SYS_STATUS. The word actually read
  * is handed back either way: on a timeout it is the evidence.
@@ -611,10 +673,32 @@ cb_rx_error_probe(dw1000_t *dw, uint32_t status)
     err_probe.st_error_fourth = sys_status(dw);
 }
 
+/* tx_done, for step_stale_frame_told_apart(): the completion of the send
+ * that pass was run under. Inactive for every other step, which is why
+ * the config could carry cb_nothing before.
+ */
+static void
+cb_tx_done_probe(dw1000_t *dw, uint32_t status)
+{
+    (void)dw; (void)status;
+
+    if (stale_probe.active)
+	stale_probe.tx_done++;
+}
+
 static void
 cb_rx_probe(dw1000_t *dw, uint32_t status, size_t len, bool rng)
 {
     (void)len; (void)rng;
+
+    if (stale_probe.active) {
+	(void)status;
+	if (stale_probe.rx_ok++ == 0)
+	    stale_probe.id_ok = buffered_frame_id(dw);
+	else
+	    stale_probe.id_again = buffered_frame_id(dw);
+	return;
+    }
 
     if (err_probe.active) {
 	err_probe_rx_ok(dw, status);
@@ -1464,6 +1548,183 @@ step_receiver_back_before_rx_error(dw1000_t *dw, struct stub *s)
 }
 
 
+/* A stale good frame, and the driver telling it apart.
+ *
+ * DW1000.md, "With the buffer pointers aligned, the swinging status bits
+ * are the chip's flags, not the buffer's" (measured 2026-09-18), third
+ * observation, and the path the bench reached it by: a frame lands with
+ * the receiver not coming back by itself (RXAUTR clear), the host sends,
+ * and the event pass that runs while that send is on the air finds
+ * RXFCG with no TXFRS. Double buffered, that branch does not enable the
+ * receiver over a send: the frame is read out with the receiver off,
+ * the clear takes, and the HRBPT after the callback lands the host on
+ * the buffer the chip parked on, the two pointers aligned.
+ *
+ * What the host reads there is the chip's own record of that last
+ * reception: RXFCG|RXDFR|LDEDONE again, with RXPRD|RXSFDD|RXPHD clear,
+ * over receive registers that select the host's buffer (the frame
+ * before the one just read). A masked clear written there does not
+ * take; the next receiver enable is what resets them. That is the model
+ * side of this step.
+ *
+ * The driver side is the guard of 222e9f8 in dw1000_process_events():
+ * the completion's pass, a separate later pass, sees exactly that word
+ * and reports nothing, where before it delivered the previous frame a
+ * second time with this one's flags.
+ */
+static const char *
+step_stale_frame_told_apart_body(dw1000_t *dw, struct stub *s)
+{
+    const uint32_t swing  = DW1000_FLG_SYS_STATUS_RXDFR |
+			    DW1000_FLG_SYS_STATUS_RXFCG |
+			    DW1000_FLG_SYS_STATUS_LDEDONE;
+    const uint32_t detect = DW1000_FLG_SYS_STATUS_RXPRD  |
+			    DW1000_FLG_SYS_STATUS_RXSFDD |
+			    DW1000_FLG_SYS_STATUS_RXPHD;
+    uint8_t     payload[16];
+    unsigned    first;
+    int         host, ic, rc;
+    uint32_t    st_frame, st_pass, st_clear, st_txfrs, st_pass2, st_enabled;
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
+
+    memset(&stale_probe, 0, sizeof(stale_probe));
+    memset(payload, 0x5A, sizeof(payload));
+
+    pthread_mutex_lock(&s->lock);
+    first = s->next_id;
+    pthread_mutex_unlock(&s->lock);
+
+    /* Frame 1. With RXAUTR clear the chip idles once it is in, which is
+     * the bench's setting and what leaves the host to read it out over
+     * its own send.
+     */
+    deliver(dw, s, 1);
+    if (! wait_for_status(dw, DW1000_FLG_SYS_STATUS_RXFCG, &st_frame))
+	return REASON("no RXFCG for the frame within 2 s"
+		      " (status 0x%08" PRIx32 ")", st_frame);
+    printf("    status after frame 1        : 0x%08" PRIx32 "\n", st_frame);
+
+    buffer_pointers(dw, &host, &ic);
+    if (host == ic)
+	return REASON("HSRBP and ICRBP are both %d: the frame is not"
+		      " waiting in a buffer of its own", host);
+
+    /* The send, held on the air by the medium for as long as the pass
+     * below takes. dw1000_tx_send() reaches IDLE keeping the receiver's
+     * events, so the frame's RXFCG is still there, and with no TXFRS
+     * beside it: the completion is a pass of its own.
+     */
+    pthread_mutex_lock(&s->lock);
+    s->tx_done_delay_ms = TX_HOLD_MS;
+    pthread_mutex_unlock(&s->lock);
+
+    stale_probe.active = true;
+    rc = dw1000_tx_send(dw, payload, sizeof(payload), DW1000_TX_IMMEDIATE);
+    if (rc != 0)
+	return REASON("the send over the buffered frame was refused (%d)",
+		      rc);
+
+    /* The pass over the send. */
+    dw1000_process_events(dw);
+    st_pass = sys_status(dw);
+    buffer_pointers(dw, &host, &ic);
+    printf("    status after the send's pass: 0x%08" PRIx32
+	   " (HSRBP %d, ICRBP %d)\n", st_pass, host, ic);
+
+    if (stale_probe.rx_ok != 1)
+	return REASON("rx_ok ran %u times over the buffered frame, want 1",
+		      stale_probe.rx_ok);
+    if (stale_probe.id_ok != (int)first)
+	return REASON("rx_ok was handed frame %d, want %u",
+		      stale_probe.id_ok, first);
+    if (host != ic)
+	return REASON("the pass left HSRBP at %d and ICRBP at %d: the"
+		      " toggle after the read-out did not land the host on"
+		      " the chip's buffer", host, ic);
+
+    /* The model side: the chip's flags, not the buffer's. */
+    if ((st_pass & swing) != swing)
+	return REASON("with the pointers aligned the word reads 0x%08" PRIx32
+		      ": RXFCG|RXDFR|LDEDONE must read set again, the chip's"
+		      " record of its last reception", st_pass);
+    if (st_pass & detect)
+	return REASON("0x%08" PRIx32 " carries RXPRD, RXSFDD or RXPHD: the"
+		      " detect bits were cleared with the frame and nothing"
+		      " has been received since", st_pass);
+
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE, swing);
+    st_clear = sys_status(dw);
+    printf("    status after a masked clear : 0x%08" PRIx32 "\n", st_clear);
+    if ((st_clear & swing) != swing)
+	return REASON("a masked clear written with the pointers aligned"
+		      " took (0x%08" PRIx32 "): no status write clears the"
+		      " chip's own flags", st_clear);
+
+    /* The send lands. The medium held its completion and delivers
+     * nothing else meanwhile, so this is the frame leaving the air.
+     */
+    pthread_mutex_lock(&s->lock);
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    if (! wait_for_status(dw, DW1000_FLG_SYS_STATUS_TXFRS, &st_txfrs))
+	return REASON("no TXFRS for the held send within 2 s"
+		      " (status 0x%08" PRIx32 ")", st_txfrs);
+    printf("    status at the completion    : 0x%08" PRIx32 "\n", st_txfrs);
+
+    /* The driver side: the completion's pass, carrying the stale word. */
+    dw1000_process_events(dw);
+    st_pass2 = sys_status(dw);
+    printf("    status after that pass      : 0x%08" PRIx32
+	   " (%u rx_ok, %u tx_done)\n",
+	   st_pass2, stale_probe.rx_ok, stale_probe.tx_done);
+
+    if (stale_probe.rx_ok != 1)
+	return REASON("rx_ok ran %u times: the completion's pass took the"
+		      " stale RXFCG for a frame and read the host's buffer"
+		      " out again (frame %d, first %d)", stale_probe.rx_ok,
+		      stale_probe.id_again, stale_probe.id_ok);
+    if (stale_probe.tx_done != 1)
+	return REASON("tx_done ran %u times, want 1", stale_probe.tx_done);
+
+    /* And the enable is what resets the flags, as the bench has it. */
+    rc = dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
+    if (rc != 0)
+	return REASON("dw1000_rx_start() after the completion answered %d,"
+		      " not 0", rc);
+    st_enabled = sys_status(dw);
+    printf("    status once enabled again   : 0x%08" PRIx32 "\n", st_enabled);
+    if (st_enabled & swing)
+	return REASON("the receiver enable left 0x%08" PRIx32 ": it is what"
+		      " resets the chip's flags", st_enabled);
+
+    return NULL;
+}
+
+static const char *
+step_stale_frame_told_apart(dw1000_t *dw, struct stub *s)
+{
+    /* RXAUTR clear for this step only, which is how the bench measured
+     * it: the receiver that comes back by itself resets the flags at
+     * once and there is no stale word to read. The file's other steps
+     * need the burst, and the burst needs RXAUTR.
+     */
+    g_config->rxauto = 0;
+    const char *why = step_stale_frame_told_apart_body(dw, s);
+    g_config->rxauto = 1;
+
+    stale_probe.active = false;
+    pthread_mutex_lock(&s->lock);
+    s->tx_done_delay_ms = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    return why;
+}
+
+
 #if DW1000_WITH_PROPRIETARY_LONG_FRAME
 /* Errata 1.4 3.2 (RX-1): a long transmit while a frame is held.
  *
@@ -1609,7 +1870,7 @@ main(void)
 	 * events it has somewhere to report, and one step needs RXFCG
 	 * unmasked to have an IRQS worth checking.
 	 */
-	.cb.tx_done       = cb_nothing,
+	.cb.tx_done       = cb_tx_done_probe,
 	.cb.rx_ok         = cb_rx_probe,
 	.cb.rx_error      = cb_rx_error_probe,
 	.cb.rx_timeout    = cb_nothing,
@@ -1698,6 +1959,8 @@ main(void)
                                     step_error_beside_a_good_frame(&dw, &stub));
     step("the receiver is back before rx_error",
                                     step_receiver_back_before_rx_error(&dw, &stub));
+    step("a stale frame is told apart",
+                                    step_stale_frame_told_apart(&dw, &stub));
 
     dw1000_txrx_off(&dw);
     /* The three steps, in the order dw1000/emulation.h insists on:

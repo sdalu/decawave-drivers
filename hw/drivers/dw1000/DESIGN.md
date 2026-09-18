@@ -164,8 +164,13 @@ would report the previous frame again. `dw1000_process_events()`
 therefore takes `RXFCG` with the pointers aligned and none of
 `RXPRD|RXSFDD|RXPHD` set as stale: it strips the bits from the word it
 works on, reports nothing, toggles nothing, and lets the enable that
-ends the pass reset them. Measured, not read: 24 of 24 duplicates over
-96 runs had that shape, and 0 of 48 runs duplicate with the check.
+ends the pass reset them. Measured, not read (24 of 24 duplicates over
+96 runs had that shape, and 0 of 48 runs duplicate with the check), and
+since reproduced in `port/emulation`, which shows the chip's flags with
+the pointers aligned: `tests/emulation/dblbuff.c`,
+`step_stale_frame_told_apart`, where the pass over a send on the air
+reads the frame out, toggles, and the completion's pass finds that word
+and reports nothing.
 
 ### The registers that do not swing
 

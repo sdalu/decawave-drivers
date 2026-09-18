@@ -327,6 +327,22 @@ only after "a frame reception failure". So a *good* frame stops a
 single-buffered receiver and does not stop a double-buffered one. A
 frame wait timeout never re-enables, in either mode.
 
+The swinging bits are not simply that buffer's latch (DW1000.md, "With
+the buffer pointers aligned, the swinging status bits are the chip's
+flags, not the buffer's", measured 2026-09-18). Whenever double
+buffering is on and the two pointers are on one buffer with nothing
+outstanding, a host read of `SYS_STATUS` shows in `LDEDONE`, `RXDFR`,
+`RXFCG` and `RXFCE` the chip's own record of its last completed
+reception rather than the set the host is on, and a write-one-to-clear
+of those bits leaves that record standing: it is set when a reception
+completes, reset by the next receiver enable, and untouched by `TRXOFF`,
+by a status write and by `HRBPT`. Nothing outstanding is the measured
+case, the IC parked on the buffer a toggle has just released; the other
+way the pointers come together is the wrap-around of UM §4.3.5, both
+buffers held by the host, and there the host's set is that buffer's own
+latch as before. It is in `tests/emulation/dblbuff.c`, step
+`step_stale_frame_told_apart`.
+
 Nothing is sent to the medium server when the receiver comes back
 through `RXAUTR`. A server that treats `RX_CONFIG` as "the receiver is
 now on" will therefore think a node has stopped listening after its
@@ -335,6 +351,19 @@ which is why this is sound here. A host re-enabling the receiver
 explicitly does send one, even if the receiver was already on.
 
 ### Still not modelled
+
+- **The masked clear that waits for the toggle.** DW1000.md, "With the
+  buffer pointers aligned, the swinging status bits are the chip's
+  flags, not the buffer's" (measured 2026-09-18): with the receiver
+  enabled and the two pointers apart, a host's masked clear of `RXDFR`,
+  `RXFCG` and `LDEDONE` does not take, the bits read back set and go
+  only with the `HRBPT` toggle, while `RXPRD`, `RXSFDD` and `RXPHD`
+  clear as written. Here that clear takes, as it always did. What the
+  measurement does not say is what becomes of the interrupt line, and
+  `IRQS` being the OR of the masked status bits (UM §7.2.17) the model
+  cannot hold the bits set without also holding the line high: a model
+  that did so stopped raising edges for later frames, since nothing
+  ever cleared them again.
 
 - **Frame filtering.** `FFEN` and the `FF*` bits are stored and
   ignored, so `AFFREJ` is never raised and no frame is ever rejected.
