@@ -157,6 +157,7 @@ the compiler command line. `make options` prints this table.
 | `SFD_TIMEOUT`                  | 0       | caller-chosen SFD timeout |
 | `SFD_TIMEOUT_DEFAULT`          | 0       | a fixed, not computed one |
 | `HOTFIX_AAT_IEEE802_15_4_2011` | 1       | works around a stray AAT  |
+| `DEBUG`                        | 0       | the bench diagnostics     |
 
 One more takes a value rather than a flag:
 `DW1000_SFD_TIMEOUT_DEFAULT` (default `DW1000_SFD_TIMEOUT_MAX`).

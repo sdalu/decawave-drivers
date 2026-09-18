@@ -63,7 +63,7 @@ rpi-d received 47 or fewer of 50 in five runs of seventeen; with the
 enable moved to the end of that pass, none of twelve below 48
 (2026-09-17). The statistical experiment below was run on 2026-09-18:
 288 duplex runs, the placement alternated run by run (a bench knob,
-`cfg->rx_enable_early`), every frame's arrival traced so that the
+`cfg->rx_enable_early`, under `DW1000_WITH_DEBUG`), every frame's arrival traced so that the
 harness's start skew could be taken out (`DW1000.md`, "The bench").
 Scattered losses, the skew removed:
 

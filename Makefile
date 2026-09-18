@@ -313,7 +313,8 @@ options:					## print the compile-time options and their defaults
 	    DW1000_WITH_EXTENDED_SEND                1 \
 	    DW1000_WITH_SFD_TIMEOUT                  0 \
 	    DW1000_WITH_SFD_TIMEOUT_DEFAULT          0 \
-	    DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011 1
+	    DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011 1 \
+	    DW1000_WITH_DEBUG                        0
 	@echo ''
 	@echo 'One takes a value rather than a flag:'
 	@echo ''

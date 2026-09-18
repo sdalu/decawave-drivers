@@ -84,6 +84,22 @@
 #endif
 
 /**
+ * @brief Keep the bench diagnostics
+ *
+ * @details Three things a measurement wants and a radio does not:
+ *          the receiver enable placed back inside the event pass
+ *          (dw1000_config_t::rx_enable_early), the flags of a refused
+ *          delayed send (dw1000_t::tx_late_flags) and the status word
+ *          at three points of a pass (dw1000_t::dbg_pass). The last
+ *          costs two SYS_STATUS reads per double buffered good frame.
+ *          Off unless something is being measured; INVESTIGATE.md
+ *          says what each was for.
+ */
+#if !defined(DW1000_WITH_DEBUG) || defined(__DOXYGEN__)
+#define DW1000_WITH_DEBUG 0
+#endif
+
+/**
  * @brief Value for default SFD timeout
  *
  * @details Value can be between 1 and 65535, but useful values
@@ -458,6 +474,7 @@ typedef struct dw1000_config {
      * its completion rather than refused.
      */
     uint8_t    rx_keep_on:1;
+#if DW1000_WITH_DEBUG || defined(__DOXYGEN__)
     /**
      * @brief Bench knob: enable the receiver inside the event pass
      *
@@ -468,6 +485,7 @@ typedef struct dw1000_config {
      * For INVESTIGATE.md entry 1 only; leave clear.
      */
     uint8_t    rx_enable_early:1;
+#endif
     /**
      * @brief Define led blink time in 14ms unit
      */
@@ -627,6 +645,7 @@ struct dw1000 {
                             //  included, for its airtime
     uint32_t tx_airtime;    // Airtime of the send in progress, ticks
     uint8_t  tx_delayed;    // The send in progress waits for DX_TIME
+#if DW1000_WITH_DEBUG
     uint32_t dbg_pass[3];   // Bench knob, INVESTIGATE.md 1b: SYS_STATUS
                             //  as dw1000_process_events() read it on
                             //  entry, after the double buffered clear,
@@ -635,6 +654,7 @@ struct dw1000 {
                             //  too-late refusal (HPDWARN bit 3, TXPUTE
                             //  bit 10): kept for a probe, since the
                             //  TRXOFF of the refusal clears them
+#endif
     uint64_t tx_suspect;    // System time at which a send in progress was
                             //  first seen absent from the chip (no TX
                             //  flag, transceiver not in TX); 0 otherwise.

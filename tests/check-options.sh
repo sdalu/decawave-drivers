@@ -1,15 +1,15 @@
 #!/bin/sh
-# The README lists seven compile-time options, and nothing in this tree
+# The README lists eight compile-time options, and nothing in this tree
 # selects any of them: whoever vendors the driver does, in their own build.
 # So an option that stops compiling stops compiling silently, and is found
 # by the one consumer who wanted it. DW1000_WITH_EXTENDED_SEND=0 spent an
 # unknown length of time giving fourteen errors that way.
 #
-# Compile the core over all 128 combinations, against the null port, the
+# Compile the core over all 256 combinations, against the null port, the
 # one OSAL that needs no vendor tree and no hardware. Run by `make check`.
 #
 # Only -fsyntax-only: this is about the options being coherent, not about
-# codegen, and 128 real compiles would cost more than the answer is worth.
+# codegen, and 256 real compiles would cost more than the answer is worth.
 #
 # POSIX sh and awk only.
 set -e
@@ -37,7 +37,8 @@ DW1000_WITH_PROPRIETARY_LONG_FRAME
 DW1000_WITH_EXTENDED_SEND
 DW1000_WITH_SFD_TIMEOUT
 DW1000_WITH_SFD_TIMEOUT_DEFAULT
-DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011'
+DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011
+DW1000_WITH_DEBUG'
 
 n=`echo "$OPTS" | wc -l | tr -d ' '`
 total=`awk -v n="$n" 'BEGIN{print 2^n}'`
