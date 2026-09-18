@@ -367,8 +367,8 @@ a preamble found right after the start, and none in 81216 frames with
 it clear, receive counts unchanged. So a host that sends, and re-arms
 from its `rx_error` and `rx_timeout` callbacks as every host here
 does, leaves `rxauto` clear; the bit buys such a host nothing. The
-sniffer, which never sends, may keep it. `probe/app/unix/main.c` and
-the SPANK firmwares set it today and send.
+sniffer, which never sends, keeps it; the probe and the SPANK firmwares
+no longer do.
 
 ### The `rx_ok` contract changes
 

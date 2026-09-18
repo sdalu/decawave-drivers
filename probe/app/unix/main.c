@@ -134,7 +134,7 @@ static const dw1000_config_t dw1000_config = {
     .leds             = DW1000_LED_ALL,
     .leds_blink_time  = 3,
     .lde_loading      = 1,
-    .rxauto           = 1,
+    .rxauto           = 0,     // A sender leaves the chip's re-enable off: see hw/drivers/dw1000/README.md
     /* Not an experiment any more, and for the responder not a choice:
      * benched 2026-09-17 against rpi-d, 4 interleaved rounds of 30
      * exchanges per combination, a single-buffered responder resolved
