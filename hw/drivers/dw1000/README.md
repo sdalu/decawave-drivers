@@ -345,21 +345,30 @@ because the both-ends-single-buffered case does not resolve at all. The
 estimators disagree in sign, so the number to expect is small and the
 direction is unsettled. See AUDIT.md.
 
-### `rxauto` is a separate bit, and both applications here keep it on
+### `rxauto` is a separate bit, and a host that sends keeps it off
 
 `cfg->dblbuff` and `cfg->rxauto` are independent. `rxauto` becomes
 `SYS_CFG`'s `RXAUTR`, written once by `dw1000_initialise()`; `dblbuff`
 is what makes `dw1000_process_events()` write `RXENAB` itself in the
-good-frame path, before calling `rx_ok`. Both applications in this tree
-that turn double buffering on leave `rxauto` set as well
-(`probe/app/unix/main.c` and `sniffer/app/unix/uwb_dw1000.c`), so that
-pairing is what the bench results were obtained with, and the one to
-start from.
+good-frame path, before calling `rx_ok`. Neither bit covers a timeout,
+so an `rx_timeout` callback re-arms for itself either way.
 
-What is *not* established is whether `rxauto` is load-bearing in this
-mode or merely harmless: nothing here has been measured with `dblbuff`
-set and `rxauto` clear. Neither bit covers a timeout, so an `rx_timeout`
-callback re-arms for itself either way.
+`RXAUTR` re-enables the receiver behind the host's back, and one place
+that matters: between the transceiver-off a host issues before a send
+and the send's `TXSTRT`. When that off cuts a reception, the chip
+raises the error and, with `RXAUTR` set, has the receiver back on
+within the hundred-odd microseconds the frame write takes; a `TXSTRT`
+written while the receiver is locking onto a preamble is dropped, no
+transmit flag ever raised, and the host waits for a completion that
+never comes. Measured on ruby-dw1000's two-node bench, two nodes
+sending at each other every 30 ms with `dblbuff` set: one send in
+about six thousand lost with `rxauto` set, `SYS_STATE` reading RX with
+a preamble found right after the start, and none in 81216 frames with
+it clear, receive counts unchanged. So a host that sends, and re-arms
+from its `rx_error` and `rx_timeout` callbacks as every host here
+does, leaves `rxauto` clear; the bit buys such a host nothing. The
+sniffer, which never sends, may keep it. `probe/app/unix/main.c` and
+the SPANK firmwares set it today and send.
 
 ### The `rx_ok` contract changes
 
