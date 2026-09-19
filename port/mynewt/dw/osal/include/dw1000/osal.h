@@ -39,9 +39,6 @@
 #define DW1000_SFD_TIMEOUT_DEFAULT			\
     MYNEWT_VAL(DW1000_SFD_TIMEOUT_DEFAULT)
 
-#define DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011	\
-    MYNEWT_VAL(DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011)
-
 
 
 /*----------------------------------------------------------------------*/

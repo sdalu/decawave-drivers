@@ -156,7 +156,6 @@ the compiler command line. `make options` prints this table.
 | `EXTENDED_SEND`                | 1       | delayed and stamped sends |
 | `SFD_TIMEOUT`                  | 0       | caller-chosen SFD timeout |
 | `SFD_TIMEOUT_DEFAULT`          | 0       | a fixed, not computed one |
-| `HOTFIX_AAT_IEEE802_15_4_2011` | 1       | works around a stray AAT  |
 | `EVENT_COUNTERS`               | 0       | the 0x2F diagnostic bank  |
 | `ACCUMULATOR`                  | 0       | the CIR accumulator read  |
 | `TEMP_COMPENSATION`            | 0       | TX power and bandwidth    |

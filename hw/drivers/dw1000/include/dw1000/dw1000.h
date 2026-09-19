@@ -70,20 +70,6 @@
 #endif
 
 /**
- * @brief Compile hotfix for AAT and IEEE802.15.4-2011 compliant frames
- *
- * @details Because of a previous frame not being received properly,
- *          AAT bit can be set upon the proper reception of a frame not
- *          requesting for acknowledgement (ACK frame is not actually
- *          sent though). If the AAT bit is set, check ACK request bit
- *          in frame control to confirm (this implementation works only
- *          for IEEE802.15.4-2011 compliant frames).
- */
-#if !defined(DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011) || defined(__DOXYGEN__)
-#define DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011 1
-#endif
-
-/**
  * @brief Keep the bench diagnostics
  *
  * @details Three things a measurement wants and a radio does not:

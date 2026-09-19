@@ -1,19 +1,19 @@
 #!/bin/sh
-# The README lists eleven compile-time options, and nothing in this tree
+# The README lists ten compile-time options, and nothing in this tree
 # selects any of them: whoever vendors the driver does, in their own build.
 # So an option that stops compiling stops compiling silently, and is found
 # by the one consumer who wanted it. DW1000_WITH_EXTENDED_SEND=0 spent an
 # unknown length of time giving fourteen errors that way.
 #
-# Compile the core over all 2048 combinations, against the null port, the
+# Compile the core over all 1024 combinations, against the null port, the
 # one OSAL that needs no vendor tree and no hardware. Run by `make check`.
 #
 # Only -fsyntax-only: this is about the options being coherent, not about
-# codegen, and 2048 real compiles would cost more than the answer is worth.
-# Even syntax-only it is nine minutes, the matrix being 2^n in the option
-# count. If that ever has to come down, note that EVENT_COUNTERS,
-# ACCUMULATOR and TEMP_COMPENSATION touch no code the other eight touch,
-# so crossing them with everything buys less than the count suggests.
+# codegen, and 1024 real compiles would cost more than the answer is worth.
+# Even syntax-only it is minutes, the matrix being 2^n in the option count.
+# If that ever has to come down, note that EVENT_COUNTERS, ACCUMULATOR and
+# TEMP_COMPENSATION touch no code the other seven touch, so crossing them
+# with everything buys less than the count suggests.
 #
 # POSIX sh and awk only.
 set -e
@@ -41,7 +41,6 @@ DW1000_WITH_PROPRIETARY_LONG_FRAME
 DW1000_WITH_EXTENDED_SEND
 DW1000_WITH_SFD_TIMEOUT
 DW1000_WITH_SFD_TIMEOUT_DEFAULT
-DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011
 DW1000_WITH_EVENT_COUNTERS
 DW1000_WITH_ACCUMULATOR
 DW1000_WITH_TEMP_COMPENSATION

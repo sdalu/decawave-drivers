@@ -65,7 +65,7 @@ matrix, the manifest, the radio-value validation, four `port/emulation`
 tests and the two probe tests, and `clang --analyze` reports nothing.
 The option matrix was 256 combinations when the audit ran, and 128 once
 `DW1000_WITH_DWM1000_EVK_COMPATIBILITY` was dropped in `c58f953`. It is
-2048 now, at eleven options, the matrix being 2^n.
+1024 now, at ten options, the matrix being 2^n.
 
 ## Measured: the transceiver's transitions
 

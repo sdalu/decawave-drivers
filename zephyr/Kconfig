@@ -47,17 +47,6 @@ config DW1000_SFD_TIMEOUT_DEFAULT
           are usually between 120 and 4161. Use computed value if set to 0.
 	default 0
 
-config DW1000_HOTFIX_AAT_IEEE802_15_4_2011
-        bool "Hotfix for AAT and IEEE802.15.4-2011 compliant frames"
-	help
-          Because of a previous frame not being received properly,
-          AAT bit can be set upon the proper reception of a frame not
-          requesting for acknowledgement (ACK frame is not actually
-          sent though). If the AAT bit is set, check ACK request bit
-          in frame control to confirm (this implementation works only
-          for IEEE802.15.4-2011 compliant frames).
-	default y
-
 config DW1000_EVENT_COUNTERS
         bool "The chip's diagnostic event counters"
 	default n

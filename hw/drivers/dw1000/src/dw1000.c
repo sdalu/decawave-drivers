@@ -2215,14 +2215,25 @@ bool dw1000_process_events(dw1000_t *dw) {
 	bool   ranging;
 	dw1000_rx_get_frame_info(dw, &length, &ranging);
 	    
-#if DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011
         // HOTFIX: From the official deca_device.c:
         //   "Because of a previous frame not being received properly,
         //    AAT bit can be set upon the proper reception of a frame not
         //    requesting for acknowledgement (ACK frame is not actually
         //    sent though). If the AAT bit is set, check ACK request bit
         //    in frame control to confirm"
-	// WARN: Only for IEEE802.15.4-2011 compliant frames
+	//
+	// The first two octets are read as an IEEE 802.15.4 frame control
+	// field, and nothing here checks that they are one. They are:
+	// §7.2.17 sets AAT only "when frame filtering is enabled and a
+	// data frame (or MAC command frame) is received (correctly
+	// addressed and with a good CRC)", so a frame that got this far
+	// with AAT standing is one the chip itself parsed and accepted as
+	// 802.15.4. Nor can the bit be left over from a run when filtering
+	// was on: the same section has AAT "automatically cleared by the
+	// next receiver enable", and the receiver had to be enabled to
+	// receive this frame. So the read is sound whenever it happens,
+	// and the whole block costs nothing when AAT is clear, which is
+	// why no option guards it.
         if ((status & DW1000_FLG_SYS_STATUS_AAT) &&
 	    (length >= (2 + DW1000_CRC_LENGTH))) {
 	    // Assuming IEEE802.15.4-2011 compliant frames
@@ -2245,7 +2256,6 @@ bool dw1000_process_events(dw1000_t *dw) {
 		    dw->state = DW1000_STATE_RX;
 	    }
         }
-#endif
 
 	// Clear wait4resp internal flag: the receiver this frame came
 	// through was the one WAIT4RESP had armed. Not over a send on the
