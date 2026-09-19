@@ -157,6 +157,9 @@ the compiler command line. `make options` prints this table.
 | `SFD_TIMEOUT`                  | 0       | caller-chosen SFD timeout |
 | `SFD_TIMEOUT_DEFAULT`          | 0       | a fixed, not computed one |
 | `HOTFIX_AAT_IEEE802_15_4_2011` | 1       | works around a stray AAT  |
+| `EVENT_COUNTERS`               | 0       | the 0x2F diagnostic bank  |
+| `ACCUMULATOR`                  | 0       | the CIR accumulator read  |
+| `TEMP_COMPENSATION`            | 0       | TX power and bandwidth    |
 | `DEBUG`                        | 0       | the bench diagnostics     |
 
 One more takes a value rather than a flag:
@@ -353,9 +356,16 @@ from them.
 | APS013, the implementation of two-way ranging | 2.0 | 2.4 | [ra007039](https://www.qorvo.com/products/r/ra007039) |
 | APS014, antenna delay calibration | 1.01 | 1.3 | [da008449](https://www.qorvo.com/products/d/da008449) |
 | APS022, debugging DW1000-based products and systems | 1.4 | 1.4 | [da008452](https://www.qorvo.com/products/d/da008452) |
+| APS023 part 1, transmit power calibration and management | 1.4 | 1.4 | [da008453](https://www.qorvo.com/products/d/da008453) |
+| APS023 part 2, TX bandwidth and channel power compensation | 1.4 | 1.4 | [da008454](https://www.qorvo.com/products/d/da008454) |
 
 The [product page][6] lists them all under Documents and Software,
 should an identifier above move.
+
+Qorvo's site now answers `curl` and `wget` with a Vercel bot challenge
+(HTTP 429, `x-vercel-mitigated: challenge`), whatever headers are sent.
+A real browser passes it: headless Chromium against the link above
+lands the PDF in the download directory.
 
 ## License
 

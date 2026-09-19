@@ -125,6 +125,14 @@ struct stub {
      * step here that needs a send it can run an event pass under.
      */
     unsigned tx_done_delay_ms;
+
+    /* The device time the stub stamped the last burst frame with, which
+     * is what the model writes into RX_TIME.RX_STAMP for it
+     * (port/emulation/README.md, "Timestamp convention"): the only way
+     * a step can say whether the stamp a callback read is this frame's
+     * or an older one's.
+     */
+    uint64_t last_rx_stamp;
 };
 
 static void
@@ -242,6 +250,10 @@ stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 	    out.rx.flags     = 0;
 	    out.rx.timestamp = dw1000_emulation_clock();
 	    framelen = burst_frame(out.rx.frame, first + i);
+
+	    pthread_mutex_lock(&s->lock);
+	    s->last_rx_stamp = out.rx.timestamp;
+	    pthread_mutex_unlock(&s->lock);
 
 	    // Damage the FCS of the nominated frame, if any.
 	    if (corrupt >= 0 && (unsigned)corrupt == i)
@@ -522,6 +534,27 @@ static struct {
     int      id_again;                  /* ... and what a second was handed */
 } stale_probe;
 
+/* What the LDE step records: how often each callback ran, what the word
+ * rx_error was handed for the cut frame was, and what the first rx_ok
+ * was handed. The receive timestamp is read there and nowhere else:
+ * RX_TIME swings with the buffer pointer and the driver releases the
+ * buffer as soon as the callback returns, so a step that read it
+ * afterwards would be reading the other buffer.
+ */
+static struct {
+    bool     active;
+    unsigned rx_ok;
+    unsigned rx_error;
+    unsigned tx_done;
+    uint32_t st_error;                  /* the word rx_error was handed  */
+    uint32_t st_first;                  /* the word the first rx_ok got  */
+    int      id_first;                  /* ... and the frame it held     */
+    uint64_t rmarker_first;             /* ... and the RX_TIME it read   */
+    uint32_t st_later;                  /* the same, for a later rx_ok   */
+    int      id_later;
+    uint64_t rmarker_later;
+} lde_probe;
+
 /* The medium, reachable from inside a callback: the third frame is asked
  * for there rather than by the step, which is the whole point.
  */
@@ -645,6 +678,17 @@ err_probe_rx_ok(dw1000_t *dw, uint32_t status)
 static void
 cb_rx_error_probe(dw1000_t *dw, uint32_t status)
 {
+    /* The LDE step, whose cut frame comes through here and nowhere
+     * else. Ahead of the err_probe guard, as cb_rx_probe() does it, and
+     * with nothing of err_probe touched: the two are never active at
+     * once.
+     */
+    if (lde_probe.active) {
+	lde_probe.rx_error++;
+	lde_probe.st_error = status;
+	return;
+    }
+
     if (! err_probe.active)
 	return;
 
@@ -684,12 +728,27 @@ cb_tx_done_probe(dw1000_t *dw, uint32_t status)
 
     if (stale_probe.active)
 	stale_probe.tx_done++;
+    if (lde_probe.active)
+	lde_probe.tx_done++;
 }
 
 static void
 cb_rx_probe(dw1000_t *dw, uint32_t status, size_t len, bool rng)
 {
     (void)len; (void)rng;
+
+    if (lde_probe.active) {
+	if (lde_probe.rx_ok++ == 0) {
+	    lde_probe.st_first      = status;
+	    lde_probe.id_first      = buffered_frame_id(dw);
+	    lde_probe.rmarker_first = dw1000_rx_get_rmarker_time(dw);
+	} else {
+	    lde_probe.st_later      = status;
+	    lde_probe.id_later      = buffered_frame_id(dw);
+	    lde_probe.rmarker_later = dw1000_rx_get_rmarker_time(dw);
+	}
+	return;
+    }
 
     if (stale_probe.active) {
 	(void)status;
@@ -806,6 +865,52 @@ deliver(dw1000_t *dw, struct stub *s, unsigned n)
 
     dw1000_rx_start(dw, DW1000_RX_IMMEDIATE | DW1000_RX_NO_DBLBUFF_SYNC);
     usleep(150000);
+}
+
+/* A frame, and not a moment's sleep afterwards.
+ *
+ * deliver() above gives the burst 150 ms to land, which is right for
+ * every step that wants the frame simply to be there. The LDE step
+ * wants the opposite: the TRXOFF that cuts the run has to be issued
+ * while the run is still going, so the frame has to be caught the
+ * instant the model reports it. Hence the tight poll, with no usleep in
+ * it, and the same two second ceiling the other waits use.
+ *
+ * The word that was read is handed back either way: on a timeout it is
+ * the evidence.
+ */
+#define POLL_STEPS      2000000
+
+static bool
+deliver_and_catch(dw1000_t *dw, struct stub *s, uint32_t bits, uint32_t *got)
+{
+    pthread_mutex_lock(&s->lock);
+    s->burst = 1;
+    pthread_mutex_unlock(&s->lock);
+
+    dw1000_rx_start(dw, DW1000_RX_IMMEDIATE | DW1000_RX_NO_DBLBUFF_SYNC);
+
+    for (int i = 0 ; i < POLL_STEPS ; i++) {
+	uint32_t st = sys_status(dw);
+	if ((st & bits) == bits) {
+	    *got = st;
+	    return true;
+	}
+    }
+    *got = sys_status(dw);
+    return false;
+}
+
+/* The stamp the stub gave the frame it sent last. */
+static uint64_t
+stub_last_stamp(struct stub *s)
+{
+    uint64_t stamp;
+
+    pthread_mutex_lock(&s->lock);
+    stamp = s->last_rx_stamp;
+    pthread_mutex_unlock(&s->lock);
+    return stamp;
 }
 
 /* Nothing received yet: the two pointers must agree, which is what UM
@@ -1551,7 +1656,7 @@ step_receiver_back_before_rx_error(dw1000_t *dw, struct stub *s)
 /* A stale good frame, and the driver telling it apart.
  *
  * DW1000.md, "With the buffer pointers aligned, the swinging status bits
- * are the chip's flags, not the buffer's" (measured 2026-09-18), third
+ * are the chip's flags, not the buffer's", third
  * observation, and the path the bench reached it by: a frame lands with
  * the receiver not coming back by itself (RXAUTR clear), the host sends,
  * and the event pass that runs while that send is on the air finds
@@ -1720,6 +1825,222 @@ step_stale_frame_told_apart(dw1000_t *dw, struct stub *s)
     pthread_mutex_lock(&s->lock);
     s->tx_done_delay_ms = 0;
     pthread_mutex_unlock(&s->lock);
+
+    return why;
+}
+
+
+/* The frame whose LDE run a TRXOFF cut.
+ *
+ * DW1000.md, "A TRXOFF between RXFCG and LDEDONE leaves the frame
+ * without its timestamp, and the IC pointer where it was" (5 of 4482
+ * and 11 of 4415 deliveries over two duplex soaks). UM 7.2.17 has
+ * LDEDONE say "LDE processing done" and UM table 7 swings it with
+ * RXDFR, RXFCG and RXFCE; the LDE is what writes RX_TIME, and UM
+ * 4.3.2 moves ICRBP for a frame with a good CRC. A
+ * TRXOFF that terminates a reception after its payload and CRC are in
+ * and before the run leaves the frame with RXFCG and without LDEDONE:
+ * RX_TIME still holds the previous frame's stamp, and ICRBP is where it
+ * was. The bit never comes afterwards, so there is nothing for the
+ * driver to wait for and it waits for nothing (doc/bench/
+ * 2026-09-19-lde/README.md, "The wait that never ended": 46 waits of up
+ * to 1 ms, 0 of them ever seeing the bit).
+ *
+ * dw1000_emulation_lde_delay() is what makes the window reachable here:
+ * it gives the run a length so that a TRXOFF has somewhere to fall
+ * inside it. One step, for what the driver does with such a frame.
+ *
+ * What the driver does is report it through rx_error and offer no
+ * payload for it. A survey of every consumer found none
+ * that tests LDEDONE in its rx_ok, and in SPANK the status word never
+ * reaches the place the timestamp is read (PROPAGATE.md, "The frame a
+ * node's own send cut is now a receive error"), so a frame handed over
+ * as a good one is a wrong distance or clock offset in every ranging
+ * host and nothing says so. The status word rx_error is handed is the
+ * one the pass was entered with, RXFCG set and LDEDONE clear beside a
+ * detect bit, which is what a host that wants to count these tests.
+ *
+ * What the step falsifies is that re-route: with the cut left to the
+ * good-frame branch the frame reaches rx_ok and no rx_error runs, and
+ * the two assertions below on those two counts both fail.
+ */
+
+/* A run long enough that no scheduling accident closes the window
+ * between the frame being caught and the TRXOFF being written.
+ */
+#define LDE_RUN_LONG_US         20000
+
+static const char *
+step_lde_cut_frame_is_an_error_body(dw1000_t *dw, struct stub *s)
+{
+    const uint32_t good   = DW1000_MSK_SYS_STATUS_ALL_RX_GOOD;
+    const uint32_t detect = DW1000_FLG_SYS_STATUS_RXPRD  |
+			    DW1000_FLG_SYS_STATUS_RXSFDD |
+			    DW1000_FLG_SYS_STATUS_RXPHD;
+    unsigned    first, second;
+    int         host, ic, host_before, ic_before;
+    uint32_t    st_frame, st_off, st_pass;
+    uint64_t    stamp;
+    const char *why;
+
+    if ((why = restart(dw)) != NULL)
+	return why;
+
+    memset(&lde_probe, 0, sizeof(lde_probe));
+
+    /* The run, armed so that the TRXOFF below falls inside it: that is
+     * the cut, which is the case the driver has to report without
+     * toggling.
+     */
+    dw1000_emulation_lde_delay(g_emulation,
+			       DW1000_TX_DELAYED_US(LDE_RUN_LONG_US));
+
+    pthread_mutex_lock(&s->lock);
+    first = s->next_id;
+    pthread_mutex_unlock(&s->lock);
+
+    lde_probe.active = true;
+
+    if (! deliver_and_catch(dw, s, DW1000_FLG_SYS_STATUS_RXFCG, &st_frame))
+	return REASON("no RXFCG for the frame within the poll"
+		      " (status 0x%08" PRIx32 ")", st_frame);
+    printf("    status at RXFCG            : 0x%08" PRIx32 "\n", st_frame);
+
+    if (st_frame & DW1000_FLG_SYS_STATUS_LDEDONE)
+	return REASON("LDEDONE is already set at RXFCG (0x%08" PRIx32 ")",
+		      st_frame);
+    buffer_pointers(dw, &host_before, &ic_before);
+    if (host_before != ic_before)
+	return REASON("HSRBP is %d and ICRBP is %d before LDEDONE",
+		      host_before, ic_before);
+
+    /* The cut. dw1000_txrx_idle() and not dw1000_txrx_off(): the TRXOFF
+     * is the same one, and it is the one the driver's own send path
+     * issues (dw1000_tx_send() through _dw1000_tx_idle()), but
+     * dw1000_txrx_off() clears ALL_RX_GOOD with it and takes the frame's
+     * RXPRD, RXSFDD and RXPHD away. The pass would then read RXFCG with
+     * the pointers aligned and no detect bit, which is the stale word of
+     * DW1000.md, "With the buffer pointers aligned", and the strip above
+     * the good-frame branch would eat it: nothing to report, and nothing
+     * to test. A host that means to keep the frame it has been told
+     * about uses this call, which is what its @details says.
+     */
+    dw1000_txrx_idle(dw);
+    st_off = sys_status(dw);
+    printf("    status after the TRXOFF    : 0x%08" PRIx32 "\n", st_off);
+    if (st_off & DW1000_FLG_SYS_STATUS_LDEDONE)
+	return REASON("LDEDONE came up across the TRXOFF (0x%08" PRIx32 "):"
+		      " the run was not cut and there is nothing to test",
+		      st_off);
+
+    dw1000_process_events(dw);
+    st_pass = sys_status(dw);
+    buffer_pointers(dw, &host, &ic);
+    printf("    status after the pass      : 0x%08" PRIx32
+	   " (HSRBP %d, ICRBP %d)\n", st_pass, host, ic);
+    printf("    the word rx_error got      : 0x%08" PRIx32 "\n",
+	   lde_probe.st_error);
+
+    if (lde_probe.rx_ok != 0)
+	return REASON("rx_ok ran %u times for the cut frame, want 0: the"
+		      " frame has no timestamp of its own and no consumer"
+		      " tests LDEDONE, so it is not offered as a good one",
+		      lde_probe.rx_ok);
+    if (lde_probe.rx_error != 1)
+	return REASON("rx_error ran %u times for the cut frame, want 1",
+		      lde_probe.rx_error);
+    if (! (lde_probe.st_error & DW1000_FLG_SYS_STATUS_RXFCG))
+	return REASON("rx_error was handed 0x%08" PRIx32 " with RXFCG clear:"
+		      " the pass must hand over the word it was entered"
+		      " with, not the one it stripped", lde_probe.st_error);
+    if (lde_probe.st_error & DW1000_FLG_SYS_STATUS_LDEDONE)
+	return REASON("rx_error was handed 0x%08" PRIx32 " with LDEDONE set:"
+		      " RXFCG beside a clear LDEDONE is the whole mark of a"
+		      " cut run", lde_probe.st_error);
+    if (! (lde_probe.st_error & detect))
+	return REASON("rx_error was handed 0x%08" PRIx32 " with no detect"
+		      " bit: without one the word is the stale aligned"
+		      " record and no frame at all", lde_probe.st_error);
+    if ((host != ic) || (host != host_before) || (ic != ic_before))
+	return REASON("the pass left HSRBP at %d and ICRBP at %d, and they"
+		      " were %d and %d before it: ICRBP never moved, so"
+		      " nothing may move HSRBP either",
+		      host, ic, host_before, ic_before);
+    /* The bits the pass could take away are gone: the drop clears the
+     * detect bits and LDEDONE, which are single instances. RXFCG and
+     * RXDFR are not among them and are not expected to be: with the two
+     * pointers on one buffer they read as the chip's own record of its
+     * last reception, which no status write clears and which the next
+     * receiver enable resets (DW1000.md, "With the buffer pointers
+     * aligned, the swinging status bits are the chip's flags, not the
+     * buffer's"; modelled in port/emulation, dw/
+     * osal/src/osal.c, e_rx_live_set()). What that leaves in SYS_STATUS
+     * is exactly the stale aligned word the driver's own strip
+     * discards, RXFCG with no detect bit beside it, and the two further
+     * passes below are what show it discarded.
+     */
+    if (st_pass & (good & ~(DW1000_FLG_SYS_STATUS_RXFCG |
+			    DW1000_FLG_SYS_STATUS_RXDFR)))
+	return REASON("0x%08" PRIx32 " still carries a detect bit or"
+		      " LDEDONE after the pass: the drop takes the bits"
+		      " that are the frame's own", st_pass);
+
+    /* And the next frame is a frame like any other. */
+    dw1000_emulation_lde_delay(g_emulation, 0);
+
+    pthread_mutex_lock(&s->lock);
+    second = s->next_id;
+    pthread_mutex_unlock(&s->lock);
+
+    /* deliver() runs the dw1000_rx_start() this needs: the error route
+     * re-arms nothing on its own, no more than it does after an RXPHE,
+     * and the host asks for the receiver as it always does.
+     */
+    deliver(dw, s, 1);
+    stamp = stub_last_stamp(s);
+    dw1000_process_events(dw);
+
+    /* The first rx_ok of the step, the cut frame having had none. */
+    if (lde_probe.rx_ok != 1)
+	return REASON("rx_ok ran %u times over the two frames, want 1",
+		      lde_probe.rx_ok);
+    if (lde_probe.id_first != (int)second)
+	return REASON("rx_ok was handed frame %d, want %u: the cut frame"
+		      " (%u) was delivered after all",
+		      lde_probe.id_first, second, first);
+    if (! (lde_probe.st_first & DW1000_FLG_SYS_STATUS_LDEDONE))
+	return REASON("the second frame reached rx_ok as 0x%08" PRIx32
+		      " with LDEDONE clear", lde_probe.st_first);
+    if (lde_probe.rmarker_first != stamp)
+	return REASON("the second frame's rx_ok read RX_TIME 0x%010" PRIx64
+		      ", and the medium stamped it 0x%010" PRIx64,
+		      lde_probe.rmarker_first, stamp);
+    if (lde_probe.rx_error != 1)
+	return REASON("rx_error ran %u times over the two frames, want 1",
+		      lde_probe.rx_error);
+
+    dw1000_process_events(dw);
+    dw1000_process_events(dw);
+    if (lde_probe.rx_ok != 1)
+	return REASON("rx_ok ran %u times over two further passes, the"
+		      " second being frame %d", lde_probe.rx_ok,
+		      lde_probe.id_later);
+    if (lde_probe.rx_error != 1)
+	return REASON("rx_error ran %u times over two further passes",
+		      lde_probe.rx_error);
+
+    return NULL;
+}
+
+static const char *
+step_lde_cut_frame_is_an_error(dw1000_t *dw, struct stub *s)
+{
+    g_config->rxauto = 0;
+    const char *why = step_lde_cut_frame_is_an_error_body(dw, s);
+    g_config->rxauto = 1;
+
+    lde_probe.active = false;
+    dw1000_emulation_lde_delay(g_emulation, 0);
 
     return why;
 }
@@ -1961,6 +2282,8 @@ main(void)
                                     step_receiver_back_before_rx_error(&dw, &stub));
     step("a stale frame is told apart",
                                     step_stale_frame_told_apart(&dw, &stub));
+    step("a cut LDE run is an error",
+                                    step_lde_cut_frame_is_an_error(&dw, &stub));
 
     dw1000_txrx_off(&dw);
     /* The three steps, in the order dw1000/emulation.h insists on:

@@ -145,7 +145,7 @@
  *        DW1000#estimate_delayed_send_lead_time binary-search the delay
  *        they pass, which is the whole lead, so their figures already
  *        carry the airtime of whatever preamble was configured.
- *        Measured on 2026-09-14 at a 128 symbol preamble (138 us of
+ *        Measured at a 128 symbol preamble (138 us of
  *        airtime): 0.27 ms on an nRF52 at 8 or 16 MHz SPI, 0.16 ms on a
  *        Raspberry Pi 4 over spidev at 20 MHz, 0.173 ms on a
  *        Raspberry Pi 4B. Subtracting the airtime leaves roughly 132 us,

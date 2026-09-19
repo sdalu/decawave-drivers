@@ -528,20 +528,51 @@
 #define DW1000_OFF_DRX_TUNE4H                   0x26
 #define DW1000_OFF_DRX_RXPACC_NOSAT             0x2C
 
+/* UM §7.2.41.1 (RF_CONF): TXPOW and PGMIXBIASEN are the LDO and
+   pulse-generator enables the transmitter calibration holds on by hand
+   while the sequencer is off. Named as deca_device.c names them. */
 #define DW1000_REG_RF_CONF                      0x28
 #define DW1000_LEN_RF_CONF                        58
 #define DW1000_OFF_RF_CONF                      0x00
+#define DW1000_MSK_RF_CONF_TXPOW          0x001F0000
+#define DW1000_MSK_RF_CONF_PGMIXBIASEN    0x0000A700
 #define DW1000_OFF_RF_RXCTRLH                   0x0B
 #define DW1000_OFF_RF_TXCTRL                    0x0C
 #define DW1000_OFF_RF_STATUS                    0x2C
 #define DW1000_OFF_RF_LDOTUNE                   0x30
 
+/* UM §7.2.43: TC_PG_CTRL (§7.2.43.4, 2A:08, 1 octet) and TC_PG_STATUS
+   (§7.2.43.5, 2A:09, 2 octets, RO) are the pulse generator calibration,
+   control then count, named as table 39 names them. deca_regs.h spells
+   the pair TC_PGCCTRL and TC_PGCAL_STATUS, and gives the status 1 byte
+   where the manual gives it 2; its own code reads the register 16 bits
+   wide, so the manual and the vendor's usage agree against the vendor's
+   header.
+   Of the control bits the manual names two: CALSTART (bit 0, self
+   clearing) and TMEAS (bits 5:2, the upper 4 of a 10-bit counter run
+   off the system clock). AUTOCAL, ON_TX and DIR_CONV are deca_regs.h's
+   names for bits the manual leaves reserved, but DIR_CONV is not
+   guesswork: APS023 Part 2 §4.2 prescribes writing 0xBC then 0xBD to
+   this register, which is DIR_CONV and TMEAS, then the same with
+   CALSTART.
+   The count is 11 bits, not 12: APS023 Part 2 says "the least
+   significant 11-bits" in both §4.2 and §4.3, where deca_regs.h masks
+   0xFFF. The app note is the document the manual defers to for this
+   register, and it is the operational one. */
 #define DW1000_REG_TX_CAL                       0x2A
 #define DW1000_LEN_TX_CAL                         52
 #define DW1000_OFF_TC_SARC                      0x00
 #define DW1000_FLG_TC_SARC_SAR_CTRL         (1 << 0)
 #define DW1000_OFF_TC_SARL                      0x03
 #define DW1000_OFF_TC_SARW                      0x06
+#define DW1000_OFF_TC_PG_CTRL                   0x08
+#define DW1000_FLG_TC_PG_CTRL_CALSTART      (1 << 0)
+#define DW1000_FLG_TC_PG_CTRL_AUTOCAL       (1 << 1)
+#define DW1000_MSK_TC_PG_CTRL_TMEAS             0x3C
+#define DW1000_FLG_TC_PG_CTRL_ON_TX         (1 << 6)
+#define DW1000_FLG_TC_PG_CTRL_DIR_CONV      (1 << 7)
+#define DW1000_OFF_TC_PG_STATUS                 0x09
+#define DW1000_MSK_TC_PG_STATUS_DELAY         0x07FF
 #define DW1000_OFF_TC_PGDELAY                   0x0B
 #define DW1000_OFF_TC_PGTEST                    0x0C
 
@@ -594,8 +625,32 @@
 #define DW1000_OFF_LDE_CFG2                   0x1806
 #define DW1000_OFF_LDE_REPC                   0x2804
 
+/* UM §7.2.48 (table 52): the event counters, every one a 12-bit value in
+   a read-only 2-byte field, wrapping at 4096 rather than saturating.
+   §7.2.48.1 governs EVC_CTRL, and three of its rules shape any use: the
+   bits are self-clearing, so counting can be enabled or cleared but
+   never disabled; EVC_CLR has no effect while EVC_EN is set, so a clear
+   is 0x02 (stop and zero) followed by 0x01 to resume; and the register
+   takes a two-byte minimum write, a one-byte one leaving the bits
+   unclear. Reading a counter does not clear it. */
 #define DW1000_REG_DIG_DIAG                     0x2F
 #define DW1000_LEN_DIG_DIAG                       41
+#define DW1000_OFF_EVC_CTRL                     0x00
+#define DW1000_FLG_EVC_CTRL_EVC_EN          (1 << 0)
+#define DW1000_FLG_EVC_CTRL_EVC_CLR         (1 << 1)
+#define DW1000_OFF_EVC_PHE                      0x04
+#define DW1000_OFF_EVC_RSE                      0x06
+#define DW1000_OFF_EVC_FCG                      0x08
+#define DW1000_OFF_EVC_FCE                      0x0A
+#define DW1000_OFF_EVC_FFR                      0x0C
+#define DW1000_OFF_EVC_OVR                      0x0E
+#define DW1000_OFF_EVC_STO                      0x10
+#define DW1000_OFF_EVC_PTO                      0x12
+#define DW1000_OFF_EVC_FWTO                     0x14
+#define DW1000_OFF_EVC_TXFS                     0x16
+#define DW1000_OFF_EVC_HPW                      0x18
+#define DW1000_OFF_EVC_TPW                      0x1A
+#define DW1000_MSK_EVC_COUNT                  0x0FFF
 
 #define DW1000_REG_PMSC                         0x36
 #define DW1000_LEN_PMSC                           48

@@ -136,7 +136,7 @@ static const dw1000_config_t dw1000_config = {
     .lde_loading      = 1,
     .rxauto           = 0,     // A sender leaves the chip's re-enable off: see hw/drivers/dw1000/README.md
     /* Not an experiment any more, and for the responder not a choice:
-     * benched 2026-09-17 against rpi-d, 4 interleaved rounds of 30
+     * benched against rpi-d, 4 interleaved rounds of 30
      * exchanges per combination, a single-buffered responder resolved
      * 0 of 120: it hears the POLL and the FINAL and never the REPORT.
      * Double buffered it resolved 120 of 120. AUDIT.md carries the

@@ -58,6 +58,36 @@ config DW1000_HOTFIX_AAT_IEEE802_15_4_2011
           for IEEE802.15.4-2011 compliant frames).
 	default y
 
+config DW1000_EVENT_COUNTERS
+        bool "The chip's diagnostic event counters"
+	default n
+	help
+	  Adds the event counter bank at register 0x2F: PHY header and
+	  Reed-Solomon errors, good and bad CRCs, filtered frames,
+	  overruns, the three timeouts, frames sent and the two warnings.
+	  Diagnostic. The chip counts nothing until asked, and once
+	  asked cannot be told to stop, only to start over.
+
+config DW1000_ACCUMULATOR
+        bool "Read the accumulator (channel impulse response)"
+	default n
+	help
+	  Adds dw1000_rx_read_accumulator(), a window onto the CIR the
+	  leading edge estimate was made from. What tells a first path
+	  from a reflection, and so the diagnostic that speaks to ranging
+	  accuracy rather than to link health. The buffer is the
+	  caller's: the whole accumulator is 4064 octets.
+
+config DW1000_TEMP_COMPENSATION
+        bool "Correct transmit power and bandwidth for die temperature"
+	default n
+	help
+	  Adds the corrections for the drift of transmit power and
+	  channel bandwidth with die temperature. Both need a reference
+	  captured when the board was calibrated. The power half is
+	  arithmetic and safe at any time; the bandwidth half drives a
+	  calibration on the chip and needs an idle transceiver.
+
 endif
 
 # Two symbols, because the probe has two layers with different dependencies

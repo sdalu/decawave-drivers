@@ -608,7 +608,7 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
          * requires such a run to attempt every exchange and say so.
          * So the budget stays on the first attempt and is instead large
          * enough for the head start this harness really has:
-         * measured 2026-09-16, attempts 0-8 all `no-poll` and then every
+         * measured: attempts 0-8 all `no-poll` and then every
          * POLL from 9 to 39 received, 24.8 ms apart, without a gap. Nine
          * attempts burnt before the first frame, which is why a 5
          * exchange run scored 0 of 5 and a 40 exchange run scored 29. */
@@ -874,7 +874,7 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
                          * chip looked exactly like one the peer failed to
                          * hear: the responder said `no-report` and the
                          * initiator still counted the exchange as having
-                         * reached REPORT. Measured 2026-09-16 on a Unix
+                         * reached REPORT. Measured on a Unix
                          * initiator against a board responder: 10 of 20
                          * exchanges "reached REPORT" while the responder
                          * heard 38 frames and matched no REPORT at all. */

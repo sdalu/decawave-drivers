@@ -87,6 +87,51 @@ void dw1000_emulation_drop_next_start(struct dw1000_emulation *e);
 void dw1000_emulation_fail_next_frame(struct dw1000_emulation *e);
 
 /**
+ * Give the LDE a run of its own, @p ticks device clock ticks long.
+ *
+ * Zero, the default and the value a reset restores, keeps a reception
+ * atomic: everything the chip writes for a frame is written at once,
+ * which is what the model always did. Otherwise every reception
+ * completes in two steps.
+ *
+ * At the first the frame is in: the payload reaches `RX_BUFFER`,
+ * `RX_FINFO` is written, `RXPRD`, `RXSFDD`, `RXPHD` and `RXDFR` are
+ * raised with `RXFCG` or `RXFCE`, and the chip's record of its last
+ * reception is set. `LDEDONE` stays clear, `RX_TIME` keeps the stamp it
+ * held for the previous frame into that buffer, `RX_TTCKI` and
+ * `RX_TTCKO` keep theirs, and `ICRBP` does not move.
+ *
+ * At the second, @p ticks later, the run finishes: the three timestamp
+ * registers are written, `LDEDONE` is set in the buffer's set and in
+ * the record, and a frame with a good CRC moves `ICRBP` on (UM 4.3.2).
+ *
+ * A `TRXOFF` between the two cancels the second, as it cancels every
+ * other deadline the model holds: `LDEDONE` never comes, `RX_TIME`
+ * keeps the previous frame's stamp and `ICRBP` stays where it was. That
+ * is the cut of `DW1000.md`, "A TRXOFF between RXFCG and LDEDONE leaves
+ * the frame without its timestamp, and the IC pointer where it was",
+ * and the reason the knob exists: a host cannot otherwise be shown a
+ * good frame whose timestamp is not its own.
+ *
+ * What the bench measured is the cut and only the cut (5 of 4482 and
+ * 11 of 4415 deliveries over two duplex soaks): a reception a
+ * `TRXOFF` terminates after its payload and CRC are in posts `RXFCG`
+ * and never posts `LDEDONE`, whatever the host does next. Whether an
+ * untouched run ends before or after `RXFCG` was not measured, and the
+ * two steps of the model are not a claim that it ends after: the knob
+ * gives the run a length only so that a `TRXOFF` has somewhere to fall
+ * inside it.
+ *
+ * Unlike the two knobs above it is not a one-shot: it stands until it
+ * is set back to 0 or the model is reset.
+ *
+ * @param e		the emulation
+ * @param ticks		length of the run, in units of
+ *			@p DW1000_TIME_CLOCK_HZ; 0 for an atomic reception
+ */
+void dw1000_emulation_lde_delay(struct dw1000_emulation *e, uint32_t ticks);
+
+/**
  * Stop the model's own thread.
  *
  * The model runs a thread to meet the times a host programs into DX_TIME

@@ -95,6 +95,8 @@
 #define DW1000_CLOCK_SYS_PLL               2
 #define DW1000_CLOCK_TX_CONTINOUSFRAME     3
 #define DW1000_CLOCK_LDE_LOAD              4
+#define DW1000_CLOCK_ACC_READ              5
+#define DW1000_CLOCK_ACC_DONE              6
 
 
 
@@ -224,8 +226,8 @@ struct _channel_tunning {
  * channel 5 updated to 0xB5, maximising power in CH B/W". TC_PGDELAY
  * sets the pulse width and so the occupied bandwidth.
  *
- * Measured on the bench when they were adopted (2026-09-16, rpi-c to
- * rpi-d, channel 5, matched runs):
+ * Measured on the bench when they were adopted, rpi-c to rpi-d,
+ * channel 5, matched runs:
  *
  *   received signal power   -80.98 dBm -> -81.59 dBm   (-0.61 dB)
  *   SDS-TWR distance         73.2 cm   ->  68.6 cm     (-4.5 cm)
@@ -471,6 +473,27 @@ void _dw1000_clocks(dw1000_t *dw, int mode) {
 	pmsc_ctrl0[1]  =  0x03;
         break;
 
+    case DW1000_CLOCK_ACC_READ:
+	// UM §7.2.38 leaves the accumulator readable only while its memory
+	// is clocked, which the sequencer does not arrange on its own. The
+	// receiver clock is forced to the 125MHz PLL, and FACE and AMCE
+	// (§7.2.50.1) put the analog and the accumulator memory clocks on.
+	// deca_device.c does the same three in _dwt_enableclocks(READ_ACC_ON).
+	pmsc_ctrl0[0] &= ~DW1000_MSK_PMSC_CTRL0_RXCLKS;
+	pmsc_ctrl0[0] |=  DW1000_VAL_PMSC_CTRL0_RXCLKS_125M
+	                      << DW1000_OFF_PMSC_CTRL0_RXCLKS;
+	pmsc_ctrl0[0] |=  DW1000_FLG_PMSC_CTRL0_FACE;
+	pmsc_ctrl0[1] |=  DW1000_FLG_PMSC_CTRL0_AMCE >> 8;
+	break;
+
+    case DW1000_CLOCK_ACC_DONE:
+	// The three back off again. RXCLKS_AUTO being 0, clearing the mask
+	// is what returns the receiver clock to the sequencer.
+	pmsc_ctrl0[0] &= ~DW1000_MSK_PMSC_CTRL0_RXCLKS;
+	pmsc_ctrl0[0] &= ~DW1000_FLG_PMSC_CTRL0_FACE;
+	pmsc_ctrl0[1] &= ~(DW1000_FLG_PMSC_CTRL0_AMCE >> 8);
+	break;
+
     default:
         break;
     }
@@ -579,11 +602,11 @@ void _dw1000_softreset(dw1000_t *dw) {
     dw->state         = DW1000_STATE_IDLE;
     dw->tx_clk_forced = 0;
     dw->rx_reset_due  = 0;
-    dw->rx_wanted     = 0;
-    dw->rx_deferred   = 0;
+    dw->rx_want       = DW1000_RX_WANT_NONE;
     dw->tx_suspect    = 0;
 #if DW1000_WITH_DEBUG
     dw->tx_late_flags = 0;
+    dw->dbg_lde_cuts  = 0;
 #endif
 }
 
@@ -699,7 +722,13 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
     const uint16_t drx_tune1a = pi->drx_tune1a;
 	
     // UM §7.2.40.4: DRX_TUNE1b
-    // NOTE: All cases don't seem to be covered but match official deca_device.c
+    // NOTE: Table 32 leaves one combination uncovered: a 64 symbol
+    //  preamble at 850kbps. It scopes 0x0010 to 6.8Mbps and 0x0020 to
+    //  preamble lengths 128..1024, so neither row claims that case.
+    //  Ours takes 0x0020, reading the bitrate as the deciding term;
+    //  deca_device.c and uwb-dw1000 both take 0x0010, their PLEN_64
+    //  test not being gated on the bitrate. Unreachable in practice,
+    //  a 64 symbol preamble being a 6.8Mbps instrument. See AUDIT.md.
     uint16_t drx_tune1b = 0x0020;
     if       (radio->bitrate == DW1000_BITRATE_110KBPS)
 	drx_tune1b = 0x0064;
@@ -797,7 +826,7 @@ void _dw1000_radio_tuning(dw1000_t *dw) {
      *
      * It is the other reading: the Decawave SFD is 8 symbols long at
      * 6.8 Mbps, and DWSFD still selects it. Measured on the bench
-     * (2026-09-16, rpi-c to rpi-d, 6.8 Mbps, 40 frames per run, the
+     * (rpi-c to rpi-d, 6.8 Mbps, 40 frames per run, the
      * matched runs interleaved with the crossed ones so a dead link
      * could not be mistaken for a result):
      *
@@ -1676,24 +1705,6 @@ void dw1000_interrupt(dw1000_t *dw, uint32_t bitmask, bool enable) {
 
 /**
  * @internal
- * @brief Whether a transmission is still on the air
- *
- * @details dw->tx_pending alone says a send was started and not yet
- *          reported; @p status says whether it is over: a TXFRS in the
- *          same status word means the chip has already left TX, and
- *          the receive-side handling that precedes the TXFRS branch
- *          in dw1000_process_events() may treat the transceiver as
- *          free, exactly as it did before that branch runs.
- *
- * @param[in]  dw       driver context
- * @param[in]  status   the status word being processed
- */
-static inline bool _dw1000_tx_inflight(const dw1000_t *dw, uint32_t status) {
-    return _dw1000_tx_pending(dw) && !(status & DW1000_FLG_SYS_STATUS_TXFRS);
-}
-
-/**
- * @internal
  * @brief Drop what the receiver raised, leaving the transceiver alone
  *
  * @details The status side of _dw1000_txrx_off(): the receive-side bits
@@ -1749,7 +1760,17 @@ void _dw1000_rx_overrun_recover(dw1000_t *dw, uint32_t status) {
     // drop the receiver's status without it, and put the receiver
     // reset off until dw1000_rx_start(). What belongs to the pending
     // send (tx_pending, wait4resp) is left to its completion.
-    if (_dw1000_tx_inflight(dw, status)) {
+    //
+    // The state is the whole question here: a completion shown in the
+    // status word dw1000_process_events() is working on has been booked
+    // into it before this runs (DESIGN.md, "One state, one table"), so a
+    // send still in TX or TX_W4R is a send still on the air. The state
+    // and not the word @p status carries, deliberately: on the call that
+    // follows the rx_ok callback that word is read afresh, and a
+    // completion that landed while the callback ran is then reported by
+    // the next pass rather than swallowed by a TRXOFF here that clears
+    // no TX bit and leaves the transmitter looking free.
+    if (_dw1000_tx_pending(dw)) {
 	_dw1000_rx_drop_status(dw, DW1000_MSK_SYS_STATUS_ALL_RX_GOOD |
 				   DW1000_MSK_SYS_STATUS_ALL_RX_ERR  |
 				   DW1000_MSK_SYS_STATUS_ALL_RX_TO);
@@ -1875,12 +1896,85 @@ bool _dw1000_tx_dropped(dw1000_t *dw, uint32_t status) {
 }
 
 
+/**
+ * @internal
+ * @brief Whether @p status shows a frame whose LDE run was cut
+ *
+ * @details RXFCG without LDEDONE, and at least one of RXPRD, RXSFDD and
+ *          RXPHD: a reception has happened since the last clear, and
+ *          its leading edge run never finished. A TRXOFF terminated the
+ *          reception after the payload and its CRC were in and before
+ *          the run, and the chip posts RXFCG for it all the same
+ *          (DW1000.md, "A TRXOFF between RXFCG and LDEDONE leaves the
+ *          frame without its timestamp, and the IC pointer where it
+ *          was"; 5 of 4482 and 11 of 4415 deliveries over two
+ *          duplex soaks).
+ *
+ *          The detect bits are what tell such a frame from the chip's
+ *          record of an earlier reception read with the two buffer
+ *          pointers on one buffer (DW1000.md, "With the buffer pointers
+ *          aligned"), which carries RXFCG without LDEDONE too and is no
+ *          frame at all.
+ *
+ * @param[in]  status   a SYS_STATUS word
+ */
+static inline bool _dw1000_rx_lde_pending(uint32_t status) {
+    return (status & DW1000_FLG_SYS_STATUS_RXFCG) &&
+	   ! (status & DW1000_FLG_SYS_STATUS_LDEDONE) &&
+	   (status & (DW1000_FLG_SYS_STATUS_RXPRD  |
+		      DW1000_FLG_SYS_STATUS_RXSFDD |
+		      DW1000_FLG_SYS_STATUS_RXPHD));
+}
+
+
+/**
+ * @internal
+ * @brief Put the receiver back where the policy and the host want it
+ *
+ * @details The one place dw1000_process_events() enables the receiver on
+ *          the policy's behalf (DESIGN.md, "The receiver policy, and the
+ *          send the chip never began"): the state says whether anything
+ *          has it up, and dw->rx_want what the host has asked for:
+ *          KEEP, the standing ask of cfg->rx_keep_on, which no enable
+ *          spends, or ONCE, a dw1000_rx_start() that came over a send
+ *          on the air and is spent here. Nothing of the double buffer is
+ *          decided here: the RXENAB the good-frame branch writes is the
+ *          buffer's, and the re-enable the TXFRS branch owes a WAIT4RESP
+ *          receiver is that receiver's.
+ *
+ *          Called at the end of the pass, and in the timeout and error
+ *          branches once the UM 4.1.6 reset is applied and before the
+ *          callback, where the receiver being down costs preambles. One
+ *          difference follows from that second use: a start recorded
+ *          over a send (ONCE) with the policy off is honoured
+ *          in those two branches now, rather than at the end of the
+ *          pass, in the one case that can reach them with the
+ *          transmitter free, namely that send's completion sitting in
+ *          the same status word. The receiver ends the pass in the same
+ *          place either way; the enable is written before the callback
+ *          instead of after it.
+ *
+ * @param[in]  dw       driver context
+ */
+static void _dw1000_rx_reconcile(dw1000_t *dw) {
+    if ((dw->rx_want == DW1000_RX_WANT_ONCE) && _dw1000_rx_up(dw))
+	dw->rx_want = DW1000_RX_WANT_NONE;  // up already, WAIT4RESP's doing
+    if ((dw->state == DW1000_STATE_IDLE) &&
+	(dw->rx_want != DW1000_RX_WANT_NONE)) {
+	if (dw->rx_want == DW1000_RX_WANT_ONCE)
+	    dw->rx_want = DW1000_RX_WANT_NONE;  // spent; KEEP stands
+	_dw1000_rx_start(dw, DW1000_RX_IMMEDIATE, false);
+    }
+}
+
+
 bool dw1000_process_events(dw1000_t *dw) {
     const dw1000_config_t *cfg = dw->config;
 
     // Set for events that are handled and reported but do not survive in
     // the status word returned below: the overrun, whose bits are
-    // stripped from it once handled.
+    // stripped from it once handled, and the frame whose LDE run a
+    // TRXOFF cut, whose RXFCG is stripped the same way.
     bool processed = false;
     
     // UM §7.2.17: System Event Status Register
@@ -1898,7 +1992,23 @@ bool dw1000_process_events(dw1000_t *dw) {
     // below stops treating it as on the air
     if (_dw1000_tx_pending(dw) && _dw1000_tx_dropped(dw, status))
 	processed = true;
-    
+
+    // The completion this word carries, booked into the state before
+    // anything else reads it (DESIGN.md, "One state, one table"). The
+    // chip has left TX the moment TXFRS is up, so every branch below is
+    // entitled to see the transmitter free; asking "is a send on the
+    // air" then means asking the state, and nothing has to carry the
+    // status word around to correct it. What the completion owes the
+    // chip and the host (the TX group cleared, the forced TX clock
+    // released, the hotfixes, the owed receiver reset, tx_done) is
+    // reported by the TXFRS branch below, in the order it always had.
+    const bool tx_completed = _dw1000_tx_pending(dw) &&
+	                      (status & DW1000_FLG_SYS_STATUS_TXFRS);
+    if (tx_completed) {
+	_dw1000_tx_done_state(dw);      // IDLE, or RX_W4R: the chip's own
+	dw->tx_suspect = 0;
+    }
+
     // Handle RX overrun (double buffered receive only)
     //   UM §4.3.3: a frame arrived while both buffers were still held
     //   by the host, so the buffered data can no longer be trusted.
@@ -1916,10 +2026,71 @@ bool dw1000_process_events(dw1000_t *dw) {
 		    DW1000_FLG_SYS_STATUS_RXOVRR);
     }
 
+    // The frame whose LDE run was cut
+    //   UM §7.2.17: LDEDONE says the LDE is done, and the LDE is what
+    //   writes RX_TIME; UM table 7 swings it with RXDFR, RXFCG and
+    //   RXFCE. A word carrying RXFCG with LDEDONE clear and a detect
+    //   bit is a frame whose reception a TRXOFF terminated after the
+    //   payload and its CRC were in and before the leading edge run:
+    //   the chip posts RXFCG for it all the same, and the bit it will
+    //   never post is LDEDONE (DW1000.md, "A TRXOFF between RXFCG and
+    //   LDEDONE leaves the frame without its timestamp, and the IC
+    //   pointer where it was"; 5 of 4482 and 11 of 4415 deliveries
+    //   over two duplex soaks, every one beside this node's own
+    //   transmit bits).
+    //
+    //   There is nothing to wait for: two duplex soaks spent
+    //   46 waits of up to 1 ms of the chip's own clock on such words
+    //   and not one of them ever saw the bit come up (doc/bench/
+    //   2026-09-19-lde/README.md, "The wait that never ended"). What
+    //   the frame has not got is a timestamp of its own, and RX_TIME
+    //   still holds the previous frame's, so it is reported through
+    //   rx_error and no payload is offered for it: a survey of every
+    //   consumer found none that tests LDEDONE in its
+    //   rx_ok, and in SPANK the status word never reaches the place the
+    //   timestamp is read at all (PROPAGATE.md, "The frame a node's own
+    //   send cut is now a receive error"), so a frame handed over as a
+    //   good one is a wrong distance or clock offset in every ranging
+    //   host, silently. A node that only listens never sees one: the
+    //   cut is this node's own TRXOFF (DESIGN.md, "The frame whose LDE
+    //   run was cut").
+    const bool lde_cut = _dw1000_rx_lde_pending(status);
+
+    // The word the host is handed for it, kept before the strip below:
+    // RXFCG set with LDEDONE clear and a detect bit is what tells this
+    // error from every other, and no other word carries it.
+    const uint32_t lde_cut_status = status;
+
+    if (lde_cut) {
+#if DW1000_WITH_DEBUG
+	// How many frames the pass reported as a cut
+	// (doc/bench/2026-09-19-lde/README.md): the bench counts them
+	// against the deliveries of the same soak.
+	dw->dbg_lde_cuts++;
+#endif
+	// Out of the good-frame branch, and into the error section at
+	// the end of the pass: the bits are taken out of the word this
+	// pass works on, so neither the stale strip below nor the RXFCG
+	// branch runs for it, and rx_drop carries ALL_RX_GOOD with the
+	// drop that section makes (RXFCG was not seen as a frame in
+	// this pass), which is what clears them on the chip. No HRBPT
+	// is written for it anywhere: UM §4.3.2 moves ICRBP for "a new
+	// frame with good CRC" and the cut run never got there, so the
+	// host pointer is already on the buffer the chip still owns,
+	// and a toggle would move it off (DW1000.md, "A buffer toggle
+	// that moves the host off the chip's buffer under a live
+	// receiver"). The event does not survive in the word returned
+	// below, so the pass counts it here.
+	status &= ~(DW1000_FLG_SYS_STATUS_RXFCG  |
+		    DW1000_FLG_SYS_STATUS_RXDFR  |
+		    DW1000_FLG_SYS_STATUS_LDEDONE);
+	processed = true;
+    }
+
     // Double buffered, a good frame shown with the two buffer pointers
     // on the same buffer and none of the detect bits set is not a frame.
-    // Measured 2026-09-18 (rpi-c and rpi-d, 24 of 24 duplicates over 96
-    // runs, INVESTIGATE.md 1b): with the pointers aligned the swinging
+    // Measured on rpi-c and rpi-d, 24 of 24 duplicates over 96 runs
+    // (INVESTIGATE.md 1b): with the pointers aligned the swinging
     // bits read as the chip's own flags of its last reception, which no
     // status write clears (a masked clear written there reads back set)
     // and which the next receiver enable resets, while the receive
@@ -1995,8 +2166,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 #else
 	    const bool enable_late = true;
 #endif
-	    if (_dw1000_tx_pending(dw) && (status & DW1000_FLG_SYS_STATUS_TXFRS) &&
-		enable_late) {
+	    if (tx_completed && enable_late) {
 		// Beside the send's own completion: the frame is taken for
 		// the response the send may have expected (the stale frame
 		// and the response cannot be told apart here), and the
@@ -2011,14 +2181,23 @@ bool dw1000_process_events(dw1000_t *dw) {
 		// stale pass toggled exactly so, and rpi-d lost about one
 		// frame in fifty with the enable written here against none
 		// at the end of the pass (doc/bench/2026-09-18-hunt/
-		// hunt-placement.md, 2026-09-18); the chip's enable timing was
+		// hunt-placement.md); the chip's enable timing was
 		// not involved, and since that fix the two placements lose
 		// alike. rx_enable_early is kept as the bench knob that
 		// measured it. The read-out below runs with the receiver off,
 		// this once.
-		dw->state       = DW1000_STATE_TX;
-		dw->rx_deferred = 1;
-	    } else if (! _dw1000_tx_inflight(dw, status)) {
+		//
+		// IDLE, and the WAIT4RESP of a TX_W4R send consumed with
+		// it: the frame reported here is taken for the response
+		// that send expected, so nothing is waited for any more,
+		// and the receiver the end of the pass puts back is the
+		// driver's. This is where the completion booked at the top
+		// of the pass ends up as well, the state being written
+		// after it rather than before.
+		dw->state = DW1000_STATE_IDLE;
+		if (dw->rx_want != DW1000_RX_WANT_KEEP)
+		    dw->rx_want = DW1000_RX_WANT_ONCE;
+	    } else if (! _dw1000_tx_pending(dw)) {
 		_dw1000_reg_write16(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
 				    DW1000_FLG_SYS_CTRL_RXENAB);
 		dw->state = DW1000_STATE_RX;
@@ -2056,8 +2235,13 @@ bool dw1000_process_events(dw1000_t *dw) {
 		// Clear AAT status
 		clear  |=  DW1000_FLG_SYS_STATUS_AAT;
 		status &= ~DW1000_FLG_SYS_STATUS_AAT;
-		// No wait for response
-		if (dw->state == DW1000_STATE_RX_W4R)
+		// No wait for response. Not the RX_W4R this pass's own
+		// completion booked at the top: that send's WAIT4RESP is
+		// the receiver the chip has only just put up, which the
+		// TXFRS branch below still owes a reset (UM §4.1.6), and
+		// the AAT this clears belongs to the frame reported here,
+		// not to it.
+		if (! tx_completed && (dw->state == DW1000_STATE_RX_W4R))
 		    dw->state = DW1000_STATE_RX;
 	    }
         }
@@ -2069,7 +2253,15 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// still armed on the chip. A frame beside the completion in one
 	// status word may be either, the stale one or the response; the
 	// response is assumed, as it always was.
-	if (dw->state == DW1000_STATE_RX_W4R)
+	//
+	// Not the RX_W4R this pass's own completion booked at the top:
+	// that send's WAIT4RESP receiver went up after this frame, so
+	// this frame did not come through it, and the state has to
+	// reach the TXFRS branch below as the RX_W4R that branch
+	// expects (dw1000_tx_is_expecting_response(), and the owed
+	// receiver reset of UM §4.1.6). HEAD read TX_W4R here and
+	// left it alone for the same reason.
+	if (! tx_completed && (dw->state == DW1000_STATE_RX_W4R))
 	    dw->state = DW1000_STATE_RX;
 
 	// Effectively clearing status
@@ -2094,15 +2286,18 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//
 	// A send that expects a response is the exception: beside its own
 	// completion the chip is not idle at all, having put its WAIT4RESP
-	// receiver up the moment the frame ended. Left alone here, the
-	// TX_W4R is what _dw1000_tx_done_state() turns into RX_W4R in the
-	// TXFRS branch of this same pass, so dw1000_tx_is_expecting_response()
-	// answers true and the receiver reset owed under UM §4.1.6 is applied
-	// there; written over with IDLE it was neither, and the next send went
-	// into a listening receiver, where the chip drops it. (The double
-	// buffered branch above settles the same case its own way.)
-	if (! cfg->dblbuff && ! _dw1000_tx_inflight(dw, status) &&
-	    (dw->state != DW1000_STATE_TX_W4R))
+	// receiver up the moment the frame ended. That is the RX_W4R this
+	// pass's completion booked at the top, and it is left alone here,
+	// so that dw1000_tx_is_expecting_response() answers true in the
+	// TXFRS branch of this same pass and the receiver reset owed under
+	// UM §4.1.6 is applied there; written over with IDLE it was
+	// neither, and the next send went into a listening receiver, where
+	// the chip drops it. An RX_W4R no completion of this pass produced
+	// is not the exception: the line above has already turned it into
+	// RX. (The double buffered branch settles the same case its own
+	// way.)
+	if (! cfg->dblbuff && ! _dw1000_tx_pending(dw) &&
+	    ! (tx_completed && (dw->state == DW1000_STATE_RX_W4R)))
 	    dw->state = DW1000_STATE_IDLE;
 
 	// Call the corresponding callback if present
@@ -2159,11 +2354,10 @@ bool dw1000_process_events(dw1000_t *dw) {
         _dw1000_reg_write32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE,
 			   DW1000_MSK_SYS_STATUS_ALL_TX);
 
-	// The frame is out: the transmitter is free for the next one, and
-	// if a delayed send forced the TX clock on (Errata 1.4 §3.1) it
-	// returns to automatic sequencing
-	_dw1000_tx_done_state(dw);          // IDLE, or RX_W4R: the chip's own
-	dw->tx_suspect = 0;
+	// The frame is out: the transmitter was freed at the top of the
+	// pass, where the completion was booked into the state, and if a
+	// delayed send forced the TX clock on (Errata 1.4 §3.1) it
+	// returns to automatic sequencing here
 	_dw1000_tx_clock_release(dw);
 
 	// HOTFIX: UM §5.4: Transmit and automatically wait for response
@@ -2229,9 +2423,14 @@ bool dw1000_process_events(dw1000_t *dw) {
     // seen: written over, it is gone, and the sync inside the off would
     // then find nothing latched and hand the buffer back to the chip
     // unread. Reproduced in port/emulation (tests/emulation/dblbuff.c,
-    // step_error_beside_a_good_frame, 2026-09-18): RXAUTR set, RXPHE
+    // step_error_beside_a_good_frame): RXAUTR set, RXPHE
     // beside RXFCG in one snapshot, the frame delivered during rx_ok
     // lost with no callback for it.
+    //
+    // The frame whose LDE run was cut is on the other side of that
+    // "unless": its RXFCG was stripped above and no branch reported it
+    // as a frame, so ALL_RX_GOOD is in the drop and the bits the cut
+    // frame left behind go with it.
     const uint32_t rx_drop = DW1000_MSK_SYS_STATUS_ALL_RX_ERR |
 			     DW1000_MSK_SYS_STATUS_ALL_RX_TO  |
 			     ((status & DW1000_FLG_SYS_STATUS_RXFCG)
@@ -2255,7 +2454,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// before the send is dropped without the TRXOFF, which would abort
 	// the frame on the air with no TXFRS ever raised for it (UM
 	// §7.2.15), and the reset below is owed to dw1000_rx_start()
-	if (_dw1000_tx_inflight(dw, status)) {
+	if (_dw1000_tx_pending(dw)) {
 	    _dw1000_rx_drop_status(dw, rx_drop);
 	    dw->rx_reset_due = 1;
 	} else {
@@ -2267,19 +2466,18 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//    it is necessary to apply a receiver reset after an
 	//    error or timeout event.
 	//    (It is not necessary to do this for RXPTO and RXSFDTO)"
-        if (! _dw1000_tx_inflight(dw, status))
+        if (! _dw1000_tx_pending(dw))
             _dw1000_rx_reset(dw);
 
 	// The receiver back on here, once the reset is applied and before
-	// the callback, when the policy wants it: the end of the pass
-	// would do the same a few register accesses later, and every
-	// microsecond the receiver is down after an error is a preamble
-	// missed. Not over a send in flight, whose completion's pass does
-	// it; the sync inside the start keeps a frame completed into the
-	// other buffer while the good-frame branch of this pass ran.
-	if (! _dw1000_tx_inflight(dw, status) &&
-	    cfg->rx_keep_on && dw->rx_wanted)
-	    _dw1000_rx_start(dw, DW1000_RX_IMMEDIATE, false);
+	// the callback, when the policy or a recorded start wants it: the
+	// end of the pass would do the same a few register accesses later,
+	// and every microsecond the receiver is down after an error is a
+	// preamble missed. Not over a send in flight, which leaves the state
+	// in TX or TX_W4R and the reconcile with nothing to do; the sync
+	// inside the start keeps a frame completed into the other buffer
+	// while the good-frame branch of this pass ran.
+	_dw1000_rx_reconcile(dw);
 
         // Call the corresponding callback if present
         if (cfg->cb.rx_timeout) {
@@ -2288,8 +2486,13 @@ bool dw1000_process_events(dw1000_t *dw) {
     }
 
     
-    // Handle RX errors events
-    if (status & DW1000_MSK_SYS_STATUS_ALL_RX_ERR) {
+    // Handle RX errors events, and the frame whose LDE run a TRXOFF cut
+    //   The cut frame is one of them: it has no timestamp of its own and
+    //   the driver offers no payload for it, so it takes the same route
+    //   an RXPHE or an RXFCE takes, and a host re-arms from rx_error as
+    //   it already does for those (DESIGN.md, "The frame whose LDE run
+    //   was cut"). Its own bits are dropped with rx_drop above.
+    if ((status & DW1000_MSK_SYS_STATUS_ALL_RX_ERR) || lde_cut) {
 	// No plain status write here: _dw1000_txrx_off() below clears a
 	// superset of these bits from inside the masked window UM §4.3.4
 	// (figure 15) requires. RXFCE is part of the double buffered
@@ -2308,7 +2511,7 @@ bool dw1000_process_events(dw1000_t *dw) {
 	// before the send is dropped without the TRXOFF, which would abort
 	// the frame on the air with no TXFRS ever raised for it (UM
 	// §7.2.15), and the reset below is owed to dw1000_rx_start()
-	if (_dw1000_tx_inflight(dw, status)) {
+	if (_dw1000_tx_pending(dw)) {
 	    _dw1000_rx_drop_status(dw, rx_drop);
 	    dw->rx_reset_due = 1;
 	} else {
@@ -2320,39 +2523,36 @@ bool dw1000_process_events(dw1000_t *dw) {
 	//    it is necessary to apply a receiver reset after an
 	//    error or timeout event.
 	//    (It is not necessary to do this for RXPTO and RXSFDTO)"
-        if (! _dw1000_tx_inflight(dw, status))
+        if (! _dw1000_tx_pending(dw))
             _dw1000_rx_reset(dw);
 
 	// The receiver back on here, once the reset is applied and before
-	// the callback, when the policy wants it: the end of the pass
-	// would do the same a few register accesses later, and every
-	// microsecond the receiver is down after an error is a preamble
-	// missed. Not over a send in flight, whose completion's pass does
-	// it; the sync inside the start keeps a frame completed into the
-	// other buffer while the good-frame branch of this pass ran.
-	if (! _dw1000_tx_inflight(dw, status) &&
-	    cfg->rx_keep_on && dw->rx_wanted)
-	    _dw1000_rx_start(dw, DW1000_RX_IMMEDIATE, false);
+	// the callback, when the policy or a recorded start wants it: the
+	// end of the pass would do the same a few register accesses later,
+	// and every microsecond the receiver is down after an error is a
+	// preamble missed. Not over a send in flight, which leaves the state
+	// in TX or TX_W4R and the reconcile with nothing to do; the sync
+	// inside the start keeps a frame completed into the other buffer
+	// while the good-frame branch of this pass ran.
+	_dw1000_rx_reconcile(dw);
 
         // Call the corresponding callback if present
+	//   The cut frame is handed the word the pass was entered with,
+	//   RXFCG set and LDEDONE clear, and not the stripped one: those
+	//   two bits beside a detect bit are how a host that wants to
+	//   count these tells them from a CRC error.
         if (cfg->cb.rx_error) {
-            cfg->cb.rx_error(dw, status);
+            cfg->cb.rx_error(dw, lde_cut ? lde_cut_status : status);
         }
     }
 
     // rx_keep_on: the receiver back on, once, after every callback has
     // run, if the host wants it and nothing has it up: not over a send
-    // on the air, whose completion pass will get here too. This is the
-    // one place the policy enables the receiver, so the branches above
-    // never write RXENAB on the policy's behalf and their order does not
-    // matter to it.
-    if (dw->rx_deferred && _dw1000_rx_up(dw))
-	dw->rx_deferred = 0;                // up already, WAIT4RESP's doing
-    if ((dw->state == DW1000_STATE_IDLE) &&
-	(dw->rx_deferred || (cfg->rx_keep_on && dw->rx_wanted))) {
-	dw->rx_deferred = 0;
-	_dw1000_rx_start(dw, DW1000_RX_IMMEDIATE, false);
-    }
+    // on the air, whose completion pass will get here too. The same
+    // reconcile the timeout and error branches ran is what closes the
+    // pass, so a branch never writes RXENAB on the policy's behalf and
+    // the order of the branches does not matter to it.
+    _dw1000_rx_reconcile(dw);
 
     return processed || (status & (DW1000_FLG_SYS_STATUS_RXFCG     |
 				   DW1000_FLG_SYS_STATUS_TXFRS     |
@@ -2378,11 +2578,11 @@ void _dw1000_txrx_off(dw1000_t *dw, uint32_t clear) {
 	_dw1000_reg_read32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE);
 
     // Clear interrupt mask
-    _dw1000_reg_write32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE, 0); 
+    _dw1000_reg_write32(dw, DW1000_REG_SYS_MASK, DW1000_OFF_NONE, 0);
 
     // Disable the radio
     _dw1000_reg_write8(dw, DW1000_REG_SYS_CTRL, DW1000_OFF_NONE,
-		       DW1000_FLG_SYS_CTRL_TRXOFF); 
+		       DW1000_FLG_SYS_CTRL_TRXOFF);
 
     
     // UM §7.2.17: System Event Status Register
@@ -2704,17 +2904,18 @@ static int _dw1000_rx_start(dw1000_t *dw, int8_t rx_mode, bool host) {
 	    _dw1000_reg_read32(dw, DW1000_REG_SYS_STATUS, DW1000_OFF_NONE);
 	if (! (status & DW1000_FLG_SYS_STATUS_TXFRS) &&
 	    ! _dw1000_tx_dropped(dw, status)) {
-	    if (host) {
-		dw->rx_deferred = 1;
-		if (wanted)
-		    dw->rx_wanted = 1;
-	    }
+	    if (host)
+		dw->rx_want = wanted ? DW1000_RX_WANT_KEEP
+				     : DW1000_RX_WANT_ONCE;
 	    return 0;
 	}
     }
-    // A start the host makes now supersedes one it recorded over a send
+    // A start the host makes now supersedes one it recorded over a send.
+    // The policy's standing ask is not a recorded start and survives it,
+    // unless the policy itself is off, in which case nothing reads it.
     if (host)
-	dw->rx_deferred = 0;
+	dw->rx_want = (wanted && (dw->rx_want == DW1000_RX_WANT_KEEP))
+	    ? DW1000_RX_WANT_KEEP : DW1000_RX_WANT_NONE;
 
     // A receiver reset owed from an error or timeout handled while a
     // transmission was in flight (UM §4.1.6): applied now that the
@@ -2759,13 +2960,13 @@ static int _dw1000_rx_start(dw1000_t *dw, int8_t rx_mode, bool host) {
 				DW1000_FLG_SYS_CTRL_RXENAB);
 	    dw->state = DW1000_STATE_RX;
 	    if (wanted)
-		dw->rx_wanted = 1;
+		dw->rx_want = DW1000_RX_WANT_KEEP;
 	    return 1;
         }
     }
 
     if (wanted)
-	dw->rx_wanted = 1;
+	dw->rx_want = DW1000_RX_WANT_KEEP;
     return 0;
 }
 
@@ -2922,6 +3123,379 @@ double dw1000_rx_power_correction(dw1000_t *dw, double p) {
     return p;
 }
 
+
+#if DW1000_WITH_EVENT_COUNTERS
+/*===========================================================================*/
+/* Event counters                                                            */
+/*===========================================================================*/
+
+void dw1000_event_counters_start(dw1000_t *dw) {
+    // UM §7.2.48.1: the bits are self-clearing and the register takes a
+    // two-byte minimum write, "if a one-byte write is made to this
+    // register, the bits will not clear as expected".
+    _dw1000_reg_write16(dw, DW1000_REG_DIG_DIAG, DW1000_OFF_EVC_CTRL,
+			DW1000_FLG_EVC_CTRL_EVC_EN);
+}
+
+
+void dw1000_event_counters_clear(dw1000_t *dw) {
+    // UM §7.2.48.1 prescribes the order: EVC_CLR does nothing while
+    // EVC_EN stands, so 0x02 stops the counters and zeroes them, then
+    // 0x01 starts them again. There is no third state; counting cannot
+    // be turned off once it has been turned on, only cleared.
+    _dw1000_reg_write16(dw, DW1000_REG_DIG_DIAG, DW1000_OFF_EVC_CTRL,
+			DW1000_FLG_EVC_CTRL_EVC_CLR);
+    _dw1000_reg_write16(dw, DW1000_REG_DIG_DIAG, DW1000_OFF_EVC_CTRL,
+			DW1000_FLG_EVC_CTRL_EVC_EN);
+}
+
+
+void dw1000_event_counters_read(dw1000_t *dw, dw1000_event_counters_t *evc) {
+    DW1000_ASSERT(evc, "no event counter structure");
+
+    // The twelve counters run contiguously from EVC_PHE to EVC_TPW, so
+    // one transaction takes the lot and all twelve agree on when they
+    // were sampled. Each is a 12-bit value in a little endian 16-bit
+    // field (UM §7.2.48), read-only, and not cleared by being read.
+    uint8_t buf[DW1000_OFF_EVC_TPW + 2 - DW1000_OFF_EVC_PHE];
+    _dw1000_reg_read(dw, DW1000_REG_DIG_DIAG, DW1000_OFF_EVC_PHE,
+		     buf, sizeof(buf));
+
+    uint16_t *out[] = {
+	&evc->phe,  &evc->rse,  &evc->fcg, &evc->fce,
+	&evc->ffr,  &evc->ovr,  &evc->sto, &evc->pto,
+	&evc->fwto, &evc->txfs, &evc->hpw, &evc->tpw,
+    };
+
+    for (size_t i = 0 ; i < (sizeof(out) / sizeof(out[0])) ; i++) {
+	uint16_t v = (uint16_t)buf[2*i] | ((uint16_t)buf[2*i + 1] << 8);
+	*out[i] = v & DW1000_MSK_EVC_COUNT;
+    }
+}
+#endif
+
+
+
+#if DW1000_WITH_ACCUMULATOR
+/*===========================================================================*/
+/* Accumulator (CIR)                                                         */
+/*===========================================================================*/
+
+size_t dw1000_rx_read_accumulator(dw1000_t *dw, uint16_t index,
+				  uint8_t *data, size_t size) {
+    DW1000_ASSERT(data, "no accumulator buffer");
+
+    // One octet of every transaction is spent on the dummy below, so a
+    // one byte buffer carries no sample at all.
+    if ((size < 2) || (index >= DW1000_LEN_ACC_MEM))
+	return 0;
+
+    // Never read past the end of the accumulator, and never write past
+    // the end of the caller's buffer: the shorter of the two wins.
+    size_t avail = (size_t)DW1000_LEN_ACC_MEM - index;
+    if ((size - 1) > avail)
+	size = avail + 1;
+
+    // UM §7.2.38 leaves the accumulator readable only while its memory
+    // is clocked, which the sequencer does not arrange on its own.
+    _dw1000_clocks(dw, DW1000_CLOCK_ACC_READ);
+    _dw1000_reg_read(dw, DW1000_REG_ACC_MEM, index, data, size);
+    _dw1000_clocks(dw, DW1000_CLOCK_ACC_DONE);
+
+    // UM §7.2.38: "Because of an internal memory access delay when
+    // reading the accumulator the first octet output is a dummy octet
+    // that should be discarded. This is true no matter what sub-index
+    // the read begins at." Dropped here rather than left to the caller,
+    // so that data[0] is the octet at `index` and the buffer is indexed
+    // the way the accumulator is. deca_device.c leaves it in place and
+    // documents the off-by-one into its callers instead.
+    memmove(data, data + 1, size - 1);
+
+    return size - 1;
+}
+#endif
+
+
+
+#if DW1000_WITH_TEMP_COMPENSATION
+/*===========================================================================*/
+/* Temperature corrections                                                   */
+/*===========================================================================*/
+
+/* Transmit power droops as the die warms, near enough linearly. APS023
+ * Part 2 §5.3 gives the slope, from testing over a number of parts:
+ * 0.035 dB/°C on channel 2 and 0.065 dB/°C on channel 5. No figure is
+ * published for any other channel, and none is invented here.
+ *
+ * Held as half-dB steps per hundredth of a degree, scaled by 10000, so
+ * that the correction is integer throughout: 0.035 dB/°C is 0.07 half-dB
+ * per °C is 7/10000 half-dB per 1/100 °C. The unit is that of
+ * dw1000_read_temp_vbat(), so the difference of two of its readings is
+ * this function's argument unconverted.
+ */
+#define DW1000_TEMP_COMP_05DB_CH2                 7
+#define DW1000_TEMP_COMP_05DB_CH5                13
+#define DW1000_TEMP_COMP_SCALE                10000
+
+/* UM §7.2.31.1: the gain control range is 30.5 dB, which is 61 half-dB
+ * steps, of 6 coarse (DA) steps of 2.5 dB and 31 fine (mixer) steps of
+ * 0.5 dB. */
+#define DW1000_TX_POWER_05DB_MAX                 61
+
+
+/**
+ * @internal
+ * @brief One transmit power octet, as a level in half-dB steps
+ *
+ * @details UM §7.2.31.1 (figure 26): bits 7:5 carry the coarse gain as
+ *          (6 - coarse) and bits 4:0 the fine gain. The same encoding
+ *          _dw1000_radio_tuning() builds and dw1000_tx_power_to_05db()
+ *          reads, spelt once more here because this works octet by
+ *          octet where that takes the register's word.
+ */
+static inline
+uint8_t _dw1000_tx_power_octet_to_05db(uint8_t octet) {
+    uint8_t coarse = 6 - ((octet >> 5) & 0x07);
+    uint8_t fine   = octet & 0x1F;
+    uint8_t level  = coarse * 5 + fine;
+
+    return level > DW1000_TX_POWER_05DB_MAX
+	       ? DW1000_TX_POWER_05DB_MAX : level;
+}
+
+
+/**
+ * @internal
+ * @brief A level in half-dB steps, as a transmit power octet
+ *
+ * @details The coarse steps are taken before the remainder goes to the
+ *          fine ones: UM §7.2.31.1 asks for the coarse gain to be
+ *          adjusted first, for the best spectral shape.
+ */
+static inline
+uint8_t _dw1000_tx_power_05db_to_octet(uint8_t level) {
+    if (level > DW1000_TX_POWER_05DB_MAX)
+	level = DW1000_TX_POWER_05DB_MAX;
+
+    uint8_t coarse = level / 5;
+    if (coarse > 6)
+	coarse = 6;
+    uint8_t fine   = level - coarse * 5;
+
+    return (uint8_t)(((6 - coarse) << 5) | fine);
+}
+
+
+uint32_t dw1000_tx_power_temp_correction(dw1000_t *dw, uint32_t txpower,
+					 int16_t delta_temp) {
+    int32_t slope;
+
+    switch (dw->radio.channel) {
+    case 2:  slope = DW1000_TEMP_COMP_05DB_CH2; break;
+    case 5:  slope = DW1000_TEMP_COMP_05DB_CH5; break;
+    // No published slope for the others: hand back the reference rather
+    // than guess at one.
+    default: return txpower;
+    }
+
+    /* APS023 Part 2 §5.3 step 2: the temperature difference against the
+     * channel's slope gives the power difference. Rounded to nearest and
+     * away from zero, so that warming and cooling by the same amount
+     * undo one another rather than both losing half a step.
+     */
+    int32_t num = (int32_t)delta_temp * slope;
+    int32_t adj = (num >= 0)
+	        ? (num + DW1000_TEMP_COMP_SCALE / 2) / DW1000_TEMP_COMP_SCALE
+	        : (num - DW1000_TEMP_COMP_SCALE / 2) / DW1000_TEMP_COMP_SCALE;
+
+    if (adj == 0)
+	return txpower;
+
+    /* Step 3: the difference applied to the reference setting. UM §7.2.31
+     * has the register as "four octets each of which specifies a separate
+     * transmit power setting", so each is moved on its own. An octet left
+     * at zero is one nothing set: dw1000_configure() writes only the two
+     * the manual mode reads, and giving the other two a power here would
+     * turn settings that are off into settings that are not.
+     */
+    uint32_t out = 0;
+    for (int i = 0 ; i < 4 ; i++) {
+	uint8_t octet = (txpower >> (i * 8)) & 0xFF;
+
+	if (octet != 0) {
+	    int32_t level =
+		(int32_t)_dw1000_tx_power_octet_to_05db(octet) + adj;
+
+	    // Clamped, not wrapped: the range is the part's, and a level
+	    // outside it is a request for the nearest one inside.
+	    if (level < 0)
+		level = 0;
+	    if (level > DW1000_TX_POWER_05DB_MAX)
+		level = DW1000_TX_POWER_05DB_MAX;
+
+	    octet = _dw1000_tx_power_05db_to_octet((uint8_t)level);
+	}
+
+	out |= ((uint32_t)octet) << (i * 8);
+    }
+
+    return out;
+}
+
+
+
+
+void dw1000_tx_set_power(dw1000_t *dw, uint32_t txpower) {
+    dw->tx_power = txpower;
+    _dw1000_reg_write32(dw, DW1000_REG_TX_POWER, DW1000_OFF_NONE, txpower);
+}
+
+
+/**
+ * @internal
+ * @brief Take the pulse generator out of the sequencer's hands
+ *
+ * @details The calibration below runs with the packet sequencer off and
+ *          the analog blocks it would have driven held on by hand. Both
+ *          calibration entry points save what they change and put it
+ *          back, so the transceiver is as they found it; both therefore
+ *          require it to have been idle to begin with.
+ */
+static
+void _dw1000_pg_cal_enter(dw1000_t *dw, uint8_t *pmsc0, uint16_t *pmsc1,
+			  uint32_t *rf_conf) {
+    *pmsc0   = _dw1000_reg_read8 (dw, DW1000_REG_PMSC,
+				  DW1000_OFF_PMSC_CTRL0);
+    *pmsc1   = _dw1000_reg_read16(dw, DW1000_REG_PMSC,
+				  DW1000_OFF_PMSC_CTRL1);
+    *rf_conf = _dw1000_reg_read32(dw, DW1000_REG_RF_CONF,
+				  DW1000_OFF_RF_CONF);
+
+    // APS023 Part 2 §4.2 gives these four writes exactly: 0x01 to
+    // PMSC_CTRL0, 0x0000 to PMSC_CTRL1, 0x001FA700 to RF_CONF, 0x22 to
+    // PMSC_CTRL0. Crystal first, so the sequencer stops from a known
+    // clock.
+    _dw1000_clocks(dw, DW1000_CLOCK_SYS_XTI);
+
+    // UM §7.2.50.2: writing 0 to PKTSEQ hands the analog RF subsystems
+    // back from the PMSC. Restored from the saved word, not from the
+    // 0xE7 the manual gives for enabling, so that nothing else in the
+    // register is disturbed.
+    _dw1000_reg_write16(dw, DW1000_REG_PMSC, DW1000_OFF_PMSC_CTRL1, 0x0000);
+
+    // With the sequencer off, the LDOs and the pulse generator have to
+    // be held on explicitly (UM §7.2.41.1).
+    _dw1000_reg_write32(dw, DW1000_REG_RF_CONF, DW1000_OFF_RF_CONF,
+			DW1000_MSK_RF_CONF_TXPOW |
+			DW1000_MSK_RF_CONF_PGMIXBIASEN);
+
+    // System and transmit clocks on the 125MHz PLL, which is what the
+    // counter below is clocked from.
+    _dw1000_clocks(dw, DW1000_CLOCK_TX_CONTINOUSFRAME);
+}
+
+
+/**
+ * @internal
+ * @brief Give it back, exactly as it was
+ */
+static
+void _dw1000_pg_cal_leave(dw1000_t *dw, uint8_t pmsc0, uint16_t pmsc1,
+			  uint32_t rf_conf) {
+    _dw1000_reg_write8 (dw, DW1000_REG_PMSC,    DW1000_OFF_PMSC_CTRL0, pmsc0);
+    _dw1000_reg_write16(dw, DW1000_REG_PMSC,    DW1000_OFF_PMSC_CTRL1, pmsc1);
+    _dw1000_reg_write32(dw, DW1000_REG_RF_CONF, DW1000_OFF_RF_CONF,    rf_conf);
+}
+
+
+/**
+ * @internal
+ * @brief One pulse generator calibration, returning its count
+ */
+static
+uint16_t _dw1000_pg_measure(dw1000_t *dw, uint8_t pg_delay) {
+    const uint8_t ctrl = DW1000_FLG_TC_PG_CTRL_DIR_CONV |
+	                 DW1000_MSK_TC_PG_CTRL_TMEAS;
+
+    _dw1000_reg_write8(dw, DW1000_REG_TX_CAL, DW1000_OFF_TC_PGDELAY, pg_delay);
+    _dw1000_reg_write8(dw, DW1000_REG_TX_CAL, DW1000_OFF_TC_PG_CTRL, ctrl);
+    _dw1000_reg_write8(dw, DW1000_REG_TX_CAL, DW1000_OFF_TC_PG_CTRL,
+		       ctrl | DW1000_FLG_TC_PG_CTRL_CALSTART);
+
+    // The two writes are the app note's 0xBC then 0xBD (§4.2). CALSTART
+    // clears itself when the measurement is done; §4.3 waits "~10us"
+    // and deca_device.c a whole millisecond, so a hundred microseconds
+    // sits an order of magnitude above the one and well under the other.
+    _dw1000_delay_usec(100);
+
+    return _dw1000_reg_read16(dw, DW1000_REG_TX_CAL, DW1000_OFF_TC_PG_STATUS)
+	& DW1000_MSK_TC_PG_STATUS_DELAY;
+}
+
+
+uint16_t dw1000_tx_get_pg_count(dw1000_t *dw, uint8_t pg_delay) {
+    uint8_t  pmsc0;
+    uint16_t pmsc1;
+    uint32_t rf_conf;
+
+    _dw1000_pg_cal_enter(dw, &pmsc0, &pmsc1, &rf_conf);
+
+    // Averaged over ten, as deca_device.c does, the count being noisy
+    // enough that a single reading makes a poor reference.
+    uint32_t sum = 0;
+    for (int i = 0 ; i < 10 ; i++)
+	sum += _dw1000_pg_measure(dw, pg_delay);
+
+    _dw1000_pg_cal_leave(dw, pmsc0, pmsc1, rf_conf);
+
+    return (uint16_t)(sum / 10);
+}
+
+
+uint8_t dw1000_tx_calibrate_pg_delay(dw1000_t *dw, uint16_t target_count) {
+    uint8_t  pmsc0;
+    uint16_t pmsc1;
+    uint32_t rf_conf;
+
+    _dw1000_pg_cal_enter(dw, &pmsc0, &pmsc1, &rf_conf);
+
+    // APS023 Part 2 §4.3: start PG_DELAY at 0x80 and walk down the bits,
+    // keeping a bit set where the count read exceeds the reference and
+    // clearing it where it falls short, while recording the delay whose
+    // count came closest. Closest rather than last because the search can
+    // step past the reference on its final move. The starting window of
+    // 300 is deca_device.c's, not the app note's, and doubles as a
+    // refusal: a part that never comes within it leaves best at zero.
+    uint8_t  best      = 0;
+    uint8_t  current   = 0x80;
+    uint8_t  bit       = 0x80;
+    int32_t  closest   = 300;
+
+    for (int i = 0 ; i < 7 ; i++) {
+	bit    >>= 1;
+	current |= bit;
+
+	uint16_t count = _dw1000_pg_measure(dw, current);
+
+	int32_t delta = (int32_t)count - (int32_t)target_count;
+	if (delta < 0)
+	    delta = -delta;
+	if (delta < closest) {
+	    closest = delta;
+	    best    = current;
+	}
+
+	// A count above the target means the bandwidth was low, which a
+	// longer pulse generator delay raises.
+	if (count > target_count) current |=  bit;
+	else                      current &= ~bit;
+    }
+
+    _dw1000_pg_cal_leave(dw, pmsc0, pmsc1, rf_conf);
+
+    return best;
+}
+#endif
 
 
 /** @} */

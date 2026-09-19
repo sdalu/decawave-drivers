@@ -64,6 +64,24 @@
 #define DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011	0
 #endif
 
+#if defined(CONFIG_DW1000_EVENT_COUNTERS)
+#define DW1000_WITH_EVENT_COUNTERS			1
+#else
+#define DW1000_WITH_EVENT_COUNTERS			0
+#endif
+
+#if defined(CONFIG_DW1000_ACCUMULATOR)
+#define DW1000_WITH_ACCUMULATOR				1
+#else
+#define DW1000_WITH_ACCUMULATOR				0
+#endif
+
+#if defined(CONFIG_DW1000_TEMP_COMPENSATION)
+#define DW1000_WITH_TEMP_COMPENSATION			1
+#else
+#define DW1000_WITH_TEMP_COMPENSATION			0
+#endif
+
 /*----------------------------------------------------------------------*/
 /* Debug / Assert                                                       */
 /*----------------------------------------------------------------------*/

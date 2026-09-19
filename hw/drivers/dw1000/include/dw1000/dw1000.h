@@ -100,6 +100,56 @@
 #endif
 
 /**
+ * @brief Build with the event counters
+ *
+ * @details The diagnostic bank at register 0x2F (UM §7.2.48): PHY
+ *          header errors, Reed-Solomon errors, good and bad CRCs,
+ *          frames the filter rejected, overruns, the three timeouts,
+ *          frames sent, and the two warnings. The chip counts them
+ *          whether or not they are read, so the cost of building this
+ *          in is the code alone, and the cost of enabling them at run
+ *          time is a small amount of power (§7.2.48.1 says so).
+ *          Counting cannot be turned back off once started, only
+ *          cleared.
+ */
+#if !defined(DW1000_WITH_EVENT_COUNTERS) || defined(__DOXYGEN__)
+#define DW1000_WITH_EVENT_COUNTERS 0
+#endif
+
+/**
+ * @brief Build with the die temperature corrections
+ *
+ * @details Transmit power and channel bandwidth both drift with die
+ *          temperature, and the driver otherwise reads the temperature
+ *          without ever acting on it. Two independent halves, both
+ *          needing a reference captured when the board was calibrated:
+ *          @p dw1000_tx_power_temp_correction() is arithmetic on a
+ *          power register, cheap and safe at any time, while
+ *          @p dw1000_tx_calibrate_pg_delay() and
+ *          @p dw1000_tx_get_pg_count() drive a calibration on the chip
+ *          and demand an idle transceiver.
+ */
+#if !defined(DW1000_WITH_TEMP_COMPENSATION) || defined(__DOXYGEN__)
+#define DW1000_WITH_TEMP_COMPENSATION 0
+#endif
+
+/**
+ * @brief Build with the accumulator (CIR) read
+ *
+ * @details The channel impulse response the leading edge estimate was
+ *          made from, at register 0x25 (UM §7.2.38). What separates a
+ *          first path from a reflection, and so the one diagnostic that
+ *          speaks to ranging accuracy rather than to link health. The
+ *          whole accumulator is @p DW1000_LEN_ACC_MEM bytes, which is
+ *          larger than most of the hosts this driver runs on care to
+ *          spare, so the read is partial by design and the buffer is
+ *          the caller's.
+ */
+#if !defined(DW1000_WITH_ACCUMULATOR) || defined(__DOXYGEN__)
+#define DW1000_WITH_ACCUMULATOR 0
+#endif
+
+/**
  * @brief Value for default SFD timeout
  *
  * @details Value can be between 1 and 65535, but useful values
@@ -482,7 +532,7 @@ typedef struct dw1000_config {
      * completion has the receiver enabled at the end of the pass, once
      * the completion is booked. Set, it is enabled where the frame is
      * handled, before the read-out, as the driver did before 2084ca2.
-     * A bench knob, settled 2026-09-18 (DW1000.md, "A buffer toggle
+     * A bench knob (DW1000.md, "A buffer toggle
      * that moves the host off the chip's buffer under a live
      * receiver"); leave clear.
      */
@@ -639,10 +689,13 @@ struct dw1000 {
                             //  while a transmission was in flight, so
                             //  the receiver reset UM 4.1.6 asks for
                             //  was put off: dw1000_rx_start() applies it
-    uint8_t  rx_wanted;     // rx_keep_on: the host asked to listen and
-                            //  has not asked to stop (dw1000_txrx_off)
-    uint8_t  rx_deferred;   // A dw1000_rx_start() came over a send on the
-                            //  air: honoured at the completion's pass
+    uint8_t  rx_want;       // What the host has asked of the receiver,
+                            //  one of enum dw1000_rx_want below: NONE,
+                            //  ONCE (a dw1000_rx_start() that came over
+                            //  a send on the air, honoured at the
+                            //  completion's pass) or KEEP (rx_keep_on,
+                            //  the host having asked to listen and not
+                            //  to stop: dw1000_txrx_off)
     uint16_t tx_length;     // Frame length of the send in progress, CRC
                             //  included, for its airtime
     uint32_t tx_airtime;    // Airtime of the send in progress, ticks
@@ -656,6 +709,12 @@ struct dw1000 {
                             //  too-late refusal (HPDWARN bit 3, TXPUTE
                             //  bit 10): kept for a probe, since the
                             //  TRXOFF of the refusal clears them
+    uint32_t dbg_lde_cuts;  // How many frames dw1000_process_events()
+                            //  reported through rx_error for having had
+                            //  their LDE run cut by a TRXOFF (RXFCG set,
+                            //  LDEDONE clear): the bench counts them
+                            //  against the soak's deliveries
+                            //  (doc/bench/2026-09-19-lde)
 #endif
     uint64_t tx_suspect;    // System time at which a send in progress was
                             //  first seen absent from the chip (no TX
@@ -687,6 +746,25 @@ enum dw1000_state {
     DW1000_STATE_RX_W4R,
     DW1000_STATE_TX,
     DW1000_STATE_TX_W4R,
+};
+
+/**
+ * @internal
+ * @brief What the host has asked of the receiver
+ *
+ * One field in place of the two the driver kept until 1.5 (`rx_wanted`
+ * and `rx_deferred`), the receive intent being one thing with three
+ * settings rather than two flags with a dead combination (DESIGN.md,
+ * "The receiver policy, and the send the chip never began"). NONE is
+ * nothing asked for; ONCE a single start, recorded over a send on the
+ * air and spent when the receiver goes back up; KEEP the rx_keep_on
+ * policy's standing ask, which no enable consumes and which only
+ * dw1000_txrx_off() (or a soft reset) ends.
+ */
+enum dw1000_rx_want {
+    DW1000_RX_WANT_NONE = 0,
+    DW1000_RX_WANT_ONCE,
+    DW1000_RX_WANT_KEEP,
 };
 
 /** @internal A send is in progress: another is refused (Errata TX-2) */
@@ -1444,8 +1522,9 @@ static inline void
 dw1000_txrx_stop(dw1000_t *dw, int flags)
 {
     if (! (flags & DW1000_TXRX_KEEP_EVENTS)) {
-	dw->rx_wanted   = 0;            // rx_keep_on: the host stops listening
-	dw->rx_deferred = 0;
+	// rx_keep_on: the host stops listening, and a start it recorded
+	// over a send goes with it
+	dw->rx_want = DW1000_RX_WANT_NONE;
     }
     _dw1000_txrx_off(dw, (flags & DW1000_TXRX_KEEP_EVENTS) ? 0 :
 			 (DW1000_MSK_SYS_STATUS_ALL_TX     |
@@ -2057,6 +2136,204 @@ double dw1000_rx_get_clock_drift(dw1000_t *dw) {
     return (double)offset / (double)interval;
 }
 
+
+/*===========================================================================*/
+/* Diagnostics and temperature corrections                                   */
+/*===========================================================================*/
+
+#if DW1000_WITH_EVENT_COUNTERS || defined(__DOXYGEN__)
+
+/**
+ * @brief The chip's own tally of what the receiver and transmitter saw
+ *
+ * @details Every field is a 12-bit count (UM §7.2.48). A counter wraps
+ *          at 4096 rather than saturating, nothing being carried above
+ *          bit 11, so a reading is unambiguous only while fewer than
+ *          4096 of its event have happened since the last clear. The
+ *          manual does not say so; DW1000.md does.
+ */
+typedef struct {
+    uint16_t phe;	/**< PHY header errors                          */
+    uint16_t rse;	/**< Reed-Solomon errors (frame sync loss)      */
+    uint16_t fcg;	/**< frames received with a good FCS            */
+    uint16_t fce;	/**< frames received with a bad FCS             */
+    uint16_t ffr;	/**< frames the frame filter rejected           */
+    uint16_t ovr;	/**< receiver overruns                          */
+    uint16_t sto;	/**< SFD timeouts                               */
+    uint16_t pto;	/**< preamble detection timeouts                */
+    uint16_t fwto;	/**< frame wait timeouts                        */
+    uint16_t txfs;	/**< frames sent                                */
+    uint16_t hpw;	/**< half period warnings                       */
+    uint16_t tpw;	/**< transmitter power-up warnings              */
+} dw1000_event_counters_t;
+
+/**
+ * @brief Start counting events
+ *
+ * @note  There is no matching stop. UM §7.2.48.1 gives the control
+ *        register no disable, only an enable and a clear, so once
+ *        started the counters run until the chip is reset.
+ *        @p dw1000_event_counters_clear() is the only way back to zero.
+ *
+ * @param[in]  dw       driver context
+ */
+void dw1000_event_counters_start(dw1000_t *dw);
+
+/**
+ * @brief Zero the counters, and leave them counting
+ *
+ * @param[in]  dw       driver context
+ */
+void dw1000_event_counters_clear(dw1000_t *dw);
+
+/**
+ * @brief Read all twelve counters
+ *
+ * @note  One SPI transaction, so the twelve values agree on when they
+ *        were sampled. Reading does not clear them.
+ *
+ * @param[in]  dw       driver context
+ * @param[out] evc      where to put the counts
+ */
+void dw1000_event_counters_read(dw1000_t *dw, dw1000_event_counters_t *evc);
+
+#endif
+
+
+#if DW1000_WITH_ACCUMULATOR || defined(__DOXYGEN__)
+
+/**
+ * @brief Read part of the accumulator (the channel impulse response)
+ *
+ * @details The CIR the leading edge estimate was made from: complex
+ *          samples, a 16-bit real then a 16-bit imaginary part for each
+ *          tap, four octets to a tap, one tap to a nanosecond. The span
+ *          is one symbol, 992 taps at 16MHz PRF and 1016 at 64MHz
+ *          (UM §7.2.38), so the whole accumulator is far larger than
+ *          most hosts want to hold and this reads a window of it.
+ *
+ * @note    The chip emits a dummy octet at the head of every
+ *          accumulator read, whatever sub-index it starts at. That
+ *          octet is dropped here, so @p data[0] is the octet at
+ *          @p index; it does cost one byte of @p size, which is why the
+ *          return value is one less than the size asked for.
+ *
+ * @warning Only meaningful between a received frame and the next
+ *          receiver enable: the accumulator is overwritten by the next
+ *          reception.
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  index    first accumulator octet wanted,
+ *                      0 to @p DW1000_LEN_ACC_MEM - 1
+ * @param[out] data     buffer of @p size octets
+ * @param[in]  size     size of @p data, at least 2
+ *
+ * @return  octets of accumulator placed in @p data, or 0 if @p index is
+ *          past the end of the accumulator or @p size is below 2
+ */
+size_t dw1000_rx_read_accumulator(dw1000_t *dw, uint16_t index,
+				  uint8_t *data, size_t size);
+
+#endif
+
+
+#if DW1000_WITH_TEMP_COMPENSATION || defined(__DOXYGEN__)
+
+/**
+ * @brief Correct a transmit power setting for a change in die temperature
+ *
+ * @details Transmit power droops as the die warms, near enough linearly:
+ *          0.035 dB/°C on channel 2 and 0.065 dB/°C on channel 5
+ *          (APS023 part 2 §5.3). This is arithmetic on a register
+ *          value: it touches neither the chip nor @p dw, and is safe to
+ *          call at any time. @p dw1000_tx_set_power() applies the
+ *          result.
+ *
+ * @note    @p delta_temp is in hundredths of a degree, the unit
+ *          @p dw1000_read_temp_vbat() reports, so the difference of two
+ *          of its readings goes in unconverted.
+ *
+ * @note    Each of the register's four settings is moved on its own, and
+ *          one left at zero is left alone. The result is clamped to the
+ *          part's range rather than allowed to wrap.
+ *
+ * @note    On channels other than 2 and 5 the reference is returned
+ *          unchanged, no slope being published for them.
+ *
+ * @param[in]  dw          driver context, read for the configured channel
+ * @param[in]  txpower     TX_POWER register value as measured at the
+ *                         reference temperature, from
+ *                         @p dw1000_tx_get_power()
+ * @param[in]  delta_temp  current temperature minus the temperature the
+ *                         reference was taken at, in 1/100 °C
+ *
+ * @return the corrected TX_POWER register value
+ */
+uint32_t dw1000_tx_power_temp_correction(dw1000_t *dw, uint32_t txpower,
+					 int16_t delta_temp);
+
+/**
+ * @brief Set the transmit power
+ *
+ * @details Writes TX_POWER and records it, so that
+ *          @p dw1000_tx_get_power() keeps agreeing with the chip.
+ *
+ * @warning The value is not validated: it is a register value, not a
+ *          level in dB, and the only supported way to arrive at one is
+ *          @p dw1000_tx_get_power() possibly through
+ *          @p dw1000_tx_power_temp_correction(). A reconfigure
+ *          overwrites it.
+ *
+ * @param[in]  dw       driver context
+ * @param[in]  txpower  TX_POWER register value
+ */
+void dw1000_tx_set_power(dw1000_t *dw, uint32_t txpower);
+
+/**
+ * @brief Measure the pulse generator count for a given delay
+ *
+ * @details The reference half of the bandwidth correction. Taken once,
+ *          when the board is calibrated and its temperature known, and
+ *          kept; @p dw1000_tx_calibrate_pg_delay() later searches for
+ *          the delay that reproduces this count at another temperature.
+ *          Averaged over ten measurements, the count being noisy.
+ *
+ * @pre     The transceiver must be idle. The measurement stops the
+ *          packet sequencer and drives the analog blocks by hand,
+ *          putting everything back afterwards.
+ *
+ * @param[in]  dw        driver context
+ * @param[in]  pg_delay  the TC_PGDELAY value to measure, normally the
+ *                       one the configured channel uses
+ *
+ * @return the averaged pulse generator count
+ */
+uint16_t dw1000_tx_get_pg_count(dw1000_t *dw, uint8_t pg_delay);
+
+/**
+ * @brief Search for the pulse generator delay that restores the bandwidth
+ *
+ * @details Channel bandwidth drifts with die temperature; this finds the
+ *          TC_PGDELAY that brings the pulse generator count back to the
+ *          reference @p dw1000_tx_get_pg_count() recorded. A binary
+ *          search over seven bits, so seven measurements.
+ *
+ * @pre     The transceiver must be idle, as for
+ *          @p dw1000_tx_get_pg_count().
+ *
+ * @note    The result is not applied. Write it with
+ *          @p _dw1000_reg_write8() to TC_PGDELAY, or hold it until the
+ *          next configure.
+ *
+ * @param[in]  dw            driver context
+ * @param[in]  target_count  the reference count to search towards
+ *
+ * @return the best TC_PGDELAY found, or 0 if no setting came within 300
+ *         counts of @p target_count
+ */
+uint8_t dw1000_tx_calibrate_pg_delay(dw1000_t *dw, uint16_t target_count);
+
+#endif
 
 /** @} */
 

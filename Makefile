@@ -152,10 +152,12 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-manifest check-validate check-emulation check-probe check-sniffer	## compile the option matrix (~1 min), check the manifest, check the radio-value validation, run the emulation smoke test, run the probe tests, run the sniffer tests
+check: check-options check-manifest check-validate check-emulation check-probe check-sniffer	## compile the option matrix (~9 min), check the manifest, check the radio-value validation, run the emulation smoke test, run the probe tests, run the sniffer tests
 
-# 256 compiles, tens of seconds in total, so the script reports progress
-# as it goes. CC, CFLAGS and WERROR reach it through the environment.
+# The matrix is 2^n over the options, so eleven of them is 2048 compiles
+# and about nine minutes; the script reports progress as it goes, and a
+# twelfth option would double both. CC, CFLAGS and WERROR reach it
+# through the environment.
 check-options:					## compile the core over every option combination
 	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-options.sh
 
@@ -314,6 +316,9 @@ options:					## print the compile-time options and their defaults
 	    DW1000_WITH_SFD_TIMEOUT                  0 \
 	    DW1000_WITH_SFD_TIMEOUT_DEFAULT          0 \
 	    DW1000_WITH_HOTFIX_AAT_IEEE802_15_4_2011 1 \
+	    DW1000_WITH_EVENT_COUNTERS               0 \
+	    DW1000_WITH_ACCUMULATOR                  0 \
+	    DW1000_WITH_TEMP_COMPENSATION            0 \
 	    DW1000_WITH_DEBUG                        0
 	@echo ''
 	@echo 'One takes a value rather than a flag:'

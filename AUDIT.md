@@ -63,9 +63,9 @@ the vendor driver independently of the person who wrote it; `make lib
 OSAL=null` and `make check` pass, the latter now covering the option
 matrix, the manifest, the radio-value validation, four `port/emulation`
 tests and the two probe tests, and `clang --analyze` reports nothing.
-The option matrix was 256 combinations when the audit ran and is 128
-now, `DW1000_WITH_DWM1000_EVK_COMPATIBILITY` having been dropped in
-`c58f953`.
+The option matrix was 256 combinations when the audit ran, and 128 once
+`DW1000_WITH_DWM1000_EVK_COMPATIBILITY` was dropped in `c58f953`. It is
+2048 now, at eleven options, the matrix being 2^n.
 
 ## Measured: the transceiver's transitions
 
@@ -509,9 +509,12 @@ The core was compared function by function with uwb-dw1000
 `dw1000_regs.h`), in six areas (register map and tables, bring-up,
 radio configuration, transmit, receive and events, formulas), each
 citing file and line on both sides. The register map, every field, bit
-and mask, and every tuning table are byte-identical. Where the two
-diverge, ours nearly always follows the User Manual or the older
-deca_device.c, and uwb-dw1000 is the one that drifted. The comparison
+and mask, and every tuning table are byte-identical but for one length:
+ours gives AGC_CTRL 33 octets, uwb-dw1000 gives it 32. §7.2.36 says 33,
+and so does deca_device.c 05.01.00; 04.00.06 said 32 and uwb-dw1000 kept
+it. Where the two diverge, ours nearly always follows the User Manual
+or the older deca_device.c, and uwb-dw1000 is the one that drifted. The
+comparison
 added four findings above (PANADR, the overrun re-check, TNSSFD/RNSSFD,
 the late delayed receive).
 
@@ -537,6 +540,16 @@ against an open issue of its own; ours took the new ones on 2026-09-16.
 See the channel 5 entry above, including the antenna-delay
 re-calibration it obliges.
 
+The DRX_TUNE1b row is the one in that table both vendor generations
+share: deca_device.c 05.01.00 gates its PLEN_64 test on the preamble
+length alone, exactly as uwb-dw1000 does, so both write 0x0010 at
+850 kbps where Table 32 scopes that value to 6.8 Mbps. The table has no
+row for a 64 symbol preamble at 850 kbps at all, so ours reads the
+bitrate as the deciding term and writes 0x0020. The combination is
+unreachable in practice, a 64 symbol preamble being a 6.8 Mbps
+instrument, and the choice rests on that reading rather than on a stated
+rule. `dw1000.c` carries the same note where the value is chosen.
+
 **Where ours follows deca_device.c rather than uwb-dw1000**: the SAR
 temperature read (RF_CONF 0x80, 0x0A, 0x0F then TC_SARC; uwb-dw1000 only
 reads the wakeup sample), the AAT-plus-wait4resp workaround after TXFRS
@@ -545,14 +558,31 @@ per-frame TR bit, and the OTP read with no delay before OTP_RDAT.
 
 **Policy differences, to document rather than change**:
 
-- The vendor re-enables the receiver inside its ISR after a good frame
-  in single-buffer mode and after every RX error; ours leaves that to
-  the callback or to RXAUTR, and leaves the receiver off after an error
-  or timeout.
-- The vendor writes TRXOFF before every TXSTRT; ours requires IDLE as a
-  documented precondition. Ours sets DIS_STXP at init; the vendor leaves
-  smart TX power on. The frame length ours reports includes the FCS; the
-  vendor's excludes it. Both say so.
+"The vendor" below means uwb-dw1000 wherever deca_device.c is not named.
+The receiver, TRXOFF and frame-length rows said "the vendor" without
+qualification until 2026-09-19, when they were checked against
+deca_device.c 05.01.00 for the first time: each is true of uwb-dw1000
+and false of deca_device.c, and the frame-length one was wrong about
+both vendors outright.
+
+- uwb-dw1000 re-enables the receiver inside its ISR
+  (`dw1000_interrupt_ev_cb`) after a good frame in single-buffer mode
+  and after every RX error; ours leaves that to the callback or to
+  RXAUTR, and leaves the receiver off after an error or timeout.
+  deca_device.c does neither: `dwt_isr()` never writes RXENAB, which is
+  written only by `dwt_rxenable()`. Here ours and deca_device.c agree.
+- uwb-dw1000 writes TRXOFF before every TXSTRT, gated on
+  `config->trxoff_enable`; ours requires IDLE as a documented
+  precondition. deca_device.c does not: `dwt_starttx()` writes TRXOFF
+  only on the too-late delayed-send path.
+- Ours sets DIS_STXP at init; both vendors leave smart TX power on.
+- The frame length ours reports includes the FCS, and so does
+  deca_device.c's: `cbData.datalength` is the raw RXFLEN, which by
+  §7.2.18 includes the FCS. The vendor drops the FCS only on the
+  transmit side, `dwt_writetxdata()` writing len-2 for the
+  auto-generated CRC. The claim recorded here until 2026-09-19, that the
+  vendor's reported length excludes the FCS, had conflated the two
+  directions.
 - LDEERR is an RX error in ours (as in deca_regs.h) but only cleared in
   uwb-dw1000, which puts RXOVRR in that group instead. Ours unmasks
   RXOVRR on its own account, whenever `cfg->dblbuff` is set. It did not
@@ -564,12 +594,62 @@ per-frame TR bit, and the OTP read with no delay before OTP_RDAT.
   its own buffers inside the ISR, then toggles HRBPT, then calls the
   user; ours calls the user first and expects the callback to read the
   frame, then toggles. Both are internally consistent.
+- `dw1000_otp_read()` does not force the XTI clock for the read, where
+  `dwt_otpread()` does. Ours puts the requirement on the caller as a
+  precondition rather than enforcing it per read. Recorded here on
+  2026-09-19; until then it was documented only as the `@pre` on
+  `dw1000_otp_read()` in `dw1000.h`, in neither this file nor DESIGN.md.
 
 **Only the vendor has**: the carrier-integrator clock offset
-(DRX_CAR_INT), frame duration helpers, sleep and wake, the event
-counters (0x2F). **Only ours has**: the delayed-send retry, SFCST, the
-RXPACC SFD adjustment, the antenna-calibration table, the RX power
-correction curve, the configuration validation in every build.
+(DRX_CAR_INT), frame duration helpers, sleep and wake. **Only ours
+has**: the delayed-send retry, SFCST, the RXPACC SFD adjustment, the
+antenna-calibration table, the RX power correction curve, the
+configuration validation in every build.
+
+The event counters (0x2F), the accumulator read and the two temperature
+corrections are on both sides. Ours are compile-time options, all three
+off by default: `DW1000_WITH_EVENT_COUNTERS`, `DW1000_WITH_ACCUMULATOR`
+and `DW1000_WITH_TEMP_COMPENSATION`.
+
+**Defects found in the vendor sources while implementing them.** None
+affects us, all three being in code or headers we did not copy, but each
+is a trap for anyone reading deca_device.c beside this driver:
+
+| Item | The defect |
+| :--- | :--------- |
+| `deca_regs.h`, EVC_STO | its `_LEN` and `_MASK` lines redefine `EVC_OVR_LEN` and `EVC_OVR_MASK` instead, so `EVC_STO_LEN` does not exist. A copy-paste; the values happen to be equal, so nothing miscompiles. |
+| `deca_regs.h`, TC_PGCAL_STATUS | given one octet where §7.2.43.5 gives it two, contradicted by deca_device.c itself, which reads the register 16 bits wide to get at a 12-bit count. |
+| `_dwt_computetxpowersetting()` | the guard that stops the DA attenuator is asymmetric. Rising, it tests for 8 and backs off to 7; falling, it tests for 0, which is where the counter started, so it never fires. The result is then masked to three bits rather than clamped, so an attenuation driven below zero wraps to a large one and asks for *less* power. Ours reproduced both for a time, as a port of that function; it does neither now, the correction having been rewritten from §5.3 and §7.2.31.1 in the driver's own half-dB units, where it clamps. |
+
+**Where the temperature compensation comes from.** Not the reference
+code alone, as it first appeared: APS023 part 2 documents it, and the
+User Manual points there from §7.2.43.5. The split is
+
+| Item | Source |
+| :--- | :----- |
+| power slopes, 0.035 dB/°C on channel 2 and 0.065 on channel 5 | APS023 part 2 §5.3, from testing over a number of parts |
+| power adjustment, in outline | APS023 part 2 §5.3, three steps |
+| how the coarse and fine gains share a step | UM §7.2.31.1, which asks for the coarse gain first; deca_device.c moves the fine gain first instead and reaches for the coarse only when forced |
+| PG_COUNT as the temperature-stable reference | UM §7.2.43.5 and APS023 part 2 §4.2 |
+| the four register writes that free the pulse generator | APS023 part 2 §4.2, given as literals (0x01, 0x0000, 0x001FA700, 0x22) |
+| the 0xBC / 0xBD writes to TC_PG_CTRL | APS023 part 2 §4.2, though the UM leaves those bits reserved |
+| the binary search over PG_DELAY | APS023 part 2 §4.3 |
+| the 300-count window it starts from | `dwt_calcbandwidthtempadj()` only |
+| mixer 0.5 dB and DA 2.5 dB steps | UM §7.2.31 |
+
+**Units**, which both halves of the vendor's documentation make easy to
+misread: `delta_temp` is in raw SAR steps and not degrees (about 1.14°C
+each, §7.2.43.2), and `TEMP_COMP_FACTOR_CH2` and `TEMP_COMP_FACTOR_CH5`
+yield mixer gain steps and not dB. Channel 5's 0.1482 is 0.1482 × 0.5 /
+1.14 = 0.065 dB/°C, which is the app note's figure. Channels other than
+2 and 5 have no published slope and are left uncorrected, as
+deca_device.c leaves them.
+
+**PG_COUNT is 11 bits, not 12.** APS023 part 2 says "the least
+significant 11-bits" in both §4.2 and §4.3; `deca_regs.h` masks
+`0x0FFF`. Ours masks `0x07FF`. A count above 2047 is where the two would
+part, and the vendor's own worked example (API example 09b) carries a
+reference of 0x369.
 
 ## Manual versions
 

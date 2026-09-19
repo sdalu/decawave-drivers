@@ -60,6 +60,55 @@
 #include "emulation.h"
 
 
+/* The host's SPI traffic, one line per transfer, reads and writes both.
+ *
+ * Its own option rather than a corner of DW1000_EMULATION_DEBUG: what it
+ * is for is the equivalence check of a driver refactor, which wants the
+ * transfers and nothing else, and wants them from a build that runs at
+ * the speed the tests were written for. The rest of the trace is neither.
+ * Off by default, like every other compile-time option here, and set
+ * with -DDW1000_EMULATION_SPI_TRACE=1.
+ *
+ * The shape is fixed, "spi W" for a write and "spi R" for a read, so
+ * that the writes (which are all the driver does *to* the chip: two
+ * builds writing the same bytes in the same order do the same thing to
+ * it) are the lines carrying one token.
+ */
+#if !defined(DW1000_EMULATION_SPI_TRACE)
+#define DW1000_EMULATION_SPI_TRACE 0
+#endif
+
+#if DW1000_EMULATION_SPI_TRACE
+/* Not EMU_DEBUG: that one is compiled out without
+ * DW1000_EMULATION_DEBUG, and this trace is independent of it. Same
+ * stream and same prefix, though (emu_log.h).
+ */
+#define E_SPI_TRACE_MAX		1024	/* the largest register file */
+static void
+e_spi_trace(const char *dir, uint8_t reg, size_t offset,
+	    const uint8_t *data, size_t datalen)
+{
+    char   hex[3 * E_SPI_TRACE_MAX + 4];
+    size_t n   = 0;
+    size_t max = (datalen > E_SPI_TRACE_MAX) ? E_SPI_TRACE_MAX : datalen;
+
+    for (size_t i = 0 ; i < max ; i++)
+	n += (size_t)snprintf(hex + n, sizeof(hex) - n,
+			      "%s%02x", i ? " " : "", data[i]);
+    if (max < datalen)
+	(void)snprintf(hex + n, sizeof(hex) - n, "%s...", max ? " " : "");
+
+    fprintf(stderr, EMU_LOG_PREFIX "spi %s reg=0x%02x off=%zu len=%zu"
+	    " data=%s\n", dir, reg, offset, datalen, hex);
+}
+#define E_SPI_TRACE(dir, reg, off, data, len)				\
+    e_spi_trace(dir, reg, off, data, len)
+#else
+#define E_SPI_TRACE(dir, reg, off, data, len)				\
+    do { } while (0)
+#endif
+
+
 /* What a deadline, once reached, makes the model do. One slot each, so
  * that arming a second receive timeout replaces the first rather than
  * queueing behind it, which is what the chip does, the timeouts being
@@ -68,7 +117,8 @@
 #define E_DEADLINE_TX		0	/* a delayed send comes due     */
 #define E_DEADLINE_RX		1	/* a delayed receive turns on   */
 #define E_DEADLINE_RXTO		2	/* a receive timeout expires    */
-#define E_DEADLINE_COUNT	3
+#define E_DEADLINE_LDE		3	/* an LDE run finishes          */
+#define E_DEADLINE_COUNT	4
 
 struct e_deadline {
     bool	armed;
@@ -83,6 +133,19 @@ struct e_deadline {
 struct dw1000_emulation {
     bool drop_next_start;               /* dw1000_emulation_drop_next_start() */
     bool fail_next_frame;               /* dw1000_emulation_fail_next_frame() */
+
+    /* The LDE phase, dw1000_emulation_lde_delay(). Zero (the reset
+     * value) keeps a reception atomic, the way it always was. Otherwise
+     * a reception completes in two steps: the payload, RX_FINFO and the
+     * status bits but LDEDONE at RSVC_RX, then RX_TIME, RX_TTCKI,
+     * RX_TTCKO, LDEDONE and the IC pointer `lde_delay` ticks later,
+     * through E_DEADLINE_LDE. The three fields below carry that frame's
+     * numbers from the first step to the second.
+     */
+    uint32_t		lde_delay;      /* device ticks, 0 for atomic     */
+    uint64_t		lde_rx_stamp;   /* RX_TIME.RX_STAMP, when it fires */
+    uint64_t		lde_rx_rawst;   /* RX_TIME.RX_RAWST, likewise      */
+    bool		lde_crc_ok;     /* only a good CRC moves ICRBP     */
     pthread_mutex_t	mutex;
     rsvc_t 		*rsvc;
     void               (*line_cb)(int line, void *args);
@@ -109,8 +172,8 @@ struct dw1000_emulation {
      * sets rather than in either of them.
      *
      * DW1000.md, "With the buffer pointers aligned, the swinging status
-     * bits are the chip's flags, not the buffer's" (measured 2026-09-18,
-     * rpi-c and rpi-d): with the two pointers on one buffer, what a host
+     * bits are the chip's flags, not the buffer's" (measured on rpi-c
+     * and rpi-d): with the two pointers on one buffer, what a host
      * reads in those bits is this record and not that buffer's latched
      * set, a status write does not clear it, and the next receiver
      * enable resets it. TRXOFF does not, nor does HRBPT.
@@ -624,8 +687,8 @@ static char *e_state[] = {
 /*-- The chip's flags of its last reception ----------------------------*/
 
 /* DW1000.md, "With the buffer pointers aligned, the swinging status bits
- * are the chip's flags, not the buffer's" (measured 2026-09-18, rpi-c
- * and rpi-d, double buffered with RXAUTR clear). One of its three
+ * are the chip's flags, not the buffer's" (measured on rpi-c and
+ * rpi-d, double buffered with RXAUTR clear). One of its three
  * observations is modelled here, the third: with the two pointers on
  * one buffer the host reads the chip's own flags. Of the other two, the
  * clear that takes with the receiver off is what the register sets
@@ -785,6 +848,7 @@ static void e_status_derived(struct dw1000_emulation *e) {
  */
 static void e_deadline_fire_tx  (struct dw1000_emulation *e, uint64_t seq);
 static void e_deadline_fire_rx  (struct dw1000_emulation *e, uint64_t seq);
+static void e_deadline_fire_lde (struct dw1000_emulation *e, uint64_t seq);
 static void e_deadline_fire_rxto(struct dw1000_emulation *e, uint64_t seq,
 				 uint64_t flag);
 
@@ -818,9 +882,20 @@ static void e_deadline_disarm(struct dw1000_emulation *e, int which) {
     e->deadline[which].armed = false;
 }
 
+/* Everything programmed is off the books: what TRXOFF and the reset do.
+ *
+ * The stamp is bumped as well as the flag cleared, and that is the
+ * difference with e_deadline_disarm() above: the timer thread takes a
+ * due deadline out of its slot and runs the action with the mutex
+ * dropped, so a slot can be disarmed while its action is on its way,
+ * and only the stamp can say so. An LDE run is exactly that case (the
+ * TRXOFF that cuts it is what the driver issues before its own send),
+ * and a cut that let the run finish anyway would not be a cut.
+ */
 static void e_deadline_disarm_all(struct dw1000_emulation *e) {
-    for (int i = 0 ; i < E_DEADLINE_COUNT ; i++)
+    for (int i = 0 ; i < E_DEADLINE_COUNT ; i++) {
 	e->deadline[i].armed = false;
+    }
 }
 
 /* The medium server answered a call. Clears the unreachable latch, so
@@ -940,6 +1015,7 @@ static void *e_timer_thread(void *args) {
 	case E_DEADLINE_TX:   e_deadline_fire_tx  (e, seq);      break;
 	case E_DEADLINE_RX:   e_deadline_fire_rx  (e, seq);      break;
 	case E_DEADLINE_RXTO: e_deadline_fire_rxto(e, seq, arg); break;
+	case E_DEADLINE_LDE:  e_deadline_fire_lde (e, seq);      break;
 	default:              EMU_FATAL("unknown deadline %d", next);
 	}
 	pthread_mutex_lock(&e->mutex);
@@ -1241,6 +1317,12 @@ void dw1000_emulation_fail_next_frame(struct dw1000_emulation *e) {
     pthread_mutex_unlock(&e->mutex);
 }
 
+void dw1000_emulation_lde_delay(struct dw1000_emulation *e, uint32_t ticks) {
+    pthread_mutex_lock(&e->mutex);
+    e->lde_delay = ticks;
+    pthread_mutex_unlock(&e->mutex);
+}
+
 void dw1000_emulation_reset(struct dw1000_emulation *e) {
     /* Under the mutex, like every other writer of this state. A host can
      * drive the reset line at any moment, including while the rsvc
@@ -1282,6 +1364,15 @@ void dw1000_emulation_reset(struct dw1000_emulation *e) {
 
     // Nothing has been received, so there are no flags of a last one
     e_rx_live_clear(e);
+
+    /* The LDE phase goes back to its reset value, which is the atomic
+     * reception the model always had: a knob a step forgot to put back
+     * must not follow the chip through a hard reset.
+     */
+    e->lde_delay    = 0;
+    e->lde_rx_stamp = 0;
+    e->lde_rx_rawst = 0;
+    e->lde_crc_ok   = false;
 
     // Clear everything
     for (int i = 0 ; i < DW1000_COUNT_REGISTERS ; i++) {
@@ -1583,6 +1674,62 @@ static void e_deadline_fire_rxto(struct dw1000_emulation *e, uint64_t seq,
 
     E_SET_STATE(e, IDLE);
     edge = e_irq_update(e);
+    pthread_mutex_unlock(&e->mutex);
+
+    if (edge) e_irq_fire(e);
+}
+
+
+/* An LDE run has finished: the frame gets its timestamp, LDEDONE, and
+ * the IC pointer.
+ *
+ * Only reached when dw1000_emulation_lde_delay() has been given a
+ * non-zero delay. UM 7.2.17 and table 7 put LDEDONE in the swinging
+ * set, so it goes into the IC's set and into the chip's own record of
+ * its last reception, beside the bits RSVC_RX already wrote there; UM
+ * 4.3.2 moves ICRBP for a frame with a good CRC, which is what the
+ * advance below is.
+ *
+ * A TRXOFF between the two phases disarms this deadline
+ * (e_deadline_disarm_all()) and nothing here runs: no LDEDONE, RX_TIME
+ * left holding the previous frame's stamp, ICRBP where it was. That is
+ * the cut.
+ */
+static bool e_lde_complete(struct dw1000_emulation *e) {
+    bool edge;
+
+    uint32_t rx_ttcki = 0x1000; // Fake value, as in the RSVC_RX case
+    uint64_t rx_ttcko = 0;      // Fake value, likewise
+    E_REG_IC_WRITE32_KEY(e, rx_ttcki, RX_TTCKI);
+    E_REG_IC_WRITE40_KEY(e, rx_ttcko, RX_TTCKO);
+    E_REG_IC_WRITE40_KEY(e, e->lde_rx_stamp, RX_TIME, RX_TIME_RX_STAMP);
+    E_REG_IC_WRITE40_KEY(e, e->lde_rx_rawst, RX_TIME, RX_TIME_RX_RAWST);
+
+    uint32_t sys_status = E_REG_IC_READ32_KEY(e, SYS_STATUS);
+    DW1000_SET_FLG(sys_status, SYS_STATUS_LDEDONE);
+    E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
+    e->rx_live |= DW1000_FLG_SYS_STATUS_LDEDONE;
+
+    EMU_DEBUG("lde: run finished (stamp=0x%010" PRIx64 ")", e->lde_rx_stamp);
+
+    edge = e_irq_update(e);
+    if (e->lde_crc_ok)
+	e_dblbuff_advance_ic(e);
+
+    return edge;
+}
+
+static void e_deadline_fire_lde(struct dw1000_emulation *e, uint64_t seq) {
+    bool edge;
+
+    pthread_mutex_lock(&e->mutex);
+    if (!e_deadline_current(e, E_DEADLINE_LDE, seq)) {
+	EMU_DEBUG("lde: run no longer current, dropped");
+	pthread_mutex_unlock(&e->mutex);
+	return;
+    }
+
+    edge = e_lde_complete(e);
     pthread_mutex_unlock(&e->mutex);
 
     if (edge) e_irq_fire(e);
@@ -1919,6 +2066,8 @@ void _dw1000_spi_send(dw1000_spi_driver_t *spi,
     
     _dw1000_spi_header_decode(hdr, hdrlen, &reg, &offset, &write);
 
+    E_SPI_TRACE("W", reg, offset, data, datalen);
+
     bool send = false;
     bool recv = false;
     pthread_mutex_lock(&e->mutex);
@@ -2054,6 +2203,11 @@ void _dw1000_spi_recv(dw1000_spi_driver_t *spi,
      */
     if (reg == DW1000_REG_SYS_STATUS)
 	e_status_live_view(e, offset, data, datalen);
+
+    /* After the read has been served, the live view included: the bytes
+     * traced are the ones the host got.
+     */
+    E_SPI_TRACE("R", reg, offset, data, datalen);
 
     pthread_mutex_unlock(&e->mutex);
 }
@@ -2214,7 +2368,6 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	DW1000_CLR_FLG(sys_status, SYS_STATUS_RXPTO);   // Not emulated
 	DW1000_SET_FLG(sys_status, SYS_STATUS_RXSFDD);
 	DW1000_CLR_FLG(sys_status, SYS_STATUS_RXSFDTO); // Not emulated
-	DW1000_SET_FLG(sys_status, SYS_STATUS_LDEDONE);
 	DW1000_CLR_FLG(sys_status, SYS_STATUS_LDEERR);
 	DW1000_SET_FLG(sys_status, SYS_STATUS_RXPHD);
 	DW1000_CLR_FLG(sys_status, SYS_STATUS_RXPHE);
@@ -2225,23 +2378,18 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	// RX_TTCKI / RX_TTCKO
 	uint32_t rx_ttcki = 0x1000; // Fake value, need improvement
 	uint64_t rx_ttcko = 0;      // Fake value, need improvement
-	E_REG_IC_WRITE32_KEY(e, rx_ttcki, RX_TTCKI);
-	E_REG_IC_WRITE40_KEY(e, rx_ttcko, RX_TTCKO);
-	
+
         // Antenna delay
 	uint16_t antenna_delay = E_REG_IC_READ16_KEY(e, LDE_IF, LDE_RXANTD);
 
 	// Reception time
 	// (adjusted to take into account antenna delay)
-	uint64_t rx_time = dw1000_le64_to_cpu(iopkt->rx.timestamp);
-	E_REG_IC_WRITE40_KEY(e, rx_time, RX_TIME, RX_TIME_RX_STAMP);
-	
+	uint64_t rx_stamp = dw1000_le64_to_cpu(iopkt->rx.timestamp);
+
 	// Raw transmission time
 	// (which is on a 512-tick boudary)
 	// => building a fake one 
-	rx_time += antenna_delay;
-	rx_time  = DW1000_CLOCK_ROUNDUP(rx_time);
-	E_REG_IC_WRITE40_KEY(e, rx_time, RX_TIME, RX_TIME_RX_RAWST);
+	uint64_t rx_rawst = DW1000_CLOCK_ROUNDUP(rx_stamp + antenna_delay);
 
 	// Update RX_FINFO
 	// Not supported: RXPACC, RXPSR, RXBR, RXNSPL
@@ -2263,6 +2411,35 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
 	    DW1000_SET_FLG(sys_status, SYS_STATUS_RXFCE);
 	}
 	    
+	/* The LDE run. UM 7.2.17 has LDEDONE say "LDE processing done"
+	 * and UM table 7 swings it with RXDFR, RXFCG and RXFCE; the LDE
+	 * is what writes RX_TIME, and UM 4.3.2 moves ICRBP for a frame
+	 * with a good CRC. Without the knob all of that happens here, as
+	 * it always did. With it, the run is a phase of its own: the
+	 * frame is in, its payload and RX_FINFO are written and the
+	 * status says so, but LDEDONE stays clear, RX_TIME keeps what it
+	 * held for the previous frame into this buffer, and ICRBP does
+	 * not move until E_DEADLINE_LDE fires. A TRXOFF meanwhile
+	 * disarms that deadline like every other and none of it ever
+	 * happens, which is the cut of DW1000.md, "A TRXOFF between
+	 * RXFCG and LDEDONE leaves the frame without its timestamp, and
+	 * the IC pointer where it was".
+	 */
+	if (e->lde_delay == 0) {
+	    DW1000_SET_FLG(sys_status, SYS_STATUS_LDEDONE);
+	    E_REG_IC_WRITE32_KEY(e, rx_ttcki, RX_TTCKI);
+	    E_REG_IC_WRITE40_KEY(e, rx_ttcko, RX_TTCKO);
+	    E_REG_IC_WRITE40_KEY(e, rx_stamp, RX_TIME, RX_TIME_RX_STAMP);
+	    E_REG_IC_WRITE40_KEY(e, rx_rawst, RX_TIME, RX_TIME_RX_RAWST);
+	} else {
+	    DW1000_CLR_FLG(sys_status, SYS_STATUS_LDEDONE);
+	    e->lde_rx_stamp = rx_stamp;
+	    e->lde_rx_rawst = rx_rawst;
+	    e->lde_crc_ok   = crc_ok;
+	    e_deadline_arm(e, E_DEADLINE_LDE,
+			   e_clock_full() + e->lde_delay, 0);
+	}
+
 	// Write status
 	E_REG_IC_WRITE32_KEY(e, sys_status, SYS_STATUS);
 
@@ -2277,9 +2454,10 @@ void rsvc_uwb_handler(rsvc_t *rsvc, uint16_t type, void *data, size_t length, vo
         EMU_DEBUG("RSVC INT <RX_DONE> commited to registers");
 
 	/* Only a good frame moves the IC on to the other buffer, and it
-	 * does so after the interrupt has been worked out below.
+	 * does so after the interrupt has been worked out below. With an
+	 * LDE phase outstanding the move belongs to that phase, not here.
 	 */
-	taken = crc_ok;
+	taken = crc_ok && (e->lde_delay == 0);
 
 	/* UM 5.3.2: with RXAUTR the receiver turns itself back on for
 	 * the next frame, and UM 7.2.14 restarts the frame wait
