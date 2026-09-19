@@ -241,8 +241,12 @@ passes after it report frames 3 and 4 in order. Cycled: all five builds
 pass with it; with only the mask half in place, the step fails on
 `PMSC_STATE 1` inside `rx_error`.
 
-**On the bench**, driver working tree deployed to rpi-b, rpi-c and
-rpi-d (`DW1000_DRIVERS_DIR`), 2026-09-18 evening:
+**On the bench**, rpi-b, rpi-c and rpi-d, 2026-09-18 evening (the
+scripts named `DW1000_DRIVERS_DIR`, which nothing reads, so the nodes
+built ruby-dw1000's submodule pin rather than the working tree; the pin
+was this tree's HEAD, `65b0339`, so the driver measured is the one
+described; the scripts now set `DECAWAVE_DRIVERS_DIR`, the variable
+`ext/vendoring.rb` reads):
 - `rake test:pair` with `DW1000_MIN_DELIVERY=0.9`: 9 runs, 78
   assertions, 0 failures — both duplex directions 50 of 50, the overrun
   role's recovery clean (2 overruns, 2281 frames after the first), the

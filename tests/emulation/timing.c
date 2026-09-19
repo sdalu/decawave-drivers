@@ -2357,7 +2357,7 @@ done:
 /* A refused delayed start is not wanted: rx_keep_on, and a delayed
  * receive programmed in the past, refused with DW1000_RX_ERR_TOO_LATE
  * under DW1000_RX_IDLE_ON_DELAY_ERROR. On the old driver PMSC read 5
- * (RX) after the next pass, dw->rx_wanted having been set by the
+ * (RX) after the next pass, dw->rx_want having been set by the
  * refused call.
  */
 static const char *
@@ -2401,8 +2401,8 @@ step_refused_delayed_start_not_wanted(dw1000_t *dw, struct stub *s)
 		      sys_state_pmsc(dw));
 	goto done;
     }
-    if (dw->rx_wanted != 0)
-	why = "dw->rx_wanted is set after a start refused with"
+    if (dw->rx_want != DW1000_RX_WANT_NONE)
+	why = "dw->rx_want is set after a start refused with"
 	      " DW1000_RX_ERR_TOO_LATE";
 
 done:
@@ -2413,7 +2413,7 @@ done:
 
 /* dw1000_txrx_stop(dw, 0) stops the rx_keep_on policy along with the
  * receiver: a start it made must not come back at the next pass. On
- * the old driver PMSC read 5 (RX) there, dw->rx_wanted having survived
+ * the old driver PMSC read 5 (RX) there, dw->rx_want having survived
  * the stop.
  */
 static const char *
@@ -2440,8 +2440,8 @@ step_stop_no_flags_stops_policy(dw1000_t *dw, struct stub *s)
 		      " (IDLE)", sys_state_pmsc(dw));
 	goto done;
     }
-    if (dw->rx_wanted != 0)
-	why = "dw->rx_wanted is set after dw1000_txrx_stop(dw, 0)";
+    if (dw->rx_want != DW1000_RX_WANT_NONE)
+	why = "dw->rx_want is set after dw1000_txrx_stop(dw, 0)";
 
 done:
     cfgp->rx_keep_on = 0;

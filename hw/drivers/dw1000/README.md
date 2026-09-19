@@ -449,6 +449,38 @@ between two waits is silently discarded, which costs the whole exchange.
 port's event thread; an application whose producer and consumer are the
 same thread needs none.
 
+### A frame your own send cut is a receive error
+
+Your own `TRXOFF` before a send can terminate a peer's frame after its
+payload and its CRC are in and before the leading-edge run, which is
+what writes `RX_TIME`: the chip posts `RXFCG` for that frame all the
+same, never posts `LDEDONE`, and leaves `RX_TIME` holding the stamp of
+an earlier reception into the same buffer. The `TRXOFF` of the driver's
+own send path causes it as much as a `dw1000_txrx_off()` of yours, and
+there is nothing to wait for, the bit never coming up afterwards: two
+soaks measured that by waiting for it 46 times and never once seeing it
+(`DW1000.md`, "A TRXOFF between RXFCG and LDEDONE leaves the frame
+without its timestamp, and the IC pointer where it was").
+
+The driver reports such a frame through `rx_error`, with `RXFCG` set
+and `LDEDONE` clear in the status word it hands you, and offers no
+payload for it. The timestamps are not the frame's, no consumer
+surveyed on 2026-09-19 tested the bit, and a distance computed from
+some earlier reception's stamp looks plausible and is wrong, so the
+frame is not offered as a good one at all.
+
+You need change nothing: every host already re-arms from `rx_error` and
+counts it, and this arrives as one more of them. A host that wants to
+count these apart tests those two bits in its `rx_error`, `RXFCG` set
+with `LDEDONE` clear, which no other error carries. A node that only
+listens never sees one, the cut being its own `TRXOFF`. On the three
+duplex soaks of 2026-09-19 it was 5 deliveries in 4482, 11 in 4415 and
+13 in 4507 (`doc/bench/2026-09-19-lde`).
+
+The driver toggles nothing for such a frame, `ICRBP` not having moved,
+so the buffers stay where they are and the frame after it is reported
+normally.
+
 ### Two registers the read-out needs do not swing
 
 `DRX_RXPACC_NOSAT` and `LDE_THRESH` are absent from UM table 7, so there

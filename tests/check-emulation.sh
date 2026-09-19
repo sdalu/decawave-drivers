@@ -11,7 +11,9 @@
 #   timing  the parts that need a clock (SYS_TIME, delayed send and
 #           receive, RXRFTO and RXPTO) and the create/destroy cycle
 #   dblbuff the double receive buffer: the swinging set, HRBPT, overrun,
-#           and the chip's own flags when the two pointers are aligned
+#           the chip's own flags when the two pointers are aligned, and
+#           the frame whose LDE run a TRXOFF cut, reported through
+#           rx_error with no payload and no toggle
 #
 # dblbuff is built twice. Errata 1.4 RX-1 needs a TX write past index 127,
 # which the 127 byte standard frame cannot reach, so the second build

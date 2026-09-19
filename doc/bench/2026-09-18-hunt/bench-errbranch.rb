@@ -7,7 +7,12 @@
 # passes that took the error and timeout branches are counted, and the
 # receptions after the last error say whether the receiver came back.
 # Usage: errbranch.rb [jam] [OUTDIR]
-ENV["DW1000_DRIVERS_DIR"] ||= File.expand_path("~/Repos/decawave-drivers")
+# DECAWAVE_DRIVERS_DIR is the variable ruby-dw1000 reads (ext/vendoring.rb,
+# Vendoring.override): it sends this tree to the nodes in place of the
+# gem's submodule. The name this line carried until 2026-09-19,
+# DW1000_DRIVERS_DIR, was read by nothing, and the runs of 2026-09-18 built
+# the submodule's pin, which was this tree's HEAD at the time.
+ENV["DECAWAVE_DRIVERS_DIR"] ||= File.expand_path("~/Repos/decawave-drivers")
 require "/home/sdalu/Repos/ruby-dw1000/test/support/remote"
 jam   = ARGV[0] == "jam"
 out   = ARGV[1] || "."

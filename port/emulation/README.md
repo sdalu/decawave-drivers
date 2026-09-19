@@ -343,6 +343,31 @@ buffers held by the host, and there the host's set is that buffer's own
 latch as before. It is in `tests/emulation/dblbuff.c`, step
 `step_stale_frame_told_apart`.
 
+The LDE run is a phase of its own when
+`dw1000_emulation_lde_delay(e, ticks)` is given a non-zero length, and
+atomic (the default, and what a reset restores) when it is not. With a
+length set, a reception completes in two steps: at the frame's arrival
+the payload reaches `RX_BUFFER`, `RX_FINFO` is written and
+`RXPRD|RXSFDD|RXPHD|RXDFR` stand with `RXFCG` or `RXFCE`, while
+`LDEDONE` stays clear, `RX_TIME`, `RX_TTCKI` and `RX_TTCKO` keep what
+they held, and `ICRBP` does not move; `ticks` device clock ticks later
+the run finishes and writes all of that. A `TRXOFF` in between cancels
+it like every other deadline the model holds, and none of it ever
+happens, which is the cut of DW1000.md, "A TRXOFF between RXFCG and
+LDEDONE leaves the frame without its timestamp, and the IC pointer
+where it was" (measured 2026-09-19).
+
+The cut is all the knob claims. What the bench measured is that a
+reception a `TRXOFF` terminates after its payload and its CRC are in
+posts `RXFCG` and never posts `LDEDONE`; whether an untouched run ends
+before or after `RXFCG` is not measured, and the step is not a claim
+that it ends after. The knob gives the run a length only so that a
+`TRXOFF` has somewhere to fall inside it. It is in
+`tests/emulation/dblbuff.c`, `step_lde_cut_frame_is_an_error`, which
+asks that the driver report such a frame through `rx_error` with
+`RXFCG` set and `LDEDONE` clear, call `rx_ok` not at all, and leave
+both buffer pointers where they were.
+
 Nothing is sent to the medium server when the receiver comes back
 through `RXAUTR`. A server that treats `RX_CONFIG` as "the receiver is
 now on" will therefore think a node has stopped listening after its
@@ -380,6 +405,14 @@ explicitly does send one, even if the receiver was already on.
   `RX_FQUAL`: there is no signal model behind them, so a receive power
   estimate computed from this port is meaningless rather than merely
   imprecise.
+- **The LDE itself.** `dw1000_emulation_lde_delay()` gives the run a
+  length and nothing else: there is no leading-edge algorithm behind
+  it, `LDEERR` is never raised, `LDE_THRESH` and `LDE_RXANTD` are read
+  but only the antenna delay is used, and the length is whatever the
+  knob was told rather than anything derived from the frame. What the
+  knob models is a window between `RXFCG` and the run's two products
+  (`RX_TIME` and `ICRBP`), which is what a `TRXOFF` across it takes
+  away; the window's existence on the chip is not itself a measurement.
 - `RX_TIME.RX_RAWST` is still derived by adding the receive antenna
   delay to `RX_STAMP` and rounding to the 512-tick grid: on the grid,
   but not how hardware derives a first-path timestamp.
@@ -519,3 +552,19 @@ three files, needing nothing installed and no server started: `dblbuff.c`
 is built twice, the second time with proprietary long frames on, because
 errata 1.4 RX-1 needs a TX write past index 127 and the 127 byte
 standard frame cannot reach it.
+
+## The two traces
+
+`DW1000_EMULATION_DEBUG` turns on the model's running commentary
+(`EMU_DEBUG` in `emu_log.h`): state changes, buffer toggles, deadlines,
+frames in and out. `DW1000_EMULATION_SPI_TRACE` is separate and prints
+one line per host SPI transfer instead, reads and writes both, in the
+fixed shape `dw1000-emulation: spi W reg=0x0f off=0 len=4 data=...`
+(`W` for a write, `R` for a read, the bytes as the host wrote or got
+them, the live view of `SYS_STATUS` included). Both are off by default;
+each is set on the compiler line on its own, `-DDW1000_EMULATION_SPI_TRACE=1`
+for this one. What it is for is the equivalence check of a driver
+refactor: the writes are everything the driver does *to* the chip, so
+two builds whose `spi W` lines match, in order and in bytes, do the same
+thing to it, and a restructured `dw1000_process_events()` can be held to
+that rather than to the tests alone.

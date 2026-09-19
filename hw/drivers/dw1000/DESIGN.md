@@ -172,6 +172,78 @@ the pointers aligned: `tests/emulation/dblbuff.c`,
 reads the frame out, toggles, and the completion's pass finds that word
 and reports nothing.
 
+### The frame whose LDE run was cut
+
+A pass can find `RXFCG` set with `LDEDONE` clear and a detect bit
+standing: the driver's own send issues a `TRXOFF` through
+`dw1000_txrx_idle()`, and a host issues one of its own through
+`dw1000_txrx_off()`. Either terminates a reception whose payload and
+CRC are already in and whose leading edge run has not run, and the chip
+posts that frame's `RXFCG` afterwards all the same, without `RX_TIME`
+and without moving `ICRBP` (`DW1000.md`, "A TRXOFF between RXFCG and
+LDEDONE leaves the frame without its timestamp, and the IC pointer
+where it was", measured 2026-09-19, 5 of 4482, 11 of 4415 and 13 of
+4507 deliveries over three duplex soaks, `doc/bench/2026-09-19-lde`).
+
+Nothing is waited for, and the measurement is why. Two soaks of the
+same day ran a driver that polled for `LDEDONE` on exactly these words,
+before the `TRXOFF` of its own send and again in the pass: 46 waits of
+up to 1 ms of the chip's own clock, every one of them run to the bound,
+0 ended by the bit (`doc/bench/2026-09-19-lde/README.md`, "The wait
+that never ended"). The wait before the `TRXOFF` never fired at all,
+the frame's `RXFCG` not being posted yet when the send path read the
+status. So `dw1000_process_events()` reads the word once, and
+`_dw1000_rx_lde_pending()` on it is the whole of the decision: the
+detect bits are what tell such a frame from the chip's standing record
+of an earlier reception, which carries `RXFCG` without `LDEDONE` too
+and is stripped a few lines below.
+
+Such a frame is reported through `rx_error`, and no payload is offered
+for it. The reason is a survey of every consumer of this driver on
+2026-09-19 (`PROPAGATE.md`, "The frame a node's own send cut is now a
+receive error"): not one of them tests `LDEDONE` in its `rx_ok`, and in
+SPANK the status word never reaches `spank_io_get_from_driver()`
+(`spank/src/io.c:233`), where the timestamp is read, so the bit could
+not be tested there even by a host that wanted to. What the frame
+carries is the `RX_TIME` of an earlier reception into the same buffer,
+and a distance or a clock offset computed from it is plausible and
+wrong, in every ranging host, silently. Reported as an error it costs
+those hosts nothing: every one of them re-arms from `rx_error` and
+counts it, and a host that wants these apart tests `RXFCG` set with
+`LDEDONE` clear in the word `rx_error` is handed, which no other error
+carries.
+
+The route is one strip and one condition. With `_dw1000_rx_lde_pending()`
+true the pass takes `RXFCG`, `RXDFR` and `LDEDONE` out of the word it
+works on, so neither the stale strip below it nor the `RXFCG` branch
+runs for it, keeps the word it was entered with for the callback, and
+counts the frame as processed; the error section's condition is that
+strip's flag or `ALL_RX_ERR`, and its two arms do for the cut frame
+what they do for an `RXFCE`. The bits the chip still shows go with
+`rx_drop`, which carries `ALL_RX_GOOD` here because no good frame was
+reported in the pass. Two things that happen for an ordinary frame
+therefore do not happen at all: no early `RXENAB` over a buffer the
+chip still owns, and no `HRBPT`, a toggle with `ICRBP` where it was
+being exactly the move that lands the host off the chip's buffer and
+delivers the next pass a standing latch as a frame (`DW1000.md`, "A
+buffer toggle that moves the host off the chip's buffer under a live
+receiver"). Single buffered there is nothing to differ: the frame is
+reported the same way, through `rx_error`.
+
+What the chip is left showing is the `RXFCG` and `RXDFR` of that
+reception with the two pointers aligned, which no status write clears
+and the next receiver enable resets (`DW1000.md`, "With the buffer
+pointers aligned, the swinging status bits are the chip's flags, not
+the buffer's"). That is the stale record the strip below discards, so a
+pass run before any enable reports nothing for it.
+
+The emulation step is `tests/emulation/dblbuff.c`,
+`step_lde_cut_frame_is_an_error`: a frame delivered with the model's
+LDE run armed long, `dw1000_txrx_idle()` inside the run, and one pass,
+which must call `rx_error` once with `RXFCG` set and `LDEDONE` clear,
+call `rx_ok` not at all, leave both buffer pointers where they were,
+and report the next frame normally with its own stamp.
+
 ### The registers that do not swing
 
 UM table 7 lists what the double buffer duplicates. `DRX_RXPACC_NOSAT`
@@ -189,21 +261,30 @@ reports arrives through `dw1000_rx_get_power_estimate()`.
 Both branches drop one mask, `rx_drop`, built once above them:
 `ALL_RX_ERR` and `ALL_RX_TO` always, and the good-frame bits
 (`ALL_RX_GOOD`) only when no good frame was reported in the same pass.
+A frame whose LDE run was cut is on the other side of that condition
+rather than an exception to it: its `RXFCG` was stripped from the word
+before either branch, no branch reported it as a frame, and the drop is
+what takes its bits away (the section above).
 The `TRXOFF` and the UM 4.1.6 receiver reset are unchanged by that
 condition: they still happen unless a transmission is in flight, in
 which case the status is dropped without the `TRXOFF` and the reset is
 owed to `dw1000_rx_start()`. The reset after an error is a requirement
 of the manual, not a matter of what the pass saw.
 
-Once the reset is applied, and before the callback, the receiver goes
-back on when the policy wants it (`rx_keep_on` and a listen asked for),
-through the same `_dw1000_rx_start()` the end of the pass would use:
-the end of the pass is only a few register accesses later, but every
-microsecond the receiver is down after an error is a preamble missed,
-and the sync inside the start keeps whatever was completed into the
-other buffer meanwhile. Not over a send in flight, whose completion's
-pass brings the receiver back. A host without the policy still finds
-the receiver down in `rx_error` and re-arms it there, as before.
+Once the reset is applied, and before the callback, both branches run
+`_dw1000_rx_reconcile()`, the same helper that closes the pass: the end
+of the pass is only a few register accesses later, but every microsecond
+the receiver is down after an error is a preamble missed, and the sync
+inside the start keeps whatever was completed into the other buffer
+meanwhile. Not over a send in flight, which leaves the state in TX or
+TX_W4R and the reconcile with nothing to do; that send's completion
+brings the receiver back in its own pass. A host without the policy
+still finds the receiver down in `rx_error` and re-arms it there, as
+before, with one exception: a `dw1000_rx_start()` recorded over a send
+whose completion is in this same status word is honoured here rather
+than at the end of the pass, so the enable is written before the
+callback instead of after it. The receiver ends the pass in the same
+place either way.
 
 The condition is the double buffer's. When the `RXFCG` branch of the
 same pass has run it has already cleared the good-frame bits,
@@ -276,7 +357,8 @@ the new send, a send with no flag goes through `_dw1000_tx_dropped()`,
 and only a frame on the air refuses. The consequence for the driver is
 that IDLE is enforced rather than documented, the way the vendor does
 it, but with the receiver's events kept and only when the receiver may
-be up (`rx_armed`, or `rxauto` set, which re-enables it unseen): a
+be up (the state says so, or `rxauto` is set, which re-enables it
+unseen): a
 `TRXOFF` a host already issued is not issued again, and no `SYS_STATE`
 is read for a send that is where it should be. `dw1000_tx_start()`, the
 raw primitive, keeps the precondition.
@@ -302,24 +384,38 @@ enforce it, because it returns void and cannot know a send will follow.
 
 ## One state, one table
 
-The transceiver is one field, `dw->state`, in place of the three flags
-the driver kept until 1.4 (`tx_pending`, `wait4resp`, `rx_armed`), and
-every public operation and every event branch is a cell of the table
-below. `rx_held` (a frame being read out of the double buffer),
-`rx_reset_due` (a receiver reset owed, UM 4.1.6), `rx_wanted` (the
-host's last word under `rx_keep_on`) and `rx_deferred` (a start that
-came over a send) ride alongside; none of them says what the
-transceiver is doing.
+The transceiver is one field, `dw->state`, in place of the two flags
+the driver kept until 1.4 (`tx_pending`, `wait4resp`), and every public
+operation and every event branch is a cell of the table below.
+`rx_held` (a frame being read out of the double buffer),
+`rx_reset_due` (a receiver reset owed, UM 4.1.6) and `rx_want` (what the
+host has asked of the receiver: NONE, ONCE for a start that came over a
+send, KEEP for the standing ask of `rx_keep_on`) ride alongside; none of
+them says what the transceiver is doing.
 
 | Event or call            | IDLE                | RX / RX_W4R                    | TX / TX_W4R                            |
 | :----------------------- | :------------------ | :----------------------------- | :------------------------------------- |
 | `dw1000_tx_send()`       | start, TX or TX_W4R | TRXOFF keeping events, start   | busy; over or dropped: consume, start  |
-| `dw1000_rx_start()`      | RXENAB, RX          | RXENAB again, RX               | recorded (`rx_deferred`), stay         |
+| `dw1000_rx_start()`      | RXENAB, RX          | RXENAB again, RX               | recorded (`rx_want`), stay             |
 | good frame               | (cannot happen)     | report; RX (dblbuff RXENAB) or IDLE | report, stay; no RXENAB; beside TXFRS: enable at the end of the pass |
 | error, timeout, overrun  | (cannot happen)     | TRXOFF, reset, report; IDLE    | drop status, owe reset, report; stay   |
 | TXFRS                    | stale, cleared      | (cannot happen)                | report; IDLE, or RX_W4R from TX_W4R    |
 | `dw1000_txrx_stop()`     | IDLE                | IDLE                           | abort; IDLE                            |
-| end of the pass          | `rx_deferred` or (`rx_keep_on` and `rx_wanted`): RXENAB, RX | nothing | nothing                    |
+| end of the pass          | `rx_want` is ONCE or KEEP: RXENAB, RX; ONCE spent | nothing | nothing                    |
+
+A completion is booked into the state before any branch reads it.
+`dw1000_process_events()` reads `SYS_STATUS` once, and a `TXFRS` in that
+word means the chip left TX before the pass began: the first thing the
+pass does, after the dropped-send check, is apply that send's state
+transition (`_dw1000_tx_done_state()`, and the suspicion it carried
+dropped). What the completion owes the chip and the host stays in the
+`TXFRS` branch, in the order it always had: the `TX` status group
+cleared, the forced TX clock released, the two hotfixes, the receiver
+reset owed under UM 4.1.6, and `tx_done`. What the booking buys is that
+"is a send on the air" is a question about the state alone
+(`_dw1000_tx_pending()`), asked seven times a pass, instead of a
+question about the state *and* the status word that every branch had to
+carry around and correct for.
 
 RX_W4R is the receiver the chip put up itself at the end of a send
 that expected a response; it is what `dw1000_tx_is_expecting_response()`
@@ -327,11 +423,13 @@ answers from inside `tx_done`, and it turns into RX on the first good
 frame. "Report, stay" holds for a good frame beside a TX_W4R in single
 buffered receive as well: that branch takes the transceiver to IDLE once
 the transmitter is off the air, but not over a send that expects a
-response, whose TX_W4R the TXFRS branch of the same pass turns into
-RX_W4R. The chip has its own receiver up by then, so a state written to
-IDLE there had `dw1000_tx_is_expecting_response()` answering false, left
-an owed receiver reset unapplied, and cost the next send, whose start
-went into a listening receiver. A start recorded over a send is honoured
+response, whose RX_W4R the booking above has already produced and which
+the branch therefore leaves alone (with the two "RX_W4R to RX" lines of
+that branch, which speak for the frame being reported and not for a
+receiver put up after it). The chip has its own receiver up by then, so a
+state written to IDLE there had `dw1000_tx_is_expecting_response()`
+answering false, left an owed receiver reset unapplied, and cost the next
+send, whose start went into a listening receiver. A start recorded over a send is honoured
 at the end of the completion's pass, whatever the policy, and a host
 that tests for `DW1000_RX_ERR_BUSY` never sees it any more.
 `tests/emulation/timing.c` runs every one of its steps in both receive
@@ -340,12 +438,27 @@ modes, `TIMING_DBLBUFF` selecting the build.
 ## The receiver policy, and the send the chip never began
 
 Two things the driver keeps for a host that asks. `cfg->rx_keep_on` makes
-`dw1000_process_events()` reconcile the receiver once, at the end of the
-pass, from `rx_wanted`, the host's last word (a `dw1000_rx_start()` sets
-it, `dw1000_txrx_off()` clears it), and the state: IDLE means nothing has
-the receiver up. One write at one place, after every callback, is what
-makes the branch order above irrelevant to the receiver, and the same
-place honours a `dw1000_rx_start()` that came over a send.
+`dw1000_process_events()` reconcile the receiver from `rx_want` and the
+state: IDLE means nothing has the receiver up, and `rx_want` is what the
+host has asked for, in one field with three settings rather than the two
+flags (`rx_wanted` and `rx_deferred`) it replaces. NONE is nothing
+asked; KEEP is the policy's standing ask, which a `dw1000_rx_start()`
+sets under `rx_keep_on` and only `dw1000_txrx_off()` ends, and which no
+enable spends; ONCE is a single start, recorded because it came over a
+send on the air, and spent the moment the receiver is back up. The
+fourth combination the two flags could hold, a start recorded with the
+policy also asking, was never anything but KEEP, and saying so removes
+the pair of writes that had to keep the two flags agreeing. That
+reconcile is one function, `_dw1000_rx_reconcile()`, and it is the only
+thing in the pass that writes `RXENAB` on the policy's behalf, which is
+what makes the order of the branches irrelevant to the receiver; the
+same function honours a start that came over a send. It runs at the end
+of the pass, after every callback, and once more in each of the timeout
+and error branches, where a receiver left down costs preambles (see
+above). Neither of the two `RXENAB`s that are not the
+policy's goes through it: the good-frame branch's belongs to the double
+buffer, and the re-enable the `TXFRS` branch owes a WAIT4RESP receiver
+belongs to that receiver.
 
 `_dw1000_tx_dropped()` is the one read of `SYS_STATE` in the driver, and
 it happens only where a stale `tx_pending` would otherwise refuse

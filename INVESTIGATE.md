@@ -67,9 +67,39 @@ Six entries left this file that day; their answers are in
   chip's buffer under a live receiver"; the trace analysis that
   settled it is `doc/bench/2026-09-18-hunt/hunt-placement.md`).
 
+## Settled on 2026-09-19
+
+One entry left this file that day; its answer is in `DW1000.md`:
+
+- the reception delivered twice with the buffer pointers apart, entry
+  6 of this file, opened the same day: a `TRXOFF` issued between a
+  frame's `RXFCG` and its `LDEDONE` cuts the LDE run, so the frame is
+  reported with an earlier frame's `RX_TIME` and `ICRBP` never moves,
+  and the unconditional `HRBPT` after `rx_ok` then lands the host on
+  the buffer the chip still owns, where the next pass reads a standing
+  latch as a frame; 5 of 4482 deliveries carried `RXFCG` without
+  `LDEDONE`, every one of them beside this node's own transmit bits,
+  and four of the five carried the stamp of an earlier delivery into
+  the same buffer. The driver reports such a frame through `rx_error`,
+  with `RXFCG` set and `LDEDONE` clear in the word it hands over, offers
+  no payload for it and toggles nothing: no consumer surveyed on
+  2026-09-19 tested the bit in its `rx_ok`, and in SPANK the status word
+  never reaches the place the timestamp is read, so a frame handed over
+  as a good one was a wrong distance or clock offset in every ranging
+  host, silently (`PROPAGATE.md`, "The frame a node's own send cut is
+  now a receive error"). It waits for the bit nowhere: two
+  further soaks of the same day spent 46 waits of up to 1 ms on exactly
+  these words and not one ever saw it come up, the frame's `RXFCG`
+  being posted only after the `TRXOFF` that cut its run ("A TRXOFF
+  between RXFCG and LDEDONE leaves the frame without its timestamp, and
+  the IC pointer where it was"; the soaks are
+  `doc/bench/2026-09-19-lde/`, and the reconstruction that pointed at
+  the intermediate pass is `doc/bench/2026-09-19-refactor/`).
+
 The entries below keep the numbers they were given, so that the
 references to them elsewhere in the tree still point where they did;
-the numbering starts at 2 because entry 1 is settled above.
+the numbering starts at 2 because entry 1 is settled above, and runs
+to 5 because entry 6, opened on 2026-09-19, was settled the same day.
 
 ## 2. The counter gains 2.5 to 3.4 ppm of the lead at a delayed send, and not during its wait
 

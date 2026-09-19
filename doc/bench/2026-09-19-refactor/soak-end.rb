@@ -20,7 +20,7 @@ hosts = [ Remote::HOST_A, Remote::HOST_B ]
 hosts.each { |h| Remote.prepare(h) }
 
 (first...(first + runs)).each do |i|
-    early = i.odd?
+    early = false
     env   = { "DW1000_DUPLEX_TRACE" => "1" }
     env["DW1000_RX_ENABLE_EARLY"] = "1" if early
     t0    = Time.now
