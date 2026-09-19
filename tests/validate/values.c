@@ -87,6 +87,13 @@ static int failures;
 	}								\
     } while (0)
 
+/* The two sets below are split the way main() splits its calls: the
+ * overridden-constant build runs the last test and nothing else, so
+ * defining the others there leaves nine functions nobody calls, which
+ * -Werror reads as nine errors. Guard the definitions, not just the
+ * calls. */
+#if !defined(VALUES_SPEED_OF_LIGHT_OVERRIDDEN)
+
 static void
 test_channel(void)
 {
@@ -273,6 +280,8 @@ test_null_out_params(void)
 	FAIL("pcode 24 refused with no out parameters");
 }
 
+#else  /* VALUES_SPEED_OF_LIGHT_OVERRIDDEN */
+
 /* dw1000.h guards DW1000_SPEED_OF_LIGHT_MPS so a caller can define its
  * own, and the conversions have to follow it. check-validate.sh builds
  * this a third time with the constant halved: light at half speed takes
@@ -290,6 +299,8 @@ test_speed_of_light_override(void)
     else if (v != 426)        /* 213.139 x 2 = 426.27 */
 	FAIL("1 m gave %u ticks at half the speed of light, want 426", v);
 }
+
+#endif /* VALUES_SPEED_OF_LIGHT_OVERRIDDEN */
 
 int
 main(void)

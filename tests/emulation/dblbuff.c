@@ -373,9 +373,6 @@ static struct {
 static void cb_nothing(dw1000_t *dw, uint32_t status)
 { (void)dw; (void)status; }
 
-static void cb_rx_nothing(dw1000_t *dw, uint32_t status, size_t len, bool rng)
-{ (void)dw; (void)status; (void)len; (void)rng; }
-
 static void
 line_cb(int line, void *args)
 {
