@@ -1407,7 +1407,7 @@ step_rx_start_keeps_a_queued_frame(dw1000_t *dw, struct stub *s)
 
 /* A receive error standing in the same status word as a good frame.
  *
- * doc/bench/2026-09-18-hunt/hunt-driver.md, finding 4: the receive bits
+ * The receive bits
  * that are NOT in the double buffered swinging set (RXPHE here, and
  * RXRFSL, RXSFDTO, AFFREJ, LDEERR, RXRFTO, RXPTO with it) can stand in
  * the same SYS_STATUS word as a good frame's RXFCG, and
@@ -1839,9 +1839,8 @@ step_stale_frame_told_apart(dw1000_t *dw, struct stub *s)
  * and before the run leaves the frame with RXFCG and without LDEDONE:
  * RX_TIME still holds the previous frame's stamp, and ICRBP is where it
  * was. The bit never comes afterwards, so there is nothing for the
- * driver to wait for and it waits for nothing (doc/bench/
- * 2026-09-19-lde/README.md, "The wait that never ended": 46 waits of up
- * to 1 ms, 0 of them ever seeing the bit).
+ * driver to wait for and it waits for nothing: 46 waits of up to 1 ms,
+ * 0 of them ever seeing the bit.
  *
  * dw1000_emulation_lde_delay() is what makes the window reachable here:
  * it gives the run a length so that a TRXOFF has somewhere to fall

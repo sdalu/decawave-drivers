@@ -2041,8 +2041,7 @@ bool dw1000_process_events(dw1000_t *dw) {
     //
     //   There is nothing to wait for: two duplex soaks spent
     //   46 waits of up to 1 ms of the chip's own clock on such words
-    //   and not one of them ever saw the bit come up (doc/bench/
-    //   2026-09-19-lde/README.md, "The wait that never ended"). What
+    //   and not one of them ever saw the bit come up. What
     //   the frame has not got is a timestamp of its own, and RX_TIME
     //   still holds the previous frame's, so it is reported through
     //   rx_error and no payload is offered for it: a survey of every
@@ -2063,9 +2062,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 
     if (lde_cut) {
 #if DW1000_WITH_DEBUG
-	// How many frames the pass reported as a cut
-	// (doc/bench/2026-09-19-lde/README.md): the bench counts them
-	// against the deliveries of the same soak.
+	// How many frames the pass reported as a cut: the bench counts
+	// them against the deliveries of the same soak.
 	dw->dbg_lde_cuts++;
 #endif
 	// Out of the good-frame branch, and into the error section at
@@ -2180,9 +2178,8 @@ bool dw1000_process_events(dw1000_t *dw) {
 		// overrun. Before the stale frame was told apart above, the
 		// stale pass toggled exactly so, and rpi-d lost about one
 		// frame in fifty with the enable written here against none
-		// at the end of the pass (doc/bench/2026-09-18-hunt/
-		// hunt-placement.md); the chip's enable timing was
-		// not involved, and since that fix the two placements lose
+		// at the end of the pass; the chip's enable timing was not
+		// involved, and since that fix the two placements lose
 		// alike. rx_enable_early is kept as the bench knob that
 		// measured it. The read-out below runs with the receiver off,
 		// this once.

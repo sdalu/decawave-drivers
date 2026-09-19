@@ -64,8 +64,8 @@ Six entries left this file that day; their answers are in
   keeps the end-of-pass placement and keeps `cfg->rx_enable_early` as
   a `DW1000_WITH_DEBUG` bench knob, and the firmware experiment that
   was owed is not needed ("A buffer toggle that moves the host off the
-  chip's buffer under a live receiver"; the trace analysis that
-  settled it is `doc/bench/2026-09-18-hunt/hunt-placement.md`).
+  chip's buffer under a live receiver"; settled by trace analysis over
+  the kept duplex logs).
 
 ## Settled on 2026-09-19
 
@@ -92,9 +92,8 @@ One entry left this file that day; its answer is in `DW1000.md`:
   these words and not one ever saw it come up, the frame's `RXFCG`
   being posted only after the `TRXOFF` that cut its run ("A TRXOFF
   between RXFCG and LDEDONE leaves the frame without its timestamp, and
-  the IC pointer where it was"; the soaks are
-  `doc/bench/2026-09-19-lde/`, and the reconstruction that pointed at
-  the intermediate pass is `doc/bench/2026-09-19-refactor/`).
+  the IC pointer where it was"; three instrumented duplex soaks, and a
+  reconstruction that pointed at the intermediate pass).
 
 The entries below keep the numbers they were given, so that the
 references to them elsewhere in the tree still point where they did;

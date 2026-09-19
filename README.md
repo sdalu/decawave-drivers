@@ -325,8 +325,8 @@ Each part of the tree is documented beside itself. This is the index:
   that would settle each.
 
 Running `doxygen` at the top of the tree writes HTML and LaTeX into
-`doc/generated`, which is not tracked. `doc/bench/` holds raw
-measurement output that AUDIT.md cites.
+`doc/generated`, which is not tracked. `bench/` holds the scripts that
+drive and read a bench run.
 
 ### The vendor documents
 

@@ -131,4 +131,4 @@ record reads `no-report`. This is not a preference; see
 **The initiator's buffering moves the answer**, by a couple of
 centimetres on `asym_mm`. Small, consistent, and not yet attributed, so
 the probe's absolute distances are not calibrated to better than a
-few centimetres. `../doc/bench/` holds the raw output behind both.
+few centimetres.

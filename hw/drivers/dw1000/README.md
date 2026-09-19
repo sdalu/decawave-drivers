@@ -475,7 +475,7 @@ count these apart tests those two bits in its `rx_error`, `RXFCG` set
 with `LDEDONE` clear, which no other error carries. A node that only
 listens never sees one, the cut being its own `TRXOFF`. On the three
 duplex soaks of 2026-09-19 it was 5 deliveries in 4482, 11 in 4415 and
-13 in 4507 (`doc/bench/2026-09-19-lde`).
+13 in 4507.
 
 The driver toggles nothing for such a frame, `ICRBP` not having moved,
 so the buffers stay where they are and the frame after it is reported

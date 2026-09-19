@@ -183,14 +183,13 @@ posts that frame's `RXFCG` afterwards all the same, without `RX_TIME`
 and without moving `ICRBP` (`DW1000.md`, "A TRXOFF between RXFCG and
 LDEDONE leaves the frame without its timestamp, and the IC pointer
 where it was", measured 2026-09-19, 5 of 4482, 11 of 4415 and 13 of
-4507 deliveries over three duplex soaks, `doc/bench/2026-09-19-lde`).
+4507 deliveries over three duplex soaks).
 
 Nothing is waited for, and the measurement is why. Two soaks of the
 same day ran a driver that polled for `LDEDONE` on exactly these words,
 before the `TRXOFF` of its own send and again in the pass: 46 waits of
 up to 1 ms of the chip's own clock, every one of them run to the bound,
-0 ended by the bit (`doc/bench/2026-09-19-lde/README.md`, "The wait
-that never ended"). The wait before the `TRXOFF` never fired at all,
+0 ended by the bit. The wait before the `TRXOFF` never fired at all,
 the frame's `RXFCG` not being posted yet when the send path read the
 status. So `dw1000_process_events()` reads the word once, and
 `_dw1000_rx_lde_pending()` on it is the whole of the decision: the

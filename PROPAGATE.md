@@ -317,7 +317,7 @@ what writes `RX_TIME`: the chip posts `RXFCG` for it, never posts
 reception into the same buffer (`DW1000.md`, "A TRXOFF between RXFCG
 and LDEDONE leaves the frame without its timestamp, and the IC pointer
 where it was"; 5 of 4482, 11 of 4415 and 13 of 4507 deliveries over the
-three duplex soaks of 2026-09-19, `doc/bench/2026-09-19-lde`). Until
+three duplex soaks of 2026-09-19). Until
 now the driver handed such a frame to `rx_ok` with `LDEDONE` clear in
 the status and left the bit for the host to test. It now reports it
 through `rx_error` instead, with `RXFCG` set and `LDEDONE` clear in the

@@ -700,7 +700,6 @@ struct dw1000 {
                             //  their LDE run cut by a TRXOFF (RXFCG set,
                             //  LDEDONE clear): the bench counts them
                             //  against the soak's deliveries
-                            //  (doc/bench/2026-09-19-lde)
 #endif
     uint64_t tx_suspect;    // System time at which a send in progress was
                             //  first seen absent from the chip (no TX
