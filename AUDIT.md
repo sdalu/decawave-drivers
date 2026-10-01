@@ -52,11 +52,10 @@ leave to the host, read off the bench when ruby-dw1000's two-node
 tests lost one send in a thousand. The numbers are in
 [`DW1000.md`](DW1000.md), which gathers what is established about the
 chip from the manual, the errata and the bench, each finding graded by
-its source; the driver as of `2084ca2` is what they led to.
+its source; the driver as of `10d1882` is what they led to.
 
 **Open** now holds no defect at all. What is left there is settled
-results kept for the next reader, one measurement that would close the
-last uncertainty, and the latent notes.
+results kept for the next reader and the latent notes.
 
 The first round's patch was verified against the manual, the errata and
 the vendor driver independently of the person who wrote it; `make lib
@@ -72,7 +71,7 @@ The option matrix was 256 combinations when the audit ran, and 128 once
 Moved to [`DW1000.md`](DW1000.md), which holds every established
 behaviour of the chip graded by its source; the fourth round's
 measurements are its Transmit, Receive and "Unexplained" entries. The
-driver work they led to is `2084ca2`.
+driver work they led to is `10d1882`.
 
 ## Open
 
@@ -287,14 +286,16 @@ hardware boundary to a constant within 0.3 µs in four configurations.
 The residual holds the host's register writes and the power-up together;
 this cannot separate them, but bounds both at about 35 µs on that host.
 
-### One measurement would settle one claim
+### Settled: the TX-1 band does not survive inside the reported region
 
-- **The TX-1 band.** The ruby-dw1000 binding exposes no raw register
-  read, so HPDWARN and TXPUTE cannot be told apart in a refusal;
-  whether the fix removes the silent band or merely moves it into the
-  later, reported region is open. The erratum's wording argues for
-  removal, and either way the driver no longer claims success for an
-  unsent frame.
+This was the one measurement left open: whether the fix removes the
+silent band or merely moves it into the later, reported region, which
+the binding could not tell apart without a raw register read. Measured
+on rpi-b on 2026-09-18 with the driver keeping the flags of a refusal
+(`tx_late_flags`, a `DW1000_WITH_DEBUG` diagnostic): 0 lost in 8440
+delayed sends from 150 to 180 µs, every refusal flagged, `TXPUTE` from
+168 to 173.4 µs of lead and `HPDWARN` below. The band is removed, not
+moved ([`DW1000.md`](DW1000.md), "Errata TX-1").
 
 ### Latent, not defects
 
@@ -404,10 +405,15 @@ cannot be met is refused with -1 before the frame is written, rather
 than left to the chip to report as HPDWARN afterwards. The silent band
 itself is gone: TX-1 is worked around for every delayed start, which is
 what the 0 above measures.
-The clock-rate excess measured while a send is pending
+The clock-rate excess then read as a property of a pending send
 (ruby-dw1000, `delayed-send/README.md`) is unchanged with TXCLKS forced
 on (2.57-3.01 ppm against 2.58-3.35 ppm), so the two effects are
-unrelated.
+unrelated. That reading was revised on 2026-10-01: the excess is the
+clock running faster with the radio idle than with it receiving, which
+the engine those runs went through made every delayed send's lead
+([`DW1000.md`](DW1000.md), "The clock runs at one rate with the
+receiver on and another with it off"); both sides of the TXCLKS
+comparison went through that engine, so the comparison stands.
 
 Then, from driver work after that round, neither one an audit finding:
 
@@ -495,7 +501,7 @@ now matches 2.18 throughout. No other table moved between 2.12 and 2.18.
 
 | Item | Status in this driver |
 | :--- | :-------------------- |
-| TX-1 delayed TX may not complete | Worked around: the TX clock is forced on for a delayed send. Measured on hardware, 85 silent losses before against 0 after; see **Fixed**. |
+| TX-1 delayed TX may not complete | Worked around: the TX clock is forced on for a delayed send. Measured on hardware, 85 silent losses before against 0 after; see **Fixed**. Nor does the band survive inside the reported region: 0 lost in 8440, every refusal flagged; see **Open**. |
 | RX-1 byte 128 of the second RX buffer corrupted by a TX write past offset 127 before readout | Enforced since 2026-09-16: the send functions refuse a payload reaching past TX index 127 while a frame is held. Unreachable anyway without proprietary long frames. Every erratum item is now covered. |
 | TX-2 TX buffer index reset at TXSTRT | Guarded since `06cee4f`: the send functions refuse while a transmission is pending, before a byte reaches the chip, and `dw1000_tx_start()` refuses again for a caller driving the transmitter by hand. The driver offers no fast-turnaround write of its own, but `dw1000_tx_write_frame_data()` lets a caller make one, so the erratum is reachable rather than inapplicable. |
 | IRQ-1 IRQ glitch in double-buffered mode | Mitigated by the masked clears; `dw1000_pending_interrupt()` supports the poll-the-line workaround. |

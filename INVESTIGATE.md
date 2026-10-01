@@ -18,7 +18,7 @@ Two nodes, rpi-c and rpi-d, DWM1000 modules on Raspberry Pis, 6.8
 Mbps, 128-symbol preamble, PRF 64 MHz, channel 5, double buffered,
 receiver auto re-enable off. Sending at each other every 30 ms, 50
 frames a run each way, twelve runs a soak. Where things stand after
-the driver as of `2084ca2`:
+the driver as of `10d1882`:
 
 | | Result | Runs |
 | :-- | :-- | :-- |
@@ -58,7 +58,7 @@ Six entries left this file that day; their answers are in
   aligned");
 - the frame in a hundred lost by the receiver enable sitting inside
   the event pass, entry 1 of this file: not the chip's enable timing
-  but the pre-`222e9f8` stale pass's `HRBPT` toggle under a receiver
+  but the pre-`273fb9d` stale pass's `HRBPT` toggle under a receiver
   the early enable had already brought up, which skipped the
   buffer-pointer sync the end-of-pass enable runs first; the driver
   keeps the end-of-pass placement and keeps `cfg->rx_enable_early` as
@@ -95,42 +95,30 @@ One entry left this file that day; its answer is in `DW1000.md`:
   the IC pointer where it was"; three instrumented duplex soaks, and a
   reconstruction that pointed at the intermediate pass).
 
+## Settled on 2026-10-01
+
+One entry left this file that day; its answer is in `DW1000.md`:
+
+- the counter's gain at a delayed send, entry 2 of this file: not the
+  send at all, neither its wait nor its launch, but the sender's
+  receiver. The clock runs 2.0 to 2.6 ppm faster with the receiver off
+  than on on rpi-b, 0.55 to 0.68 ppm on rpi-c and 0.43 to 0.69 ppm on
+  rpi-d; an immediate send after
+  16 ms of idle gains what a 16 ms delayed send gains, and with the
+  receiver never on neither gains more than 0.05 ppm. The 2026-09-18
+  control that put the gain at the launch compared fired sends made
+  through ruby-dw1000's engine, which keeps the receiver on between
+  frames, with cancelled ones made by hand, which never turned it on,
+  and is withdrawn ("The clock runs at one rate with the receiver on
+  and another with it off"; ruby-dw1000 `measurements/delayed-send/`,
+  `ARMFIRE=1`, twenty-one runs over the three chips and two radio
+  configurations). What the chip does to tie
+  the two is entry 7.
+
 The entries below keep the numbers they were given, so that the
 references to them elsewhere in the tree still point where they did;
-the numbering starts at 2 because entry 1 is settled above, and runs
-to 5 because entry 6, opened on 2026-09-19, was settled the same day.
-
-## 2. The counter gains 2.5 to 3.4 ppm of the lead at a delayed send, and not during its wait
-
-**Seen.** ruby-dw1000, `measurements/delayed-send/README.md` and
-`measurements/errata-tx1/README.md`: the clock-rate excess while a
-delayed send waits, 2.57 to 3.01 ppm with the TX clock forced on
-against 2.58 to 3.35 ppm without, two runs each.
-
-**Ruled out.** The TX-1 workaround as cause or cure: the excess is the
-same with and without it. The wait itself, on 2026-09-18: with the
-delayed send armed and taken back by `TRXOFF` a millisecond before its
-instant (`sender.rb`, `CANCEL=1`, 150 cycles at 2, 4, 8 and 16 ms,
-rpi-b to rpi-d), the counter gains 0.3 ns whatever the lead, against
-5.4, 11.0, 22.7 and 46.1 ns when the same sends fire (2.7 to 2.9 ppm,
-the same day, same pair). So the counter does not run fast while the
-send is pending; the excess comes with the launch, and every later
-timestamp carries it. The delayed frame's own carrier is tracked by
-the receiver 3.0 ppm off the immediate frames' in the same run.
-
-**Candidates.** Something the chip does at the programmed instant of a
-delayed send, and not during the wait: the manual describes only the
-8 ns grid of `DX_TIME`.
-
-**Next.** Two leads, one wait: arm at 16 ms, cancel, then a real
-delayed send at 2 ms in the same cycle, to see whether the excess is a
-fixed cost of a launch or scales with the lead of the send that fires
-(the table above scales with the lead, and the cancelled control says
-the wait is not where it accrues; the two together want a launch whose
-cost depends on how long it waited). Cost: an hour on the two nodes.
-The temperature half of the old plan is done by the harness as it
-stands: every cycle logs the SAR reading, and in the pending run the
-sender warmed by about four steps over the 150 cycles.
+the numbering starts at 3 because entries 1 and 2 are settled above,
+and skips 6, opened on 2026-09-19 and settled the same day.
 
 ## 3. Antenna delays are owed a re-calibration on channel 5
 
@@ -187,13 +175,63 @@ direct reading.
 reception in progress, sweeping the delay, and record the first
 offset at which it reads RX. Cost: an hour on the two nodes.
 
+## 7. Why the clock rate follows the radio's state
+
+**Seen.** 2026-10-01, all three chips (`DW1000.md`, "The clock runs at
+one rate with the receiver on and another with it off"): an interval
+the sender spends with its receiver off, idle or with a send armed,
+gains 2.0 to 2.6 ppm on rpi-b, 0.55 to 0.68 ppm on rpi-c and 0.43 to
+0.69 ppm on rpi-d against frames sent straight after the receiver;
+with the receiver never on, 0.02 to 0.10 ppm. The step is complete
+within 0.2 ms of the `TRXOFF` and undone within 0.23 ms of the enable;
+it is the same at PRF 16 MHz with a 1024-symbol preamble, and single
+buffered. A delayed send's preamble airtime seems to count with the
+receiver rather than with idle, so the two rates may be the radio
+active and the radio idle (inferred, one run per configuration).
+
+**Ruled out.** The delayed send itself; the ranging bit; SPI traffic
+during the interval; the driver's `dw1000_tx_send()` against the bare
+`TXSTRT`; the TX-1 workaround (`TXCLKS` forced on or not, ruby-dw1000
+`measurements/errata-tx1/README.md`); the chip's self-heating, the step
+being complete in 0.2 ms; the partner, rpi-d's step being the same
+heard by rpi-b or by rpi-c; the radio configuration; the receive
+buffering. The receiving chip's carrier tracking was read for a while
+as evidence about the oscillator; it moves with the radio settings
+(1.9 ppm on rpi-b by default, 0.2 at PRF 16 MHz, and of either sign
+from chip to chip), so it is not evidence either way.
+
+**Candidates.** The supply: receiving and transmitting both draw an
+order of magnitude more than idle, and a crystal or its oscillator
+pulled by the module's supply or by the current through it would
+follow the radio's state with a fast time constant; rpi-b, whose step
+is four times the others', reads 2.59 V on its SAR against 2.9 V on
+rpi-d (the temperature run of ruby-dw1000's
+`measurements/delayed-send/README.md`). Or the chip's own clocking:
+the RF synthesiser runs in both active states and not in idle, and a
+reference shared with it, or a clock-tree setting the PMSC changes
+between the states, would do the same. The SAR cannot separate them:
+read with the receiver running it returns values about 565 steps off
+in supply and 200 in temperature, which is not a reading of either.
+
+**Next.** The supply, directly: a scope on rpi-b's module VDD across a
+receiver on/off edge, and the `RXON=1 IDLEOFF=1` run repeated with the
+module fed from a bench supply at 3.3 V; a step that shrinks towards
+rpi-c's size is the supply, one that survives a stiff supply is the
+chip's own. Needs hands on the bench. Without them: the step's size
+while actually receiving, with the third node's traffic on a preamble
+code the sender's receiver decodes and the measuring receiver does not
+(the one run so far had the measuring receiver hearing it too, and
+says only that the step survives reception), and a repeat of the
+default-configuration pair on another day, the old sessions having
+put rpi-b at 3.1 to 3.6 ppm against today's 2.0 to 2.6.
+
 ## Housekeeping, not investigation
 
 - The shelf in `docs/` is behind Qorvo's current revisions for seven
   application notes (README, "The vendor documents"). Only APS022 and
   the manual are cited by section, and both are current, so nothing
-  cited is stale; the newer files are in the session's scratchpad if
-  wanted.
+  cited is stale. The newer files were fetched once, into a session's
+  scratchpad that is gone; they are to be fetched again if wanted.
 - Every entry above that needs bench time needs the bench free of
   ruby-ftmbc and of other sessions' probes, which has bitten once
   already.

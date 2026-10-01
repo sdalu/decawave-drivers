@@ -175,7 +175,7 @@ beside the send's own completion, in one status word, is read out with
 the receiver off and the receiver enabled at the end of that pass, once
 the completion is booked, through `dw1000_rx_start()` and the buffer
 pointer sync it runs first. That sync is why: before the stale frame was
-told apart (`222e9f8`), an enable written inside that pass followed by
+told apart (`273fb9d`), an enable written inside that pass followed by
 the pass's own `HRBPT` left the host pointer off the chip's buffer under
 a live receiver, and rpi-d lost about one frame in fifty that way, none
 with the enable at the end of the pass (`DW1000.md`, "A buffer toggle

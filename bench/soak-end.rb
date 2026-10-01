@@ -1,8 +1,9 @@
 # frozen_string_literal: true
-# INVESTIGATE.md entry 1: the duplex run, the receiver-enable placement
-# alternated run by run (even runs: end of the pass, the driver's
-# default; odd runs: inside the pass, DW1000_RX_ENABLE_EARLY=1), every
-# run's output kept, one JSON line per node per run.
+# The duplex run behind DW1000.md, "A buffer toggle that moves the
+# host off the chip's buffer under a live receiver": the receiver-enable
+# placement alternated run by run (even runs: end of the pass, the
+# driver's default; odd runs: inside the pass, DW1000_RX_ENABLE_EARLY=1),
+# every run's output kept, one JSON line per node per run.
 # DECAWAVE_DRIVERS_DIR is the variable ruby-dw1000 reads (ext/vendoring.rb,
 # Vendoring.override): it sends this tree to the nodes in place of the
 # gem's submodule. The name this line carried until 2026-09-19,

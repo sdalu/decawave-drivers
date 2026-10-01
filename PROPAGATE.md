@@ -8,18 +8,21 @@ so that the findings reach the code that is wrong rather than staying
 in the document that is right.
 
 Every pointer below was checked at the surveyed tree's HEAD on
-2026-09-18. `DW1000.md` holds the evidence for each finding; this file
+2026-09-18. This tree's commits are cited by the IDs they carry since
+the soak logs were taken out of the history; the consumers'
+submodules recorded the IDs from before, which name the same driver
+sources. `DW1000.md` holds the evidence for each finding; this file
 holds only where it lands.
 
 ## Where each consumer stands
 
 | Tree | How it reaches the chip | Driver it has | Standing |
 | :--- | :--- | :--- | :--- |
-| ruby-dw1000 | its own extension, directly | `65b0339` (HEAD) | current |
-| mynewt-redskin | spank shim | `65b0339` (HEAD) | ported 2026-09-19, unbuilt |
+| ruby-dw1000 | its own extension, directly | `6bb783f` (HEAD) | current |
+| mynewt-redskin | spank shim | `6bb783f` (HEAD) | ported 2026-09-19, unbuilt |
 | zephyr-redskin, in `~/Repos` | spank shim | symlink to HEAD | has the fix, not the work |
 | zephyr-redskin, in `~/ZephyrProjects` | spank shim, and `probe/` directly | symlink to HEAD | **the flashed tree, and it lacks the fix** |
-| rpi-redskin | spank shim, and a forked second consumer | `88f3351` (8 behind) | behind |
+| rpi-redskin | spank shim, and a forked second consumer | `6c0c71f` (8 behind) | behind |
 | spank | the portable shim itself | consumer supplied | current |
 | ruby-ftmbc | the ruby-dw1000 gem, directly | via the gem | current |
 | rpi-uwb-sniffer | its own copy | `f9a2e2c` (44 behind) | superseded |
@@ -27,7 +30,7 @@ holds only where it lands.
 
 ## 1. The boards in the field do not have the RXAUTR fix
 
-`49ce758` established that `RXAUTR` set under a sender costs one send
+`50e33be` established that `RXAUTR` set under a sender costs one send
 in about seven thousand, and the fix went out to all three firmwares
 on 2026-09-18 within ten minutes of each other: `cc3e6b1` in spank,
 `40e84ac` in rpi-redskin, `d40f9a6` in mynewt-redskin, `8a5b528` in
@@ -78,8 +81,8 @@ not confidence in `DW1000.md`.
 
 `1.3.1` has been the answer since `61f1d34` on 2026-09-14, and 28
 commits have touched `hw/drivers/dw1000/` since: the transmit error
-taxonomy (`28125d7`), `rx_keep_on` (`2084ca2`), the channel 5 analogue
-values (`0050df5`), the stale-frame guard (`222e9f8`), the enforced
+taxonomy (`28125d7`), `rx_keep_on` (`10d1882`), the channel 5 analogue
+values (`0050df5`), the stale-frame guard (`273fb9d`), the enforced
 IDLE precondition (`06cee4f`). The last tag in the tree is `v1.2.0`;
 neither 1.3.0 nor 1.3.1 was ever tagged.
 
@@ -96,7 +99,7 @@ was the rational choice.
 contract change. Nothing else here can be asked of a consumer first.
 
 **And push.** `master` is two commits ahead of `origin/master`
-(`052066c` and `65b0339`), so the release a consumer would be asked to
+(`bf98fca` and `6bb783f`), so the release a consumer would be asked to
 pin does not exist on the remote yet. A submodule bumped to an
 unpushed SHA breaks every fresh clone, and a tag on one helps nobody.
 mynewt-redskin's vendored clone is two ahead of its own origin in the
@@ -159,32 +162,40 @@ placeholder, not calibrated for this instrument"
 configures or the two are not comparable. That constraint is the
 reason this has to be one edit rather than seven.
 
-## 5. The delayed send's launch gain is larger than the bias being chased
+## 5. The receiver-off clock step is larger than the bias being chased
 
-`DW1000.md` puts the counter's gain at 2.5 to 3.4 ppm of the lead,
-taken at the launch and carried by every later timestamp.
+`DW1000.md` used to put a counter gain of 2.5 to 3.4 ppm at a delayed
+send's launch. Since 2026-10-01 it is a step in the clock rate between
+the receiver on and the receiver off, 2.0 to 2.6 ppm on rpi-b and 0.43
+to 0.69 ppm on rpi-c and rpi-d, immediate and owing nothing to the
+send: what a
+timestamp carries is the time the sender's receiver was off before it,
+not the send's lead ("The clock runs at one rate with the receiver on
+and another with it off").
 
 `ruby-ftmbc/lib/ftmbc.rb:76` and `spank/include/spank/config.h:66`
-both use a 400 microsecond lead. At 3 ppm that is 1.2 ns, about 36 cm
-of range: an order of magnitude above the 4 cm question of section 4.
-All three of ruby-ftmbc, spank and zephyr-redskin already default
-embedded transmit off, which is the right call, and
-`zephyr-redskin/redskin/Kconfig:54-59` states the reason in the help
-text.
+both use a 400 microsecond lead. A responder that stops its receiver
+to arm the reply spends at least that with the receiver off, plus the
+host's time from the `TRXOFF` to the arm: at 2.5 ppm, 1 ns or more,
+30 cm of range, an order of magnitude above the 4 cm question of
+section 4. All three of ruby-ftmbc, spank and zephyr-redskin already
+default embedded transmit off, and `zephyr-redskin/redskin/Kconfig:54-59`
+states a reason in the help text.
 
-Two of those statements are now wrong in the same way.
-`ruby-ftmbc/bin/node-run:46-48` and `zephyr-redskin/redskin/Kconfig`
-both say the clock runs fast *while a delayed send is pending*. That
-was refuted on 2026-09-18: a send armed and taken back by `TRXOFF`
-gains 0.3 ns whatever the lead, against 5.4 to 46.1 ns when it fires.
-The gain comes with the launch. The defaults are right; the reason
-recorded beside them is not.
+The reason recorded beside those defaults is wrong, though not the
+way this section said on 2026-09-18. `ruby-ftmbc/bin/node-run:46-48`
+and `zephyr-redskin/redskin/Kconfig` say the clock runs fast *while a
+delayed send is pending*. This file then called that refuted, the gain
+coming with the launch; that refutation was itself a confound and is
+withdrawn. What is true is wider than either: the clock runs fast
+whenever the receiver is off, pending send or not, measured against
+frames sent straight after the receiver.
 
-**Owed:** correct both comments to point at `INVESTIGATE.md` entry 2,
-which already carries the refutation under "Ruled out ... the wait
-itself, on 2026-09-18", and carry the 36 cm into whatever error budget
-quotes a distance. That entry is also what would let embedded transmit
-be turned on at all.
+**Owed:** correct both comments to say the clock steps when the
+receiver goes off, pointing at `DW1000.md`, and carry the 30 cm into
+whatever error budget quotes a distance. Turning embedded transmit on
+needs entry 7 of `INVESTIGATE.md`, or a correction applied per module
+from the off time.
 
 ## 6. Per tree, what is left
 
@@ -196,7 +207,7 @@ be turned on at all.
   The setting is right for a pure listener and the README says so; the
   reason cited is stale.
 - `probe` and the SPANK firmwares still drive the receiver themselves.
-  `cfg->rx_keep_on` (`2084ca2`) is what would replace that, and
+  `cfg->rx_keep_on` (`10d1882`) is what would replace that, and
   ruby-dw1000's engine already runs under it with no re-arm left.
   Nothing is broken; the migration is simply not done, and the README
   already says so.
@@ -221,17 +232,17 @@ retire it in favour of the gem, or say in it that it is superseded.
 **The submodule is 8 commits behind**, and cannot be bumped until the
 two unpushed commits of section 2 reach the remote. The bump forces no
 code change
-(`git diff --stat 88f3351..65b0339 -- hw/drivers/dw1000/include` adds
+(`git diff --stat 6c0c71f..6bb783f -- hw/drivers/dw1000/include` adds
 fields only). Three sites want re-reading after it: the manual re-arm
 in every callback (`main.c:142,163,177,196,385,400`) against
 `rx_keep_on`; `_rx_error`'s assumption that the frames it held are
-gone (`main.c:181-197`) against `052066c`, which keeps a frame that
+gone (`main.c:181-197`) against `bf98fca`, which keeps a frame that
 landed during `rx_ok`; and `ext/dw1000.c:639,678`, whose
 caller-reaches-IDLE precondition the driver now enforces itself.
 
 ### mynewt-redskin
 
-Not a museum piece: its vendored driver is at `65b0339`, HEAD, which
+Not a museum piece: its vendored driver is at `6bb783f`, HEAD, which
 makes it the best synchronised of the three firmwares, and it has used
 decawave-drivers rather than Decawave's own since 2018 (`935ffbf`).
 

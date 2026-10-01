@@ -517,7 +517,7 @@ typedef struct dw1000_config {
      * Double buffered, a good frame reported beside the host's own
      * completion has the receiver enabled at the end of the pass, once
      * the completion is booked. Set, it is enabled where the frame is
-     * handled, before the read-out, as the driver did before 2084ca2.
+     * handled, before the read-out, as the driver did before 10d1882.
      * A bench knob (DW1000.md, "A buffer toggle
      * that moves the host off the chip's buffer under a live
      * receiver"); leave clear.

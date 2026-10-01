@@ -1669,7 +1669,7 @@ step_receiver_back_before_rx_error(dw1000_t *dw, struct stub *s)
  * take; the next receiver enable is what resets them. That is the model
  * side of this step.
  *
- * The driver side is the guard of 222e9f8 in dw1000_process_events():
+ * The driver side is the guard of 273fb9d in dw1000_process_events():
  * the completion's pass, a separate later pass, sees exactly that word
  * and reports nothing, where before it delivered the previous frame a
  * second time with this one's flags.

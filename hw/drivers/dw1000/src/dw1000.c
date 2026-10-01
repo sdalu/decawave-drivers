@@ -2088,7 +2088,7 @@ bool dw1000_process_events(dw1000_t *dw) {
     // Double buffered, a good frame shown with the two buffer pointers
     // on the same buffer and none of the detect bits set is not a frame.
     // Measured on rpi-c and rpi-d, 24 of 24 duplicates over 96 runs
-    // (INVESTIGATE.md 1b): with the pointers aligned the swinging
+    // (DW1000.md, "With the buffer pointers aligned"): the swinging
     // bits read as the chip's own flags of its last reception, which no
     // status write clears (a masked clear written there reads back set)
     // and which the next receiver enable resets, while the receive
