@@ -503,7 +503,7 @@ wait_irq(dw1000_t *dw, unsigned timeout_ms)
 /* Steps                                                                */
 /*----------------------------------------------------------------------*/
 
-/* The receive mode this build runs the suite in: tests/check-emulation.sh
+/* The receive mode this build runs the suite in: tests/tests-emulation.sh
  * builds it twice, single and double buffered, since the driver's paths
  * differ by mode and every step has to hold in both. */
 #ifndef TIMING_DBLBUFF

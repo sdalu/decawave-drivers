@@ -22,7 +22,7 @@
  *
  * So the preamble-code range and the option-dependence of the preamble
  * length are the two things here worth a test, and the run is done twice,
- * once with the option and once without (see tests/check-validate.sh).
+ * once with the option and once without (see tests/tests-validate.sh).
  *
  * Nothing in this file touches a chip, a driver or a port: the API is a
  * value mapping, and this links against dw1000_validate.c alone.
@@ -283,7 +283,7 @@ test_null_out_params(void)
 #else  /* VALUES_SPEED_OF_LIGHT_OVERRIDDEN */
 
 /* dw1000.h guards DW1000_SPEED_OF_LIGHT_MPS so a caller can define its
- * own, and the conversions have to follow it. check-validate.sh builds
+ * own, and the conversions have to follow it. tests-validate.sh builds
  * this a third time with the constant halved: light at half speed takes
  * twice as long to cover a metre, so a metre must come out twice as many
  * ticks. Nothing else in this file holds under that value (every other

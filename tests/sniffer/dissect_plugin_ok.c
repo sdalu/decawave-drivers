@@ -8,7 +8,7 @@
 /*
  * A fixture for tests/sniffer/dissect.c: the smallest thing that is a
  * valid loadable dissector. Built into a shared object by
- * tests/check-sniffer.sh.
+ * tests/tests-sniffer.sh.
  *
  * It references nothing in the sniffer, which is not incidental: a plugin
  * that does will not load, because dissect.c uses RTLD_NOW and the

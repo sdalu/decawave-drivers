@@ -7,7 +7,7 @@
 # tests/validate/values.c, which names them).
 #
 # Nothing here touches a chip, a driver or a port: the source is a value
-# mapping and links on its own, so this is the cheapest check in the tree
+# mapping and links on its own, so this is the cheapest test in the tree:
 # two compiles and two runs, no hardware, no threads, no clock.
 #
 # TWICE, on purpose. Five of the eight preamble lengths are proprietary

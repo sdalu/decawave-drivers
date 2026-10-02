@@ -51,7 +51,7 @@
  *    the header.
  *
  * One line per case; a failing case says why on its own line. Run by
- * tests/check-sniffer.sh.
+ * tests/tests-sniffer.sh.
  */
 
 #include <stdbool.h>

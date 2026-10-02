@@ -227,15 +227,13 @@ silently stopped compiling a file.
 
 ## The checks
 
-`make check` runs five, in order of how long they take:
+`make check` is preflight: it runs none of the suite below, and needs
+nothing built.
 
-| Check             | Proves                                                  |
-| ----------------- | ------------------------------------------------------- |
-| `check-options`   | every option combination still compiles                 |
-| `check-manifest`  | `dw1000.cmake` still describes the tree                 |
-| `check-validate`  | the radio-value validation matches `dw1000_configure()` |
-| `check-emulation` | the driver runs against a model of the chip             |
-| `check-probe`     | the probe's record format and its exchange              |
+| Check            | Proves                                  |
+| ---------------- | ---------------------------------------- |
+| `check-options`  | every option combination still compiles |
+| `check-manifest` | `dw1000.cmake` still describes the tree |
 
 None of them needs hardware, which is the point: a check that needs a
 DW1000 on a bench is a check that does not run.
@@ -261,6 +259,25 @@ go and look at:
 ```
 
 `make check WERROR=yes` is the CI form.
+
+## The suite
+
+`make tests` builds and runs what `check` does not: four targets, each
+its own program built and actually run, none needing hardware.
+
+| Test              | Proves                                                  |
+| ----------------- | -------------------------------------------------------- |
+| `tests-validate`  | the radio-value validation matches `dw1000_configure()` |
+| `tests-emulation` | the driver runs against a model of the chip             |
+| `tests-probe`     | the probe's record format and its exchange              |
+| `tests-sniffer`   | the sniffer's host-buildable logic                      |
+
+`tests-emulation` needs `port/emulation`, which is the one port requiring
+nothing installed and no server: it is what lets this be run rather than
+only compiled. `tests-probe` and `tests-sniffer` build against the same
+port for the same reason.
+
+`make tests WERROR=yes` is the CI form, same as `check`.
 
 ## The version scheme
 

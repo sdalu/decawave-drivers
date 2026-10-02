@@ -20,7 +20,7 @@
 # turns proprietary long frames on and the file compiles one extra step.
 #
 # Here: one summary line per test, and the test's own lines kept when
-# something failed. Run by `make check`.
+# something failed. Run by `make tests`.
 #
 # POSIX sh only.
 set -e

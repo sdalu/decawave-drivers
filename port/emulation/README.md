@@ -547,7 +547,7 @@ rsvc_o(rsvc, RSVC_SEED_GET, &seed, &seedlen);
 - `dblbuff.c`: a medium that sends a burst of numbered frames on one
   `RX_CONFIG`, for the swinging set and the overrun.
 
-`sh tests/check-emulation.sh` builds and runs four tests out of those
+`sh tests/tests-emulation.sh` builds and runs four tests out of those
 three files, needing nothing installed and no server started: `dblbuff.c`
 is built twice, the second time with proprietary long frames on, because
 errata 1.4 RX-1 needs a TX write past index 127 and the 127 byte

@@ -23,7 +23,7 @@
 # has no port layer, and appears nowhere in dw1000.cmake. Its eight
 # translation units all sit in this directory. Four of them (capture.c,
 # wire.c, pcapng.c and dissect.c) touch neither the chip nor Linux, which
-# is what lets tests/check-sniffer.sh compile and run them on any host;
+# is what lets tests/tests-sniffer.sh compile and run them on any host;
 # the other four build only for the Pi.
 #
 # A ninth set of sources can come from elsewhere: see DISSECTORS= below.

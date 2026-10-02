@@ -41,8 +41,8 @@
  *    this file cannot make of itself.
  *
  * One line per case; a failing case says why on its own line. Not run
- * by any tests/check-*.sh yet: that wiring is check-sniffer.sh's, not
- * this file's.
+ * by any tests/check-*.sh or tests/tests-*.sh yet: that wiring is
+ * tests-sniffer.sh's, not this file's.
  */
 
 #include <inttypes.h>

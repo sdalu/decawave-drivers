@@ -114,7 +114,7 @@ help:						## show this help (the default)
 	@echo 'dw1000 -- a driver for the DecaWave DW1000 transceiver'
 	@echo ''
 	@echo 'Targets:'
-	@awk -F':.*## ' '/^[a-z][a-z-]*:.*## /{ \
+	@awk -F':.*## ' '/^[a-z][a-z0-9-]*:.*## /{ \
 	    pre = sprintf("  %-16s ", $$1); n = split($$2, w, / /); line = ""; \
 	    for (i = 1; i <= n; i++) { \
 	        cand = (line == "" ? w[i] : line " " w[i]); \
@@ -152,7 +152,7 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-manifest check-validate check-emulation check-probe check-sniffer	## compile the option matrix (~5 min), check the manifest, check the radio-value validation, run the emulation smoke test, run the probe tests, run the sniffer tests
+check: check-options check-manifest		## compile the option matrix (~5 min), and check the manifest
 
 # The matrix is 2^n over the options, so ten of them is 1024 compiles and
 # a few minutes; the script reports progress as it goes, and an eleventh
@@ -163,48 +163,6 @@ check-options:					## compile the core over every option combination
 
 check-manifest:					## check dw1000.cmake still describes the tree
 	@sh tests/check-manifest.sh
-
-# The cheapest check here: <dw1000/dw1000_validate.h> is a value mapping
-# that links on its own, so this needs no chip, no port and no driver --
-# two compiles and two runs. Twice because five of the eight preamble
-# lengths are proprietary and what the API may accept depends on the
-# build's options, which is the half that used to be wrong in the
-# hand-written copy this replaced.
-check-validate:					## check the radio-value validation against what dw1000_configure() accepts
-	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-validate.sh
-
-# The emulation port has no vendor tree to wait for -- unlike unix,
-# chibios, mynewt, cf2 and zephyr, it needs nothing installed -- and
-# tests/emulation/smoke.c brings its own medium, a thread in the test's
-# own process. So this is the one port the tree can *run* the driver
-# against rather than only compile, which subsumes the syntax check this
-# target used to be and catches what no syntax check would: the frame on
-# the wire, the timestamps, and the four callbacks. The script reads the
-# paths from the manifest, as everything here does (tests/check-manifest.sh
-# fails the Makefile for spelling a port path out itself).
-check-emulation:				## run the emulation smoke test (driver, port/emulation, stub medium)
-	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-emulation.sh
-
-# probe/include/dw1000/probe/record.h and role.h are free of <dw1000/dw1000.h>
-# by design, so this is the one probe check that needs no chip, no
-# driver and no radio either -- record, role, port/emulation and the
-# format test, the same reason check-emulation exists for the driver.
-# The exchange test goes further and runs the responder against
-# port/emulation, which is what pins the two things a responder owes a
-# link that is not working: that a run ends, and that it says what it
-# heard. The script reads the paths from the manifest, as everything
-# here does.
-check-probe:					## run the probe tests (format, and the responder against port/emulation)
-	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-probe.sh
-
-# Three of the sniffer's seven translation units were written to touch
-# neither the chip nor Linux, so they run here; the other four are a
-# Linux program for a Raspberry Pi and only build there. The script says
-# which is which and why. capture.c reaching the chip through a pair of
-# function pointers rather than calling into uwb_dw1000.c is what made
-# any of this testable: before that the sniffer had no tests at all.
-check-sniffer:					## run the sniffer tests (the frame ring, the wire header, the pcapng writer, the dissector registry and loader, and the wireshark dissector: its offsets always, and its behaviour where a Lua is installed)
-	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/check-sniffer.sh
 
 # --- building ---------------------------------------------------------
 
@@ -243,6 +201,56 @@ $(OBJ) $(ALLOSALOBJ): .gitversion $(VERSIONHDR)
 .c.o:
 	$(CC) $(ALL_CFLAGS) $(ALL_CPPFLAGS) -c -o $@ $<
 
+# --- tests --------------------------------------------------------------
+# Each of these builds its own programs and runs them; none is preflight,
+# which is why they are not under `check`. None depends on `lib`: the
+# suite's binaries are not the artefact it ships.
+
+tests: tests-validate tests-emulation tests-probe tests-sniffer	## run the radio-value validation, the emulation smoke test, the probe tests, and the sniffer tests
+
+# The cheapest of the suite: <dw1000/dw1000_validate.h> is a value mapping
+# that links on its own, so this needs no chip, no port and no driver --
+# two compiles and two runs. It runs the driver's own dw1000_validate.c,
+# which is why it is here and not under `check` (moved 2026-10-02). Twice
+# because five of the eight preamble lengths are proprietary and what the
+# API may accept depends on the build's options, which is the half that
+# used to be wrong in the hand-written copy this replaced.
+tests-validate:					## the radio-value validation against what dw1000_configure() accepts
+	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/tests-validate.sh
+
+# The emulation port has no vendor tree to wait for -- unlike unix,
+# chibios, mynewt, cf2 and zephyr, it needs nothing installed -- and
+# tests/emulation/smoke.c brings its own medium, a thread in the test's
+# own process. So this is the one port the tree can *run* the driver
+# against rather than only compile, which subsumes the syntax check this
+# target used to be and catches what no syntax check would: the frame on
+# the wire, the timestamps, and the four callbacks. The script reads the
+# paths from the manifest, as everything here does (tests/check-manifest.sh
+# fails the Makefile for spelling a port path out itself).
+tests-emulation:				## run the emulation smoke test (driver, port/emulation, stub medium)
+	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/tests-emulation.sh
+
+# probe/include/dw1000/probe/record.h and role.h are free of <dw1000/dw1000.h>
+# by design, so this is the one probe check that needs no chip, no
+# driver and no radio either -- record, role, port/emulation and the
+# format test, the same reason tests-emulation exists for the driver.
+# The exchange test goes further and runs the responder against
+# port/emulation, which is what pins the two things a responder owes a
+# link that is not working: that a run ends, and that it says what it
+# heard. The script reads the paths from the manifest, as everything
+# here does.
+tests-probe:					## run the probe tests (format, and the responder against port/emulation)
+	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/tests-probe.sh
+
+# Three of the sniffer's seven translation units were written to touch
+# neither the chip nor Linux, so they run here; the other four are a
+# Linux program for a Raspberry Pi and only build there. The script says
+# which is which and why. capture.c reaching the chip through a pair of
+# function pointers rather than calling into uwb_dw1000.c is what made
+# any of this testable: before that the sniffer had no tests at all.
+tests-sniffer:					## run the sniffer tests (the frame ring, the wire header, the pcapng writer, the dissector registry and loader, and the wireshark dissector: its offsets always, and its behaviour where a Lua is installed)
+	@CC='$(CC)' CFLAGS='$(ALL_CFLAGS)' sh tests/tests-sniffer.sh
+
 # --- information ------------------------------------------------------
 
 # Bare, so a script can use it:  v=`make -s version`
@@ -267,11 +275,11 @@ version-full:					## print the version this tree builds as
 #
 # In that order on purpose: the two refusals are instant, so they come
 # before the question -- there is no point asking about a tag that cannot be
-# made -- and the full check comes after it, because a minute of tests is
-# not worth spending on a `make tag` the answer to which is no. Tagging
-# something the suite has not passed is the mistake this exists to prevent,
-# so the check is inside the recipe rather than a prerequisite, which would
-# have run before the prompt.
+# made -- and the full check and suite come after it, because a minute of
+# tests is not worth spending on a `make tag` the answer to which is no.
+# Tagging something the suite has not passed is the mistake this exists to
+# prevent, so check and tests are inside the recipe rather than
+# prerequisites, which would have run before the prompt.
 #
 # `make tag YES=1` answers yes for a script, and a non-interactive run with
 # no YES=1 reads EOF and declines -- the safe way round.
@@ -283,7 +291,7 @@ tag: $(VERSIONHDR)				## tag this release, from the version header
 	    echo 'make: v$(VERSION) exists already; bump $(VERSIONHDR) first' >&2; \
 	    exit 1; fi
 	@if [ "$(YES)" != 1 ]; then \
-	    printf 'tag v%s at %s? (the full check runs first) [y/N] ' \
+	    printf 'tag v%s at %s? (the full check and suite run first) [y/N] ' \
 		'$(VERSION)' "`git rev-parse --short HEAD`"; \
 	    read -r ans || ans=; \
 	    case "$$ans" in \
@@ -292,6 +300,7 @@ tag: $(VERSIONHDR)				## tag this release, from the version header
 	    esac; \
 	fi
 	@$(MAKE) check
+	@$(MAKE) tests
 	git tag -a -m '$(NAME) $(VERSION)' 'v$(VERSION)'
 	@sh scripts/checktag.sh '$(VERSION)'
 	@echo 'tagged v$(VERSION) -- push it with: git push origin v$(VERSION)'
@@ -353,7 +362,7 @@ clean:						## remove build products
 distclean: clean				## clean, plus the generated documentation
 	rm -rf doc/generated
 
-.PHONY: help portcheck check check-options check-manifest check-emulation \
-	check-probe check-sniffer check-validate \
-	lib version version-full tag ports options sources doc clean distclean \
+.PHONY: help portcheck check check-options check-manifest tests-validate \
+	lib tests tests-emulation tests-probe tests-sniffer \
+	version version-full tag ports options sources doc clean distclean \
 	state validate

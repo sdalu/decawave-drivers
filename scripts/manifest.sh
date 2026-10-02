@@ -110,8 +110,8 @@ inc)      portvar "$1" INCLUDE_DIR ;;
 src)      portvar "$1" SOURCES ;;
 
 # The probe: record and role, free of <dw1000/dw1000.h>, and its ports.
-# tests/check-probe.sh asks here rather than naming probe/src or
-# probe/port/* itself, the same discipline check-emulation.sh keeps for
+# tests/tests-probe.sh asks here rather than naming probe/src or
+# probe/port/* itself, the same discipline tests-emulation.sh keeps for
 # the driver.
 probeincdir)  cmvar DW1000_PROBE_INCLUDE_DIR ;;
 # Composed here from its two pieces, exactly as `sources` is for the

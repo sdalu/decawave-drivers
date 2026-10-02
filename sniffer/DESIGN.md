@@ -186,17 +186,17 @@ directly. That seam is what makes `capture.c`, `wire.c`, `pcapng.c` and
 calls into the driver, into bitters, or onto an `AF_PACKET` socket. They
 do reach `<dw1000/dw1000.h>`, by way of `capture.h`, for
 `DW1000_FRAME_MAXSIZE` and nothing else, which is why
-`tests/check-sniffer.sh` passes the driver's include directory and the
+`tests/tests-sniffer.sh` passes the driver's include directory and the
 emulation port's while linking not one driver source file. `tests/sniffer/capture.c` drives the ring and the
 wire encoder with its own fake `capture_ops` pair; `tests/sniffer/pcapng.c`
 drives the pcapng writer with frames built by hand;
 `tests/sniffer/dissect.c` drives the dissector registry and loads two
 shared objects it builds for the purpose; all three are run by
-`tests/check-sniffer.sh`, itself run by `make check`'s `check-sniffer`
-target (the `check` and `check-sniffer` rules in the `Makefile`). The sniffer's only real logic (the
+`tests/tests-sniffer.sh`, itself run by `make tests`'s `tests-sniffer`
+target (the `tests` and `tests-sniffer` rules in the `Makefile`). The sniffer's only real logic (the
 ring, its overrun accounting, its truncation, the wire encoding, the
 pcapng block layout) used to be unreachable from any test, and now is;
-`tests/check-emulation.sh` buys the driver the same thing, and
+`tests/tests-emulation.sh` buys the driver the same thing, and
 `tests/probe/format.c` the probe's line format, for the same reason.
 
 The other four translation units (`main.c`, `cmdline.c`, `eth.c`,
@@ -264,7 +264,7 @@ one-host affair with no ethernet socket opened.
 The writer emits exactly the three block types pcapng-spec.md describes
 (Section Header, Interface Description, Enhanced Packet), in the host's
 own byte order, and nothing else; `pcapng.c`'s own header comment names
-this explicitly, and it is what keeps the second half of `check-sniffer`
+this explicitly, and it is what keeps the second half of `tests-sniffer`
 provable with no chip.
 
 ## stdout carries capture data, and nothing else

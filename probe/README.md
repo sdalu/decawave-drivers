@@ -106,9 +106,9 @@ on the `STATS` line separate "not heard" from "heard and rejected", and
 `drop_overrun` is the only way a frame this program received is lost;
 see the ring in `src/exchange.c`.
 
-## What `make check` proves
+## What `make tests` proves
 
-`make check-probe` runs two tests, neither needing hardware:
+`make tests-probe` runs two tests, neither needing hardware:
 
 - **format**: the line format and the arithmetic behind it, against
   `port/emulation`, with no radio at all.

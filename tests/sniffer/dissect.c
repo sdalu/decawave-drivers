@@ -48,17 +48,17 @@
  *  - a real shared object loads, its describe() runs, its open() is
  *    handed the args from PATH:args, and close_all() unloads it.
  *
- * The loader cases need two shared objects, which tests/check-sniffer.sh
+ * The loader cases need two shared objects, which tests/tests-sniffer.sh
  * builds and passes as argv[1]. Run without that argument, they are
  * skipped and say so, so that a host which cannot build a shared object
  * still gets the registry checked.
  *
  * Several cases here make dissect.c report a refusal on stderr. Those
  * lines are expected output, not noise from a failure;
- * tests/check-sniffer.sh keeps them out of sight unless a case fails.
+ * tests/tests-sniffer.sh keeps them out of sight unless a case fails.
  *
  * One line per case; a failing case says why on its own line. Run by
- * tests/check-sniffer.sh.
+ * tests/tests-sniffer.sh.
  */
 
 #include <stdio.h>

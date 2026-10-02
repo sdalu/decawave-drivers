@@ -3,13 +3,13 @@
 # the format can be proved with no chip, no driver and no radio: just
 # probe/src, the emulation port, and tests/probe/format.c. So this is the
 # one probe check the tree can actually *run*, the same reason
-# check-emulation.sh exists for the driver: build the three into a
+# tests-emulation.sh exists for the driver: build the three into a
 # temporary directory and run it.
 #
 # probe/src also holds exchange.c, which is NOT free of <dw1000/dw1000.h>
 # (it is chip mechanism, and drives the chip directly), so proving it
 # compiles and links needs the driver core and an OSAL port alongside the
-# probe port, exactly like check-emulation.sh needs them for the driver
+# probe port, exactly like tests-emulation.sh needs them for the driver
 # itself. Pulling those in here, from the manifest, with no Zephyr tree
 # anywhere in sight, is what proves exchange.c's Zephyr coupling really
 # is gone: if it still referenced a Zephyr header or type, this would not
@@ -30,7 +30,7 @@
 # overridable for exactly this.
 #
 # Here: one summary line per test, and the test's own lines kept when
-# something failed. Run by `make check`.
+# something failed. Run by `make tests`.
 #
 # POSIX sh only.
 set -e
@@ -63,7 +63,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 budgets='-DPROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US=400000
 	 -DPROBE_EXCHANGE_POLL_TIMEOUT_US=200000'
 
-# Not a glob over tests/probe, for the reason check-emulation.sh gives:
+# Not a glob over tests/probe, for the reason tests-emulation.sh gives:
 # a build step that discovers its own inputs is what check-manifest.sh
 # exists to punish.
 status=0

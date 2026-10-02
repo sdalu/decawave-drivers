@@ -31,7 +31,7 @@
  *  - dw1000_probe_exchange_name(), canonical and out of range.
  *
  * One line per case; a failing case says why on its own line. Run by
- * tests/check-probe.sh.
+ * tests/tests-probe.sh.
  */
 
 #include <inttypes.h>

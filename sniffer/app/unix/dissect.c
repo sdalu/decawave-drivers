@@ -18,7 +18,7 @@
  * This file touches neither the chip nor Linux: dlopen(3) is POSIX and
  * the interface in dissect.h carries no driver type, deliberately (the
  * header says why). So it joins capture.c, wire.c and pcapng.c in the
- * part of this program that tests/check-sniffer.sh can build and run on
+ * part of this program that tests/tests-sniffer.sh can build and run on
  * any host, which is where the loader most wants to be tested: getting
  * an ABI refusal wrong is the kind of mistake that otherwise surfaces
  * only on a Pi, with a plugin, at a bench.

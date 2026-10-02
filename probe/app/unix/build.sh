@@ -17,7 +17,7 @@
 # own addition, sitting beside the driver rather than folded into it (see
 # dw1000.cmake's own note on why), so its three pieces (the probe API,
 # probe/src, and this port) are asked for directly from scripts/
-# manifest.sh, the same way tests/check-probe.sh already does.
+# manifest.sh, the same way tests/tests-probe.sh already does.
 #
 # Environment, each overridable:
 #   DW1000     this tree (decawave-drivers); default: three directories
@@ -63,7 +63,7 @@ command -v make  >/dev/null || die "make(1) is needed to read the manifests"
 
 # The driver core and its unix OSAL, from decawave-drivers' own manifest
 # interface (dw1000.cmake, read through `make sources`). Same call
-# tests/check-probe.sh and rpi-redskin/build.sh both make.
+# tests/tests-probe.sh and rpi-redskin/build.sh both make.
 dw1000_vars=$(make -s -C "$DW1000" sources OSAL=unix) \
     || die "cannot read the source manifest from $DW1000"
 eval "$dw1000_vars"
@@ -80,7 +80,7 @@ BITTERS_TAKEN="$BITTERS_SOURCES_CORE $BITTERS_SOURCES_DELAY \
 
 # The probe: its own API, probe/src (role, record, exchange.c, the
 # state machine this application drives), and this port. Asked for
-# directly, the way tests/check-probe.sh does, because `make sources`
+# directly, the way tests/tests-probe.sh does, because `make sources`
 # above is the driver's own interface and does not carry these.
 m="sh $DW1000/scripts/manifest.sh"
 # Prefixed like every source below: manifest.sh answers relative to the

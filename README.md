@@ -191,7 +191,8 @@ other half of the job, with either GNU make or BSD make.
 make                print the targets; nothing is built by default
 make sources        print the files and flags to vendor
 make lib            build libdw1000.a locally, against OSAL=<port>
-make check          run the whole check suite
+make check          preflight: options compile, the manifest
+make tests          run the validation, emulation, probe and sniffer tests
 make options        print the option table above
 make version        print the release
 make doc            run doxygen into doc/generated
