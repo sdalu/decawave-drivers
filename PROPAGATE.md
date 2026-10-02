@@ -162,23 +162,30 @@ placeholder, not calibrated for this instrument"
 configures or the two are not comparable. That constraint is the
 reason this has to be one edit rather than seven.
 
-## 5. The receiver-off clock step is larger than the bias being chased
+## 5. The receiver-off clock step is at least the size of the bias being chased
 
 `DW1000.md` used to put a counter gain of 2.5 to 3.4 ppm at a delayed
 send's launch. Since 2026-10-01 it is a step in the clock rate between
 the receiver on and the receiver off, 2.0 to 2.6 ppm on rpi-b and 0.43
 to 0.69 ppm on rpi-c and rpi-d, immediate and owing nothing to the
-send: what a
-timestamp carries is the time the sender's receiver was off before it,
-not the send's lead ("The clock runs at one rate with the receiver on
-and another with it off").
+send: what a timestamp carries is the time the sender's receiver was
+off before it, not the send's lead ("The clock runs at one rate with
+the receiver on and another with it off"). In SDS-TWR a responder's
+receiver-off time before its reply shortens both formulas by a
+quarter of the step it gains: measured 2026-10-02 with rpi-b answering,
+52.3 cm at a 3 ms lead and 186.5 cm at 10 ms, within 3 % of the
+prediction, so about 18 cm per millisecond of receiver-off time on
+rpi-b and 4 to 5 cm on rpi-c and rpi-d.
 
 `ruby-ftmbc/lib/ftmbc.rb:76` and `spank/include/spank/config.h:66`
 both use a 400 microsecond lead. A responder that stops its receiver
-to arm the reply spends at least that with the receiver off, plus the
-host's time from the `TRXOFF` to the arm: at 2.5 ppm, 1 ns or more,
-30 cm of range, an order of magnitude above the 4 cm question of
-section 4. All three of ruby-ftmbc, spank and zephyr-redskin already
+to arm the reply spends that less the preamble airtime with the
+receiver off, plus the host's time from the `TRXOFF` to the arm:
+about 5 cm on rpi-b from the lead alone, and 18 cm more for every
+millisecond the host takes, against the 4 cm question of section 4.
+Earlier versions of this section put it at 36 cm (2026-09-18) and
+30 cm (2026-10-01), counting the whole gain as range rather than the
+quarter the formulas keep. All three of ruby-ftmbc, spank and zephyr-redskin already
 default embedded transmit off, and `zephyr-redskin/redskin/Kconfig:54-59`
 states a reason in the help text.
 
@@ -192,8 +199,9 @@ whenever the receiver is off, pending send or not, measured against
 frames sent straight after the receiver.
 
 **Owed:** correct both comments to say the clock steps when the
-receiver goes off, pointing at `DW1000.md`, and carry the 30 cm into
-whatever error budget quotes a distance. Turning embedded transmit on
+receiver goes off, pointing at `DW1000.md`, and carry the per-module
+figure, 18 cm per millisecond off on rpi-b, into whatever error budget
+quotes a distance. Turning embedded transmit on
 needs entry 7 of `INVESTIGATE.md`, or a correction applied per module
 from the off time.
 

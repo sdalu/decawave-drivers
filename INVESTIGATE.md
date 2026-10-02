@@ -111,8 +111,9 @@ One entry left this file that day; its answer is in `DW1000.md`:
   frames, with cancelled ones made by hand, which never turned it on,
   and is withdrawn ("The clock runs at one rate with the receiver on
   and another with it off"; ruby-dw1000 `measurements/delayed-send/`,
-  `ARMFIRE=1`, twenty-one runs over the three chips and two radio
-  configurations). What the chip does to tie
+  `MANUAL=1`, twenty-seven runs over the three chips and two radio
+  configurations, repeated the next day, and confirmed in SDS-TWR to
+  within 3 % of the bias it predicts). What the chip does to tie
   the two is entry 7.
 
 The entries below keep the numbers they were given, so that the
@@ -185,20 +186,31 @@ gains 2.0 to 2.6 ppm on rpi-b, 0.55 to 0.68 ppm on rpi-c and 0.43 to
 with the receiver never on, 0.02 to 0.10 ppm. The step is complete
 within 0.2 ms of the `TRXOFF` and undone within 0.23 ms of the enable;
 it is the same at PRF 16 MHz with a 1024-symbol preamble, and single
-buffered. A delayed send's preamble airtime seems to count with the
-receiver rather than with idle, so the two rates may be the radio
-active and the radio idle (inferred, one run per configuration).
+buffered; two receivers timestamping the sender at once agree to
+0.25 ns, receiving a third node's traffic shrinks it by 7 to 9 %, and
+it repeats on 2026-10-02 to within 3 %. In SDS-TWR it shortens a
+delayed reply's distance by 52.3 cm at 3 ms and 186.5 cm at 10 ms,
+against 53.5 and 184.9 cm predicted. A delayed send's preamble
+airtime seems to count with the receiver rather than with idle, so the
+two rates may be the radio active and the radio idle (inferred, one
+run per configuration).
 
 **Ruled out.** The delayed send itself; the ranging bit; SPI traffic
 during the interval; the driver's `dw1000_tx_send()` against the bare
 `TXSTRT`; the TX-1 workaround (`TXCLKS` forced on or not, ruby-dw1000
 `measurements/errata-tx1/README.md`); the chip's self-heating, the step
 being complete in 0.2 ms; the partner, rpi-d's step being the same
-heard by rpi-b or by rpi-c; the radio configuration; the receive
-buffering. The receiving chip's carrier tracking was read for a while
-as evidence about the oscillator; it moves with the radio settings
-(1.9 ppm on rpi-b by default, 0.2 at PRF 16 MHz, and of either sign
-from chip to chip), so it is not evidence either way.
+heard by rpi-b or by rpi-c, and two observers of one sender agreeing;
+the radio configuration; the receive buffering; the chip's digital
+clock gating, `RXCLKS`, `SYSCLKS` or both forced to the PLL for a
+whole run changing nothing (`CLKFORCE=`, through the debug build's new
+`reg_write8`); the RF synthesiser and the regulators being switched
+on, `RF_CONF`'s `PLLFEN` and `LDOFEN` forced for a whole run changing
+nothing either (`RFFORCE=`, 2026-10-02). The receiving chip's carrier
+tracking was read for a while as evidence about the oscillator; it
+moves with the radio settings (1.9 ppm on rpi-b by default, 0.2 at PRF
+16 MHz, and of either sign from chip to chip), so it is not evidence
+either way.
 
 **Candidates.** The supply: receiving and transmitting both draw an
 order of magnitude more than idle, and a crystal or its oscillator
@@ -206,24 +218,32 @@ pulled by the module's supply or by the current through it would
 follow the radio's state with a fast time constant; rpi-b, whose step
 is four times the others', reads 2.59 V on its SAR against 2.9 V on
 rpi-d (the temperature run of ruby-dw1000's
-`measurements/delayed-send/README.md`). Or the chip's own clocking:
-the RF synthesiser runs in both active states and not in idle, and a
-reference shared with it, or a clock-tree setting the PMSC changes
-between the states, would do the same. The SAR cannot separate them:
-read with the receiver running it returns values about 565 steps off
-in supply and 200 in temperature, which is not a reading of either.
+`measurements/delayed-send/README.md`). Or the receive and transmit
+signal chains themselves, coupling into the reference some other way.
+The digital clock selects, the synthesiser and the regulators are out
+(above), so a setting would have to be one no documented register
+forces, and the chains are the one part of the radio left that runs in
+both active states and not in idle: their current through the supply
+remains the simplest account. The SAR cannot separate them: read with
+the receiver running it returns values about 565 steps off in supply
+and 200 in temperature, which is not a reading of either.
 
-**Next.** The supply, directly: a scope on rpi-b's module VDD across a
-receiver on/off edge, and the `RXON=1 IDLEOFF=1` run repeated with the
-module fed from a bench supply at 3.3 V; a step that shrinks towards
-rpi-c's size is the supply, one that survives a stiff supply is the
-chip's own. Needs hands on the bench. Without them: the step's size
-while actually receiving, with the third node's traffic on a preamble
-code the sender's receiver decodes and the measuring receiver does not
-(the one run so far had the measuring receiver hearing it too, and
-says only that the step survives reception), and a repeat of the
-default-configuration pair on another day, the old sessions having
-put rpi-b at 3.1 to 3.6 ppm against today's 2.0 to 2.6.
+**Next.** Both need hands on the bench. The decisive one: a frequency
+counter on rpi-b's 38.4 MHz oscillator, referenced to GPS or rubidium,
+picked up with a near-field loop, across receiver on/off edges; a
+2.5 ppm step is about 96 Hz there. A crystal that steps is the
+oscillator moving, the supply the likely cause; one that does not puts
+the step inside the chip, after the crystal. Then the supply itself: a
+scope on rpi-b's module VDD across the same edges, and the
+`RXON=1 IDLEOFF=1` run repeated with the module fed from a bench supply
+at 3.3 V, where a step that shrinks towards rpi-c's size is the supply.
+Little is left to try from the host: of the documented forces only
+`RF_CONF`'s `TXFEN` has not been tried, deliberately, since the
+transmit chain forced on outside a frame could radiate into the
+measurement. The sessions of mid-September that put rpi-b at 3.1 to 3.6 ppm
+are the one figure the two days of October do not repeat; they went
+through the engine on another build and may have carried that day's
+temperature or supply, which the supply test would bear on.
 
 ## Housekeeping, not investigation
 
