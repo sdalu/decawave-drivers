@@ -15,8 +15,8 @@
 
 struct uwb_config {
     struct {
-	uint16_t tx_delay;
-	uint16_t rx_delay;
+	int32_t tx_delay;	/* device ticks, one way; -1 leaves the */
+	int32_t rx_delay;	/*   driver's own                       */
     } antenna;
 
     void (*frame_delivery)(uint32_t status, size_t length, bool ranging);

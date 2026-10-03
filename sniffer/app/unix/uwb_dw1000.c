@@ -341,10 +341,10 @@ uwb_init(struct uwb_config *uwb_cfg)
 	    cfg->cb.rx_ok = _rx_ok;
 	}
 
-	if (uwb_cfg->antenna.tx_delay != UINT16_MAX) 
-	    cfg->tx_antenna_delay = uwb_cfg->antenna.tx_delay;
-	if (uwb_cfg->antenna.rx_delay != UINT16_MAX) 
-	    cfg->rx_antenna_delay = uwb_cfg->antenna.rx_delay;
+	if (uwb_cfg->antenna.tx_delay >= 0)
+	    cfg->tx_antenna_delay = (uint16_t)uwb_cfg->antenna.tx_delay;
+	if (uwb_cfg->antenna.rx_delay >= 0)
+	    cfg->rx_antenna_delay = (uint16_t)uwb_cfg->antenna.rx_delay;
 
 	/* rx_error stays registered either way: without double buffering
 	 * dw1000_initialise() no longer requires it, but every receive

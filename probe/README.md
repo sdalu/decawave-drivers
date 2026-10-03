@@ -102,7 +102,10 @@ probe [options] info | config | power
                     each --settle-* implies --settle
 ```
 
-The options come before the role. The radio is validated by the
+The options come before the role; `--help` prints them and `--version`
+the driver and bitters releases. The radio options are the sniffer's
+too, spelt and valued the same (`make check` holds the two together),
+so a radio set up for a probe run is given to the sniffer unchanged. The radio is validated by the
 driver's own rules before the chip is touched, so a preamble code that
 does not suit the PRF, say, is a usage error that names the reason. An
 antenna delay is calibrated on one channel: on another, give the run

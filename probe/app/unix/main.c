@@ -331,9 +331,9 @@ print_lines(char *text)
 /*======================================================================*/
 
 static void
-usage(const char *prog)
+usage(FILE *out, const char *prog)
 {
-    fprintf(stderr,
+    fprintf(out,
         "usage: %s [options] <role> <arguments>\n"
         "\n"
         "roles:\n"
@@ -381,7 +381,10 @@ usage(const char *prog)
         "  --settle-windows=N     rx: windows that must agree (default 4)\n"
         "  --settle-threshold=DEG rx: their means' spread below (0.2)\n"
         "  --settle-give-up=S     rx: give up after (default 900)\n"
-        "                    each --settle-* implies --settle\n",
+        "                    each --settle-* implies --settle\n"
+        "\n"
+        "  --help            this, and exit\n"
+        "  --version         the probe's driver and bitters, and exit\n",
         prog);
 }
 
@@ -569,19 +572,26 @@ main(int argc, char *argv[])
             dblbuff = true;
         } else if (strcmp(a, "--no-dblbuff") == 0) {
             dblbuff = false;
+        } else if (strcmp(a, "--help") == 0) {
+            usage(stdout, prog);
+            return EXIT_OK;
+        } else if (strcmp(a, "--version") == 0) {
+            printf("probe (unix): dw1000 %s / bitters %s\n",
+                   DW1000_VERSION_FULL, bitters_version());
+            return EXIT_OK;
         } else if (strcmp(a, "--") == 0) {
             argc--; argv++;
             break;
         } else {
             fprintf(stderr, "%s: unknown option %s\n", prog, a);
-            usage(prog);
+            usage(stderr, prog);
             return EXIT_USAGE;
         }
         argc--; argv++;
     }
 
     if (argc < 2) {
-        usage(prog);
+        usage(stderr, prog);
         return EXIT_USAGE;
     }
 
@@ -598,7 +608,7 @@ main(int argc, char *argv[])
     else if (strcmp(verb, "power")  == 0) action = ACTION_POWER;
     else if (!dw1000_probe_role_lookup(verb, &role)) {
         fprintf(stderr, "%s: unknown role '%s'\n", prog, verb);
-        usage(prog);
+        usage(stderr, prog);
         return EXIT_USAGE;
     }
 
@@ -641,7 +651,7 @@ main(int argc, char *argv[])
         }
     }
     if (nargs != want) {
-        usage(prog);
+        usage(stderr, prog);
         return EXIT_USAGE;
     }
 

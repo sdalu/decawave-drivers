@@ -90,13 +90,18 @@ struct config {
     int     proto;
     uint8_t dst_addr[ETH_HWADDR_SIZE];
     int     dst_valid;		/* a destination was given on the line  */
-    float   tx_delay;
-    float   rx_delay;
+    long    tx_antd;		/* antenna delays, device ticks, one way; */
+    long    rx_antd;		/*   -1 leaves the driver's own           */
+    long    antd_arg;		/* where popt lands one, before it is kept */
+    float   delay_m_arg;	/* the same, in metres (the old options)  */
     int     channel;
     int     bitrate;
     int     prf;
     int     tx_pcode;
     int     rx_pcode;
+    int     code_arg;		/* --code, before it is kept as both      */
+    char   *sfd_arg;		/* --sfd, before it is kept               */
+    int     sfd_decawave;	/* the proprietary SFD, else the standard */
     int     tx_plen;
     int     rx_pac;
     char   *pcapng;		/* -w: file to write, "-" for stdout    */
@@ -104,7 +109,7 @@ struct config {
     int     stats;		/* --stats: report every N seconds, 0 = no */
     int     raw;		/* --raw: no sniffer header on the wire */
     int     no_metadata;	/* --no-metadata                        */
-    int     no_dblbuff;		/* --no-dblbuff                         */
+    int     no_dblbuff;		/* --no-dblbuff, cleared by --dblbuff   */
     char   *dissector[SNIFFER_DISSECT_MAX];	/* --dissector=PATH[:args]  */
     int     dissectors;		/* how many of the above are set        */
     char   *dissector_arg;	/* where popt lands one, before it is kept */

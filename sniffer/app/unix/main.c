@@ -121,8 +121,8 @@ struct config config = {
     .ifname         = config.ifname_default,
     .verbose        = 0,
     .proto          = 9999,
-    .tx_delay       = UINT16_MAX,
-    .rx_delay       = UINT16_MAX,
+    .tx_antd        = -1,
+    .rx_antd        = -1,
     .channel        = 5,
     .bitrate        = 6800,
     .prf            = 64,
@@ -130,6 +130,7 @@ struct config config = {
     .rx_pcode       = 10,
     .tx_plen        = 128,
     .rx_pac         = 8,
+    .sfd_decawave   = DW1000_WITH_PROPRIETARY_SFD ? 1 : 0,
     .pcapng         = NULL,
     .count          = 0,
     .stats          = 0,
@@ -192,10 +193,10 @@ static struct dw1000_radio dw1000_radio = {
 
 
 /* UWB hardware configuration
- * Antenna delay (UINT16_MAX -> using default value)
+ * Antenna delay (-1 -> using default value)
  */
 static struct uwb_config uwb_config = {
-    .antenna        = { .tx_delay = UINT16_MAX, .rx_delay = UINT16_MAX },
+    .antenna        = { .tx_delay = -1, .rx_delay = -1 },
     .frame_delivery = _rx_ok,
     .dblbuff        = true,
 };
@@ -536,6 +537,29 @@ int main(int argc, const char* argv[]) {
 	     " filtered");
     }
 
+    /* The radio, before anything is brought up. Each field was checked,
+     * with its message, in cmdline_parse(); this is the pass that writes
+     * the encoded values. The combination is the driver's to judge, by
+     * the check dw1000_configure() itself makes, asked here rather than
+     * there so that a refused radio stops the program before the chip
+     * (or the network) is touched. The probe asks the same question the
+     * same way (probe/src/radio.c) and says the same thing.
+     */
+    dw1000_validate_channel(config.channel,  &dw1000_radio.channel,  NULL);
+    dw1000_validate_bitrate(config.bitrate,  &dw1000_radio.bitrate,  NULL);
+    dw1000_validate_prf    (config.prf,      &dw1000_radio.prf,      NULL);
+    dw1000_validate_pcode  (config.tx_pcode, &dw1000_radio.tx_pcode, NULL);
+    dw1000_validate_pcode  (config.rx_pcode, &dw1000_radio.rx_pcode, NULL);
+    dw1000_validate_plen   (config.tx_plen,  &dw1000_radio.tx_plen,  NULL);
+    dw1000_validate_pac    (config.rx_pac,   &dw1000_radio.rx_pac,   NULL);
+#if DW1000_WITH_PROPRIETARY_SFD
+    dw1000_radio.proprietary.sfd = config.sfd_decawave ? 1 : 0;
+#endif
+    if (!dw1000_radio_is_valid(&dw1000_radio)) {
+	DIE("the driver refuses this combination: a preamble code must suit"
+	    " the PRF (1..8 at 16 MHz, 9..24 at 64 MHz, UM 10.5)");
+    }
+
     /* Initialize network interface
      *
      * Only when there is somewhere to forward to. With -w and no
@@ -551,19 +575,12 @@ int main(int argc, const char* argv[]) {
 
     /* Initialize UWB
      */
-    /* Metres on the command line, ticks in the chip, and the conversion
-     * used to be computed and thrown away. cmdline_parse() validates with
-     * a NULL out parameter, so what landed here was the raw metres: an
-     * explicit --tx_delay 154.6 set 154 ticks, about 0.7 m, instead of
-     * 32951. The defaults (UINT16_MAX) mean "leave the driver's own
-     * alone" and must not be converted, which is what the guard is for.
-     */
-    if (config.tx_delay != UINT16_MAX)
-	dw1000_validate_antenna_delay(config.tx_delay,
-				      &uwb_config.antenna.tx_delay, NULL);
-    if (config.rx_delay != UINT16_MAX)
-	dw1000_validate_antenna_delay(config.rx_delay,
-				      &uwb_config.antenna.rx_delay, NULL);
+    /* Device ticks, one way, as the chip holds them and as the probe
+     * takes them: cmdline_parse() has already converted the metres of the
+     * old --tx_delay/--rx_delay. -1, the default, leaves the driver's own
+     * (uwb_dw1000.c) alone. */
+    uwb_config.antenna.tx_delay = (int32_t)config.tx_antd;
+    uwb_config.antenna.rx_delay = (int32_t)config.rx_antd;
 
     uwb_config.dblbuff = config.no_dblbuff ? false : true;
 
@@ -582,19 +599,6 @@ int main(int argc, const char* argv[]) {
      * that then cannot say when anything arrived or how strongly.
      */
     capture_init(uwb_capture_ops(config.no_metadata ? false : true));
-
-    /* Already checked, with the message, in cmdline_parse(); this is the
-     * pass that writes the encoded values into the radio. The combination
-     * they make is not checked here and must not be: that is
-     * dw1000_configure()'s job, by way of uwb_config_dw1000_radio() below.
-     */
-    dw1000_validate_channel(config.channel,  &dw1000_radio.channel,  NULL);
-    dw1000_validate_bitrate(config.bitrate,  &dw1000_radio.bitrate,  NULL);
-    dw1000_validate_prf    (config.prf,      &dw1000_radio.prf,      NULL);
-    dw1000_validate_pcode  (config.tx_pcode, &dw1000_radio.tx_pcode, NULL);
-    dw1000_validate_pcode  (config.rx_pcode, &dw1000_radio.rx_pcode, NULL);
-    dw1000_validate_plen   (config.tx_plen,  &dw1000_radio.tx_plen,  NULL);
-    dw1000_validate_pac    (config.rx_pac,   &dw1000_radio.rx_pac,   NULL);
 
     if (uwb_config_dw1000_radio(&dw1000_radio) < 0) {
 	DIE("selected UWB configuration is invalid");

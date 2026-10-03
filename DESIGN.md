@@ -230,10 +230,11 @@ silently stopped compiling a file.
 `make check` is preflight: it runs none of the suite below, and needs
 nothing built.
 
-| Check            | Proves                                  |
-| ---------------- | ---------------------------------------- |
-| `check-options`  | every option combination still compiles |
-| `check-manifest` | `dw1000.cmake` still describes the tree |
+| Check                 | Proves                                      |
+| --------------------- | ------------------------------------------- |
+| `check-options`       | every option combination still compiles     |
+| `check-manifest`      | `dw1000.cmake` still describes the tree     |
+| `check-radio-options` | the sniffer takes the probe's radio options |
 
 None of them needs hardware, which is the point: a check that needs a
 DW1000 on a bench is a check that does not run.

@@ -59,27 +59,56 @@ cmdline_parse(struct config *config, int argc, const char* argv[])
         { "interface",       'i', POPT_ARG_STRING | POPT_ARGFLAG_SHOW_DEFAULT,
 	  &config->ifname,   'i', "ethernet interface", NULL },
 
-	// Radio configuration
+	// Radio configuration: the probe's spelling and units, option for
+	// option (probe/include/dw1000/probe/radio.h), which
+	// tests/check-radio-options.sh holds this table to.
 	{ "channel",         'c', POPT_ARG_INT,
-	  &config->channel,   1 , "channel", NULL },
+	  &config->channel,   1 , "channel (default: 5)", NULL },
 	{ "bitrate",         'b', POPT_ARG_INT,
-	  &config->bitrate,   2 , "bitrate (in kbps)", NULL },
+	  &config->bitrate,   2 , "bitrate, in kbps (default: 6800)", NULL },
 	{ "prf",             'p', POPT_ARG_INT,
-	  &config->prf,       3 , "pulse rate frequency (in MHz)", NULL },
-	{ "tx_plen",          0 , POPT_ARG_INT,
-	  &config->tx_plen,   4 , "preamble length", NULL },
-	{ "rx_pac",           0 , POPT_ARG_INT,
-	  &config->rx_pac,    5 , "preamble accumulation", NULL },
-	{ "tx_pcode",         0 , POPT_ARG_INT,
+	  &config->prf,       3 , "pulse repetition frequency, in MHz"
+	  " (default: 64)", NULL },
+	{ "preamble",         0 , POPT_ARG_INT,
+	  &config->tx_plen,   4 , "preamble length, in symbols"
+	  " (default: 128)", NULL },
+	{ "pac",              0 , POPT_ARG_INT,
+	  &config->rx_pac,    5 , "preamble acquisition chunk, in symbols"
+	  " (default: 8)", NULL },
+	{ "code",             0 , POPT_ARG_INT,
+	  &config->code_arg,  8 , "preamble code, both ways (default: 10)",
+	  NULL },
+	{ "tx-code",          0 , POPT_ARG_INT,
 	  &config->tx_pcode,  6 , "TX preamble code", NULL },
-	{ "rx_pcode",         0 , POPT_ARG_INT,
+	{ "rx-code",          0 , POPT_ARG_INT,
 	  &config->rx_pcode,  7 , "RX preamble code", NULL },
+	{ "sfd",              0 , POPT_ARG_STRING,
+	  &config->sfd_arg,   9 , "decawave or standard (default: decawave)",
+	  NULL },
 
 	// UWB hardware configuration
-	{ "tx_delay",         0 , POPT_ARG_FLOAT,
-	  &config->tx_delay, 21 , "antenna TX delay (in meters)", NULL },
-	{ "rx_delay",         0 , POPT_ARG_FLOAT,
-	  &config->rx_delay, 22 , "antenna RX delay (in meters)", NULL },
+	{ "antenna-delay",    0 , POPT_ARG_LONG,
+	  &config->antd_arg, 23 , "antenna delay, both ways, in device ticks"
+	  " (default: 16475)", NULL },
+	{ "tx-antenna-delay", 0 , POPT_ARG_LONG,
+	  &config->antd_arg, 24 , "antenna TX delay, in device ticks", NULL },
+	{ "rx-antenna-delay", 0 , POPT_ARG_LONG,
+	  &config->antd_arg, 25 , "antenna RX delay, in device ticks", NULL },
+
+	// The spellings this program had before it took the probe's,
+	// kept working and kept out of --help.
+	{ "tx_plen",          0 , POPT_ARG_INT | POPT_ARGFLAG_DOC_HIDDEN,
+	  &config->tx_plen,   4 , NULL, NULL },
+	{ "rx_pac",           0 , POPT_ARG_INT | POPT_ARGFLAG_DOC_HIDDEN,
+	  &config->rx_pac,    5 , NULL, NULL },
+	{ "tx_pcode",         0 , POPT_ARG_INT | POPT_ARGFLAG_DOC_HIDDEN,
+	  &config->tx_pcode,  6 , NULL, NULL },
+	{ "rx_pcode",         0 , POPT_ARG_INT | POPT_ARGFLAG_DOC_HIDDEN,
+	  &config->rx_pcode,  7 , NULL, NULL },
+	{ "tx_delay",         0 , POPT_ARG_FLOAT | POPT_ARGFLAG_DOC_HIDDEN,
+	  &config->delay_m_arg, 21, NULL, NULL },
+	{ "rx_delay",         0 , POPT_ARG_FLOAT | POPT_ARGFLAG_DOC_HIDDEN,
+	  &config->delay_m_arg, 22, NULL, NULL },
 
 	// Capture and output
 	{ "write",           'w', POPT_ARG_STRING,
@@ -88,8 +117,10 @@ cmdline_parse(struct config *config, int argc, const char* argv[])
 	  &config->raw,       0 , "send bare frames, without the header", NULL },
 	{ "no-metadata",      0 , POPT_ARG_NONE,
 	  &config->no_metadata, 0, "do not read timestamp/power per frame", NULL },
-	{ "no-dblbuff",       0 , POPT_ARG_NONE,
-	  &config->no_dblbuff,  0, "single buffered receive", NULL },
+	{ "dblbuff",          0 , POPT_ARG_VAL,
+	  &config->no_dblbuff,  0, "double buffered receive (default)", NULL },
+	{ "no-dblbuff",       0 , POPT_ARG_VAL,
+	  &config->no_dblbuff,  1, "single buffered receive", NULL },
 	{ "count",            0 , POPT_ARG_LONG,
 	  &config->count,    'n', "stop after N frames", NULL },
 	{ "stats",            0 , POPT_ARG_INT,
@@ -201,13 +232,52 @@ cmdline_parse(struct config *config, int argc, const char* argv[])
 	case  7:
 	    CMDLINE_DW1000_VALIDATE(pcode,   config->rx_pcode, &errmsg);
 	    break;
+	case  8:
+	    CMDLINE_DW1000_VALIDATE(pcode,   config->code_arg, &errmsg);
+	    config->tx_pcode = config->rx_pcode = config->code_arg;
+	    break;
+	case  9:
+	    if (strcmp(config->sfd_arg, "standard") == 0) {
+		config->sfd_decawave = 0;
+	    } else if (strcmp(config->sfd_arg, "decawave") == 0) {
+#if DW1000_WITH_PROPRIETARY_SFD
+		config->sfd_decawave = 1;
+#else
+		DIE("uwb: the Decawave SFD needs a driver built with "
+		    "DW1000_WITH_PROPRIETARY_SFD");
+#endif
+	    } else {
+		DIE("uwb: --sfd is decawave or standard");
+	    }
+	    break;
 
+	/* Ticks, one way, any 16-bit value: what the chip holds, and what
+	 * the probe takes, so a delay read off one tool's output can be
+	 * given to the other unchanged. */
+	case 23:
+	case 24:
+	case 25:
+	    if (config->antd_arg < 0 || config->antd_arg > 65535) {
+		DIE("uwb: an antenna delay is device ticks, 0 .. 65535");
+	    }
+	    if (c != 25) config->tx_antd = config->antd_arg;
+	    if (c != 24) config->rx_antd = config->antd_arg;
+	    break;
+
+	/* The old spellings, in metres, converted here so that everything
+	 * after this sees ticks. */
 	case 21:
-	    CMDLINE_DW1000_VALIDATE(antenna_delay, config->tx_delay, &errmsg);
+	case 22: {
+	    uint16_t ticks;
+
+	    if (! dw1000_validate_antenna_delay(config->delay_m_arg, &ticks,
+						&errmsg)) {
+		DIE("uwb: %s", errmsg);
+	    }
+	    if (c == 21) config->tx_antd = ticks;
+	    else         config->rx_antd = ticks;
 	    break;
-	case 22:
-	    CMDLINE_DW1000_VALIDATE(antenna_delay, config->rx_delay, &errmsg);
-	    break;
+	}
 	}
 
     }

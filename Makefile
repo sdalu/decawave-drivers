@@ -152,7 +152,7 @@ portcheck:
 
 # --- checks -----------------------------------------------------------
 
-check: check-options check-manifest		## compile the option matrix (~5 min), and check the manifest
+check: check-options check-manifest check-radio-options	## compile the option matrix (~5 min), check the manifest and the shared radio options
 
 # The matrix is 2^n over the options, so ten of them is 1024 compiles and
 # a few minutes; the script reports progress as it goes, and an eleventh
@@ -163,6 +163,9 @@ check-options:					## compile the core over every option combination
 
 check-manifest:					## check dw1000.cmake still describes the tree
 	@sh tests/check-manifest.sh
+
+check-radio-options:				## check the sniffer takes the probe's radio options
+	@sh tests/check-radio-options.sh
 
 # --- building ---------------------------------------------------------
 
@@ -362,7 +365,8 @@ clean:						## remove build products
 distclean: clean				## clean, plus the generated documentation
 	rm -rf doc/generated
 
-.PHONY: help portcheck check check-options check-manifest tests-validate \
+.PHONY: help portcheck check check-options check-manifest check-radio-options \
+	tests-validate \
 	lib tests tests-emulation tests-probe tests-sniffer \
 	version version-full tag ports options sources doc clean distclean \
 	state validate

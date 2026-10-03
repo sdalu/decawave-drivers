@@ -20,18 +20,23 @@ and SPI.
 Usage: uwb-sniffer [OPTIONS]* [<dst_macaddr>]
   -P, --prototype=INT        ethernet prototype (default: 9999)
   -i, --interface=STRING     ethernet interface (default: first valid)
-  -c, --channel=INT          channel                     (default: 5)
-  -b, --bitrate=INT          bitrate (in kbps)           (default: 6800)
-  -p, --prf=INT              pulse rate frequency in MHz (default: 64)
-      --tx_plen=INT          preamble length             (default: 128)
-      --rx_pac=INT           preamble accumulation       (default: 8)
-      --tx_pcode=INT         TX preamble code            (default: 10)
-      --rx_pcode=INT         RX preamble code            (default: 10)
-      --tx_delay=FLOAT       antenna TX delay (in meters)
-      --rx_delay=FLOAT       antenna RX delay (in meters)
+  -c, --channel=INT          channel (default: 5)
+  -b, --bitrate=INT          bitrate, in kbps (default: 6800)
+  -p, --prf=INT              pulse repetition frequency, in MHz (default: 64)
+      --preamble=INT         preamble length, in symbols (default: 128)
+      --pac=INT              preamble acquisition chunk, in symbols (default: 8)
+      --code=INT             preamble code, both ways (default: 10)
+      --tx-code=INT          TX preamble code
+      --rx-code=INT          RX preamble code
+      --sfd=STRING           decawave or standard (default: decawave)
+      --antenna-delay=LONG   antenna delay, both ways, in device ticks
+                             (default: 16475)
+      --tx-antenna-delay=LONG  antenna TX delay, in device ticks
+      --rx-antenna-delay=LONG  antenna RX delay, in device ticks
   -w, --write=STRING         write pcapng to FILE (- for stdout)
       --raw                  send bare frames, without the header
       --no-metadata          do not read timestamp/power per frame
+      --dblbuff              double buffered receive (default)
       --no-dblbuff           single buffered receive
       --count=LONG           stop after N frames (default: no limit)
       --stats=INT            report counters every N seconds (default: off)
@@ -42,6 +47,15 @@ Usage: uwb-sniffer [OPTIONS]* [<dst_macaddr>]
   -v, --verbose              verbose mode
   -V, --version              show version information
 ```
+
+The radio options are the probe's, with the same names, values and
+units (`probe/README.md`), so a radio set up for a probe run is given to
+the sniffer as it stands, antenna delays in ticks included. `make check`
+holds the two to each other. The spellings this program had before
+(`--tx_plen`, `--rx_pac`, `--tx_pcode`, `--rx_pcode`, and `--tx_delay` /
+`--rx_delay` in metres) still work and are left out of `--help`.
+`--sfd=standard` is how to hear nodes that do not use the Decawave SFD:
+with it on, the receiver hears only the Decawave sequence.
 
 `<dst_macaddr>` is now optional: give it to send frames over ethernet, `-w`
 to write pcapng, or both. At least one of the two is required, since a
@@ -266,7 +280,7 @@ much.
 ```sh
 uwb-sniffer -i eth1 -P 6666                                 \
     -c 5 -b 6800 -p 64                                      \
-    --tx_pcode 10 --rx_pcode 10 --tx_plen 128 --rx_pac 8     \
+    --code=10 --preamble=128 --pac=8                         \
     dc:4a:3e:06:6f:7b
 ```
 

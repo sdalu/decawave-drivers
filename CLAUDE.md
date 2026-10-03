@@ -23,7 +23,8 @@ applications that consume it: a ranging probe and a UWB sniffer.
 ## Gate
 
 Gate: `make check && make tests` — `check` is preflight (the option
-matrix and the manifest) and runs none of the project's code; `tests`
+matrix, the manifest, and the radio options the probe and the sniffer
+share) and runs none of the project's code; `tests`
 builds `tests-validate`, `tests-emulation`, `tests-probe` and
 `tests-sniffer` and runs them. `make check WERROR=yes
 && make tests WERROR=yes` is the CI form (`DESIGN.md`).
