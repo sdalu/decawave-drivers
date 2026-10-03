@@ -308,39 +308,47 @@ Each item is something the bench needed and could not get from a board.
 
 ## The exchange
 
-**Two exchanges, not one.** Single-sided two-way ranging (two frames)
-and double-sided (four frames), selected by a parameter, with the record
-naming which produced it in `exchange=ss` or `exchange=ds`.
+**Two exchanges, not one.** Single-sided two-way ranging and
+double-sided, selected by a parameter, with the record naming which
+produced it in `exchange=ss` or `exchange=ds`.
 
-The four-frame exchange is the Ruby roles' `twr_init` / `twr_resp`,
-specified by reference to a working implementation, which is the point
-of choosing it. The two-frame one has no counterpart there and is this
-instrument's own.
+The double-sided estimators are those of the Ruby roles' `twr_init` /
+`twr_resp`, the independent cross-check, computed over the same six
+instants. The frames that carry those instants are this instrument's
+own.
 
 ```text
    initiator                                   responder
       │ ── POLL ────────────────────────────────▸ │   t_sp / t_rp
       │ ◂──────────────────────────── RESPONSE ── │   t_sr / t_rr
       │ ── FINAL ───────────────────────────────▸ │   t_sf / t_rf
-      │      carries t_sp, t_rr, echo of t_sr     │
-      │ ── REPORT ──────────────────────────────▸ │
-      │      carries t_sf + the initiator's sensors
+      │                                           │   (pause)
+      │ ◂────────────────────────────── REPORT ── │
+      │   carries t_rp, t_sr, t_rf + the responder's sensors
 ```
 
 Three consequences that are built in, not discovered:
 
-- **Six instants, three of them carried in frames.** `t_rp` and `t_rf`
-  are the responder's own receive timestamps and `t_sr` its own send
-  timestamp; `t_sp` and `t_rr` travel in the FINAL payload (offsets 0
-  and 1, with an echo of `t_sr` at offset 2), and `t_sf` travels in the
-  REPORT payload at offset 0.
-- **The REPORT frame is a sensor carrier.** The initiator's
-  temperature, voltage, receive power and first-path power ride in the
-  REPORT payload at offsets 1, 2, 3 and 4. Reporting *both* dies'
-  readings is therefore a wire-format requirement, not two local reads.
-- **Only the responder emits the record.** The initiator emits none.
-  The responder holds both ends' numbers because the REPORT brought
-  them.
+- **Six instants, three of them carried in a frame.** `t_sp`, `t_rr`
+  and `t_sf` are the initiator's own; `t_rp`, `t_sr` and `t_rf` are the
+  responder's, and travel in REPORT. POLL, RESPONSE and FINAL carry no
+  payload. A frame cannot carry its own transmit instant, so the
+  instants have to go in a frame of their own, and REPORT is that frame.
+- **REPORT is untimed, so it waits.** It takes no timestamp, so the
+  responder sends it after a fixed pause (`PROBE_EXCHANGE_REPORT_DELAY_US`,
+  2 ms) that leaves the initiator all the time it needs to have its
+  receiver up, on any platform and in either receive mode. Every
+  combination of single and double buffering at the two ends resolves.
+- **Only the initiator emits the record.** It holds both ends' numbers
+  because REPORT brought them, and the responder's temperature, voltage,
+  receive power and first-path power ride in REPORT beside its instants,
+  so reporting *both* dies' readings is a wire-format requirement, not
+  two local reads. The responder emits `READY` and a `STATS` line of its
+  own, and no records.
+
+The price of recording at the initiator: every estimate needs `t_sr`,
+which only REPORT brings, so an attempt whose REPORT is lost has no
+distance at all.
 
 ### The single-sided exchange, and why three estimates
 
@@ -348,10 +356,13 @@ Three consequences that are built in, not discovered:
    initiator                                   responder
       │ ── POLL ────────────────────────────────▸ │   t_sp / t_rp
       │ ◂──────────────────────────── RESPONSE ── │   t_sr / t_rr
+      │ ◂────────────────────────────── REPORT ── │
+      │   carries t_rp, t_sr + the responder's sensors
 ```
 
-Four instants, one estimate. It is worth having for two reasons: it is
-half the airtime and half the chances to lose a frame, and it is the
+Four instants, one estimate, and three frames: REPORT carries the
+responder's two instants as it does in the four-frame exchange. It is worth having for two reasons: it is
+less airtime and fewer chances to lose a frame, and it is the
 estimator whose error is *most* informative, because what wrecks it is
 exactly the thing double-sided ranging exists to cancel.
 
@@ -413,21 +424,23 @@ filters on it. Like the other departure below, it is stated in the
 record rather than discovered from a distance that makes no sense.
 
 **Start ordering.** The responder prints `READY` before listening, and
-the initiator is not started until it appears. The initiator then
-discards a stated number of warm-up exchanges before the counted run
+the initiator is started after it. The initiator then runs a stated
+number of warm-up exchanges, unrecorded, before the counted run
 begins. A responder that is not yet listening loses the opening
 exchanges, which is precisely the shape of result that made counts
 untrustworthy in the first place.
 
-**The responder's wait is bounded.** The first POLL gets sixty seconds
-and each one after it two, both overridable at compile time
-(`PROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US`,
+**The responder's wait is bounded, and ends its run.** The first POLL
+gets sixty seconds and each one after it two, both overridable at
+compile time (`PROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US`,
 `PROBE_EXCHANGE_POLL_TIMEOUT_US`), which is how the gate proves a run
-nobody answers ends rather than hangs. An unbounded first wait is the
-one failure this instrument cannot report: every other produces a
-record with a status, while that one produces absence, and a responder
-that is never polled is then indistinguishable from one that was never
-started.
+nobody polls ends rather than hangs. A wait that runs out ends the
+run: before any POLL it means nobody came, after one that the
+initiator has finished. So the responder's count is a ceiling, and need
+not be the initiator's count plus its warm-up; and its `STATS` line,
+with `of=` the POLLs it answered, says which it was. An unbounded wait
+would be the one failure this instrument could not report: absence,
+indistinguishable from a responder that was never started.
 
 ## The record
 

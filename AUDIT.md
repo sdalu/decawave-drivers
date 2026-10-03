@@ -217,6 +217,41 @@ bullet above; it is still uncovered.
   available. One pair, one geometry, one session: it does not
   generalise on its own.
 
+### Measured: each end's buffering moves the distance, and the two add
+
+- **Measured** 2026-10-03, rpi-c initiator to rpi-d responder, channel
+  5, the same design as the entry above: 4 rounds round-robin over the
+  four combinations, 30 exchanges each. The probe's exchange had
+  changed in between, and that is what makes this measurement possible:
+  REPORT now goes from responder to initiator after a 2 ms pause, so no
+  end has to hear a frame that follows another inside its read-out
+  window. The three timed frames (POLL, RESPONSE, FINAL) and the six
+  instants are as before.
+
+  | combination | resolved | `asym_mm` | sd | shift from `DD` |
+  | :---------- | :------- | --------: | ---: | --------------: |
+  | DD | 120/120 | 949.1 | 18.5 | (reference) |
+  | DS | 120/120 | 930.8 | 16.1 | −18.3 mm, 8.2 sigma |
+  | SD | 120/120 | 922.4 | 18.8 | −26.7 mm, 11.1 sigma |
+  | SS | 120/120 | 900.1 | 21.3 | −49.0 mm, 19 sigma |
+
+  Written `<initiator><responder>`, `D` double and `S` single buffered,
+  sd quoted. The per-round means hold their order in every round (`DD`
+  944.1 to 952.3, `SS` 892.5 to 917.6).
+
+- **Every combination resolves**, the single-buffered responder
+  included: the 0 of 120 above belonged to the old frame order, not to
+  single buffering as such.
+
+- **Each end moves `asym_mm` by about two centimetres, and the two
+  shares add**: 18.3 plus 26.7 is 45.0 against 49.0 measured together.
+  The initiator's share, 26.7 mm, agrees with the 23.0 mm of
+  2026-09-17. Both ends switched together give about 5 cm, the order of
+  the 6 to 10 cm figure remembered from earlier, which was presumably
+  that comparison. Which mode is closer to the true distance is not
+  established: that needs the calibration of `INVESTIGATE.md` entry 3.
+  One pair, one geometry, one session.
+
 ### Settled: the overrun recovery works, and the test could not see it
 
 Carried here on 2026-09-16 as a live defect: ruby-dw1000's

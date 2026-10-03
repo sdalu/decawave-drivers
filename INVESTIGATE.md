@@ -146,17 +146,17 @@ from double to single buffered moves the asymmetric estimator by
 +23 mm at 9.7 sigma, consistent across four rounds. The 6 to 10 cm
 figure remembered from earlier was not reproduced.
 
-**Blocked.** The responder cannot be varied: single buffered, it is
-deaf during read-out and resolves no exchange at all (0 of 240). So
-the both-ends-single comparison the earlier figure presumably came
-from cannot be taken with the probe as it stands.
+**Unblocked, 2026-10-03.** The probe's REPORT now goes from responder
+to initiator after a pause, so every combination resolves, and the
+comparison was taken (AUDIT.md, "each end's buffering moves the
+distance, and the two add"): each end moves `asym_mm` by about 2 cm,
+the shares add, and both ends together give about 5 cm, which accounts
+for the earlier figure in order of magnitude. Both modes carry a
+shift; the question this entry asked is answered.
 
-**Next.** Either accept the 2.3 cm as the initiator's share and stop,
-or give the probe a responder mode with a longer slot before the
-REPORT so a single-buffered responder can hear it, which changes the
-exchange timing and so the thing being measured. The first is
-recommended; the entry stays open only because the earlier figure has
-not been accounted for.
+**Next.** Which mode is closer to the truth needs a calibrated
+distance, which is entry 3. Until then, compare runs taken in the same
+mode.
 
 ## 5. RXAUTR's re-enable latency
 

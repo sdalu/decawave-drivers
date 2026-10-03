@@ -15,10 +15,10 @@
  * Chip mechanism, not host or bench: the wire frame, the four-frame
  * state machine and the two roles live here, driven through
  * <dw1000/dw1000.h> and the host primitives in <dw1000/probe/port.h>.
- * Nothing here prints: dw1000_probe_port_emit() is called only for
- * lines that are safe to emit (the READY line, and whatever @p emit_line
- * is handed after a run has finished; see dw1000_probe_twr_resp_run()
- * below), and nothing here knows a shell, a console or an argv. An
+ * Nothing here prints to an operator: dw1000_probe_port_emit() is called
+ * only for lines that are safe to emit (SETUP and READY, before anything
+ * is in flight), everything else goes to the caller's @p emit_line, and
+ * nothing here knows a shell, a console or an argv. An
  * application reports what these return however it reports anything
  * else.
  *
@@ -37,86 +37,85 @@
 /*===========================================================================*/
 
 /**
- * @brief What one twr_resp run produced.
+ * @brief What one twr_init run produced.
  *
- * The role itself prints nothing; these counts are what an application
- * reports to its own operator, in whatever form that takes: a shell
- * line, an argv-driven CLI's stdout, a log.
+ * The roles print nothing to an operator; these counts are what an
+ * application reports, in whatever form it reports anything.
  */
-struct dw1000_probe_twr_resp_result {
-    uint16_t attempted;
+struct dw1000_probe_twr_init_result {
+    uint16_t attempted;     /**< counted exchanges only; warm-up excluded */
     uint16_t resolved;      /**< of @p attempted, how many reached
                                  DW1000_PROBE_STATUS_OK               */
 };
 
 /**
- * @brief What one twr_init run produced.
+ * @brief What one twr_resp run produced.
  */
-struct dw1000_probe_twr_init_result {
-    uint32_t attempted;     /**< counted exchanges only; warm-up excluded */
-    uint32_t reached;       /**< of @p attempted, how many reached the
-                                 point of sending FINAL (single-sided) or
-                                 REPORT (four-frame). Reaching the point
-                                 is not the same as the frame arriving:
-                                 see @p report_failed                     */
-    uint32_t report_failed; /**< of @p reached, how many REPORT sends the
-                                 driver did not confirm. Counted because
-                                 this send's result used to be discarded,
-                                 and a responder reporting `no-report`
-                                 could not be told apart from an
-                                 initiator that never got the frame out   */
+struct dw1000_probe_twr_resp_result {
+    uint32_t polled;        /**< POLLs answered with a RESPONSE attempt,
+                                 the initiator's warm-up included        */
+    uint32_t answered;      /**< of @p polled, how many REPORTs left     */
+    uint32_t report_failed; /**< REPORT sends the driver did not confirm:
+                                 counted so that "the initiator did not
+                                 hear it" and "it never left" are told
+                                 apart, the initiator's record saying
+                                 `no-report` either way                  */
 };
 
 /*===========================================================================*/
 /* Roles                                                                     */
 /*===========================================================================*/
 
+/*
+ * THE EXCHANGE, and which end records it. Four frames (two-frame,
+ * `ss`, skips FINAL):
+ *
+ *     POLL      initiator -> responder    t_sp / t_rp
+ *     RESPONSE  responder -> initiator    t_sr / t_rr
+ *     FINAL     initiator -> responder    t_sf / t_rf
+ *     REPORT    responder -> initiator    t_rp, t_sr, t_rf, the
+ *                                         responder's die and powers
+ *
+ * The INITIATOR records: it holds its own three instants and receives the
+ * responder's three in REPORT, so the `TWR` line per attempt and the
+ * closing `STATS` line are its. The responder answers, and emits the
+ * `READY` line before listening and a `STATS` line of its own at the end.
+ * Both lines go to @p emit_line, never to dw1000_probe_port_emit()
+ * directly: dw1000_probe_port_emit() may be called only between runs (see
+ * <dw1000/probe/port.h>), never between the frames of an exchange, where
+ * a write that blocked would land in the measurement. Where that
+ * buffering lives, and how big it is, is a host memory-budget decision
+ * this library does not make, which is why @p emit_line is a callback
+ * rather than a library-owned buffer. Both roles also emit their `SETUP`
+ * line (dw1000_probe_radio_emit()) directly, first, before anything is in
+ * flight.
+ */
+
 /**
- * @brief Responder role: listen for @p count exchanges.
+ * @brief Responder role: answer up to @p count exchanges.
  *
- * Emits the `SETUP` line (dw1000_probe_radio_emit()) and the `READY`
- * line directly (dw1000_probe_port_emit(), before any exchange is in
- * flight, so that is safe on its own) and then, for each
- * attempt, formats one `TWR` line and hands it to @p emit_line, never
- * to dw1000_probe_port_emit() directly. dw1000_probe_port_emit() may be
- * called only between runs (see <dw1000/probe/port.h>), never between
- * the frames of an exchange; a write that blocked there would land in
- * the measurement. Where that buffering lives, and how big it is, is a
- * host memory-budget decision this library does not make: an
- * embedded application typically reuses one fixed static buffer across
- * every command that needs it (tx/rx/twr_resp alike), which is why
- * @p emit_line is a callback rather than a library-owned buffer: it
- * lets the caller supply that memory instead of this library
- * duplicating it. @p emit_line is also handed the closing `STATS` line.
- * The caller decides when it is safe to actually flush what it
- * buffered to dw1000_probe_port_emit(), immediately after this
- * function returns is that time, since the run is then over.
+ * Emits `SETUP` and `READY` directly, then answers each POLL with a
+ * RESPONSE and, once FINAL is in (or at once, single-sided), a REPORT
+ * after a fixed pause; and hands its closing `STATS` line to
+ * @p emit_line, `of=` being the POLLs it answered and `completed=` the
+ * REPORTs that left.
  *
- * IT DOES RETURN, which was not always so and is worth stating because
- * it bounds how long a caller can be held. Every wait in the run has a
- * deadline, the first POLL's being much the longest (tens of seconds,
- * to cover a harness's head start); an attempt whose deadline passes
- * becomes a record with DW1000_PROBE_STATUS_NO_POLL rather than a wait
- * that cannot end. A run nobody answers therefore costs its first
- * attempt the long budget and each one after it the short one, and then
- * reports @p count no-poll records and a STATS line carrying the
- * reception account: what the receiver delivered, and why none of it
- * was accepted.
+ * IT DOES RETURN. The wait for a POLL is bounded, long until the first
+ * POLL arrives (tens of seconds, a harness's head start) and short after
+ * it, and a wait that ends with nothing ends the run: before any POLL it
+ * means nobody came, after one that the initiator has finished. So
+ * @p count is a ceiling, and need not be the initiator's count plus its
+ * warm-up.
  *
  * @param dw         the driver instance
- * @param count      how many exchanges to answer
- * @param ss         true for the two-frame single-sided estimate only
- *                   (still sends FINAL, stops there; see probe/src/
- *                   exchange.c's file comment on why)
- * @param own_addr   this node's address; RESPONSE answers whoever sent
- *                   the POLL, not a fixed peer, so @p peer_addr is
- *                   unused here and kept only for signature symmetry
- *                   with dw1000_probe_twr_init_run()
- * @param peer_addr  unused (see above)
+ * @param count      the most exchanges to answer
+ * @param ss         true for the two-frame single-sided exchange; the
+ *                   initiator must agree
+ * @param own_addr   this node's address
+ * @param peer_addr  unused: RESPONSE answers whoever sent the POLL; kept
+ *                   for signature symmetry with dw1000_probe_twr_init_run()
  * @param node_name  the origin `node=` every emitted line carries
- * @param emit_line  called once per finished line (never NULL): the
- *                   `TWR` line per attempt, then the closing `STATS`
- *                   line
+ * @param emit_line  called with the closing `STATS` line (never NULL)
  */
 struct dw1000_probe_twr_resp_result
 dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
@@ -126,22 +125,23 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
 
 /**
  * @brief Initiator role: run @p warmup uncounted exchanges, then
- * @p count counted ones.
+ * @p count counted ones, and record each counted one.
  *
- * Emits the `SETUP` line before the first exchange, directly, and no
- * other: the initiator never holds both ends' numbers (see
- * <dw1000/probe/record.h>'s note on why the responder is the one that
- * emits a record), so there is no line to buffer or hand to a
- * callback here.
+ * Emits `SETUP` directly, then hands @p emit_line one `TWR` line per
+ * counted attempt and the closing `STATS` line, `of=` being the counted
+ * attempts and `completed=` those that resolved. Warm-up attempts are
+ * run and not recorded.
  *
  * @param warmup     exchanges run first and never counted, to get the
  *                   link (and the chip) into steady state
- * @param node_name  the origin `node=` the SETUP line carries
+ * @param node_name  the origin `node=` every emitted line carries
+ * @param emit_line  called once per finished line (never NULL)
  */
 struct dw1000_probe_twr_init_result
 dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
                           uint16_t own_addr, uint16_t peer_addr,
-                          const char *node_name);
+                          const char *node_name,
+                          void (*emit_line)(const char *line));
 
 /*===========================================================================*/
 /* Capture: filled by the application's radio event callbacks              */

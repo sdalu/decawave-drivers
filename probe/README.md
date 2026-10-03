@@ -115,13 +115,14 @@ with the OTP calibration references, the radio configuration read back,
 and the applied transmit power. A role run prints the configuration
 and the power first, so every run's log says what the radio was.
 
-Start the responder first; it waits, so the order matters:
+Start the responder first; it waits, so the order matters. Its count
+is a ceiling: it stops when the initiator does.
 
 ```sh
 # on the responder
-probe --node=rpi-d twr_resp 0xd000 0xc000 30
+probe --node=rpi-d twr_resp 0xd000 0xc000 1000
 
-# on the initiator
+# on the initiator: it records
 probe --node=rpi-c twr_init 0xc000 0xd000 30
 ```
 
@@ -137,17 +138,21 @@ probe --node=rpi-c --gap=10 tx 3000            # 30 s of frames
 
 ## Reading the output
 
-**The responder emits the records, not the initiator.** It is the end
+**The initiator emits the records, not the responder.** It is the end
 that ends up holding all six timestamps: it has its own three, and the
-initiator's arrive in the REPORT. A `TWR` line per exchange, then one
-`STATS` line:
+responder's arrive in the REPORT, the last frame, sent from responder
+to initiator. A `TWR` line per counted exchange, then one `STATS` line:
 
 ```text
 TWR seq=0 t_sp=… t_rp=… t_sr=… t_rr=… t_sf=… t_rf=…
-    sym_mm=882.1 asym_mm=766.7 … exchange=ds ss_mm=2263.8
-    status=ok node=rpi-d role=twr_resp run=-
-STATS role=twr_resp … completed=20 of=20 heard=60 drop_unwatched=0 …
+    sym_mm=927.9 asym_mm=949.1 … exchange=ds ss_mm=1402.3
+    status=ok node=rpi-c role=twr_init run=-
+STATS role=twr_init … completed=30 of=30 heard=70 drop_unwatched=0 …
 ```
+
+The responder prints `READY` before it listens and its own `STATS` line
+at the end, `of=` being the POLLs it answered (the warm-up included)
+and `completed=` the REPORTs it sent.
 
 Three distance estimates, all in millimetres, and they do not agree to
 the millimetre, which is the useful part:
@@ -189,8 +194,10 @@ completed`; `rx: N frames received over S s` and `rx: N frames REJECTED
 by the chip`, the second separating corrupt frames from no frames.
 
 A `status` other than `ok` says what was missing rather than dropping
-the exchange silently. `no-report` is the common one: the responder
-heard the POLL and the FINAL and never the REPORT. The `drop_*` counters
+the exchange silently: `no-response` (the POLL went, nothing came
+back), `no-report` (the exchange went through FINAL and the REPORT
+never arrived, which leaves no distance at all, every estimate needing
+the responder's instants). The `drop_*` counters
 on the `STATS` line separate "not heard" from "heard and rejected", and
 `drop_overrun` is the only way a frame this program received is lost;
 see the ring in `src/exchange.c`.
@@ -223,8 +230,12 @@ gaps alone and says afterwards if lines were lost.
   steady climb the rule must refuse), against `port/emulation`, with no
   radio at all.
 - **exchange**: the roles against `port/emulation`: that a responder
-  run nobody answers *ends* rather than hanging, and that its `STATS`
-  line says what it heard and why none of it was used; that `tx` is
+  run nobody polls *ends* rather than hanging, and that its `STATS`
+  line says what it heard and why none of it was used; that an
+  initiator, against a stand-in responder, resolves a four-frame and a
+  single-sided exchange and records the responder's numbers as REPORT
+  brought them, and records `no-report` and `no-response` when those
+  frames do not come; that `tx` is
   told of every frame it sent, that `rx` counts received and rejected
   frames apart, that `rx --settle` ends on the rule's verdict, and that
   `temperature` samples as asked; and that the radio options take what
@@ -242,12 +253,14 @@ coupling is gone: it builds with no Zephyr tree in sight.
 
 ## Two things to know before trusting a number
 
-**The responder must be double buffered.** Single-buffered it hears the
-POLL and the FINAL and never the REPORT, so nothing resolves and every
-record reads `no-report`. This is not a preference; see
-[`../AUDIT.md`](../AUDIT.md).
+**Buffering moves the answer.** Every combination of single and double
+buffering at the two ends resolves, and each end's buffering moves
+`asym_mm` by about two centimetres, about five with both ends switched
+together ([`../AUDIT.md`](../AUDIT.md) has the measurement). Which mode
+is right is not established, so the probe's absolute distances are not
+calibrated to better than a few centimetres; compare runs taken in the
+same mode.
 
-**The initiator's buffering moves the answer**, by a couple of
-centimetres on `asym_mm`. Small, consistent, and not yet attributed, so
-the probe's absolute distances are not calibrated to better than a
-few centimetres.
+**An antenna delay holds for one channel.** A run on another channel
+needs its own `--antenna-delay` for its absolute distances to mean
+anything.

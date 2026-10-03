@@ -6,24 +6,27 @@
  */
 
 /*
- * The responder's two promises about a link that is not working, driven
- * through port/emulation so that neither needs a chip:
+ * The two-node exchange, driven through port/emulation so that none of it
+ * needs a chip.
  *
- *  - IT ENDS. A twr_resp run whose POLL never arrives returns, having
- *    emitted one no-poll record per attempt and a STATS line. The wait
- *    for a POLL used to be handed UINT64_MAX, on the stated grounds that
- *    the bench waits for a READY line before starting the initiator,
- *    which it does not and cannot do. What that premise bought was a
- *    board that sat in the wait until its console session was cut,
- *    printing nothing at all: the observation that started this was a
- *    log holding a command echo, READY, and no further line. Silence is
- *    the one report an instrument must never produce, because it is
- *    indistinguishable from a crash.
+ * The responder's two promises about a link that is not working:
+ *
+ *  - IT ENDS. A twr_resp run whose POLL never arrives returns, with its
+ *    STATS line. Silence is the one report an instrument must never
+ *    produce, because it is indistinguishable from a crash.
  *
  *  - IT SAYS WHAT IT HEARD. "The receiver heard nothing" and "the
  *    receiver heard frames and rejected every one of them" are different
- *    defects with different fixes, and the STATS line now separates
- *    them: `heard=` against the seven `drop_` counts.
+ *    defects with different fixes, and the STATS line separates them:
+ *    `heard=` against the seven `drop_` counts.
+ *
+ * And the initiator, the end that records, against a stub that answers as
+ * a responder would: a four-frame exchange resolves and its record
+ * carries the responder's instants and readings as REPORT brought them, a
+ * sub-zero temperature and an absent power included; a two-frame
+ * exchange resolves with the instants it has; a lost REPORT is a
+ * `no-report` record with no distance; and an unanswered POLL is a
+ * `no-response` one.
  *
  * And the roles a node runs alone (<dw1000/probe/solo.h>), against the
  * same medium: that tx sends what it was asked and is told of every
@@ -204,7 +207,29 @@ struct stub {
     struct queued queue[QUEUE_MAX];
     unsigned      queued;
     unsigned      sent;
+
+    /* Standing in for a responder, for the initiator's steps: answer each
+     * POLL with a RESPONSE and, unless told not to, each FINAL (or, single
+     * sided, the re-arm after RESPONSE) with a REPORT. */
+    int           peer;          /* PEER_OFF, PEER_ANSWERS, PEER_NO_REPORT */
+    bool          peer_ss;
+    bool          report_pending;/* single-sided: on the next RX_CONFIG  */
+    uint8_t       pending_seq;
 };
+
+#define PEER_OFF        0
+#define PEER_ANSWERS    1
+#define PEER_NO_REPORT  2
+
+/* What the stub's REPORT says, and so what the initiator's record must
+ * show. The instants are 40-bit values with every byte different, so a
+ * word read from the wrong offset cannot pass for the right one. */
+#define PEER_T_RP   0x0102030405ull
+#define PEER_T_SR   0x0112131415ull
+#define PEER_T_RF   0x0122232425ull
+#define PEER_TEMP   (-150)          /* -1.50 degrees: sign extension */
+#define PEER_VBAT   3296
+#define PEER_RX     8125            /* -81.25 dBm                    */
 
 static uint64_t
 stub_stamp(struct stub *s)
@@ -243,6 +268,76 @@ stub_send(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 }
 
 static void
+put_u40le(uint8_t *p, uint64_t v)
+{
+    int i;
+
+    for (i = 0; i < 5; i++)
+	p[i] = (uint8_t)(v >> (8 * i));
+}
+
+/* Hand the node one frame, as the medium hands any: an RX packet raising
+ * the interrupt line. @p len excludes the FCS, which is appended here. */
+static void
+stub_deliver(struct stub *s, const struct sockaddr_un *peer,
+	     socklen_t peerlen, const uint8_t *frame, size_t len)
+{
+    struct dw1000_driver_iopkt out;
+    uint64_t stamp;
+    uint16_t fcs = crc16_ccitt(frame, len);
+
+    pthread_mutex_lock(&s->lock);
+    stamp = stub_stamp(s);
+    pthread_mutex_unlock(&s->lock);
+
+    memset(&out, 0, sizeof(out));
+    out.drvid        = 0;
+    out.type         = DW1000_RSVC_RX;
+    out.rx.timestamp = stamp;
+    memcpy(out.rx.frame, frame, len);
+    out.rx.frame[len]     = (uint8_t)(fcs & 0xff);
+    out.rx.frame[len + 1] = (uint8_t)(fcs >> 8);
+    stub_send(s, peer, peerlen, RSVC_UWB_IO, 0, 0, RSVC_HDR_FLG_INTERRUPT,
+	      &out, offsetof(struct dw1000_driver_iopkt, rx.frame) + len + 2);
+}
+
+/* The probe's 12-byte header, built here rather than shared with
+ * exchange.c on purpose: a test that built its frames with the code
+ * under test would agree with it however wrong both were. */
+static size_t
+peer_header(uint8_t *f, char type, uint8_t seq)
+{
+    memset(f, 0, 12);
+    f[0] = 'd'; f[1] = 'w'; f[2] = 'p';
+    f[3] = (uint8_t)type;
+    f[4] = seq;
+    f[5] = 0x39; f[6] = 0xc9;       /* dst: the initiator, OWN_ADDR  */
+    f[7] = 0x0b; f[8] = 0x00;       /* src: this stand-in, PEER_ADDR */
+    return 12;
+}
+
+/* REPORT: t_rp, t_sr, t_rf, temperature, voltage, receive power,
+ * first-path power, presence (bit 0 t_rf, bit 1 rx, bit 2 fp). The
+ * first-path power is left absent, to see it printed `-`. */
+static void
+peer_report(struct stub *s, const struct sockaddr_un *peer,
+	    socklen_t peerlen, uint8_t seq, bool with_rf)
+{
+    uint8_t f[12 + 8 * 5];
+    size_t  n = peer_header(f, 'T', seq);
+
+    put_u40le(&f[n + 0 * 5], PEER_T_RP);
+    put_u40le(&f[n + 1 * 5], PEER_T_SR);
+    put_u40le(&f[n + 2 * 5], with_rf ? PEER_T_RF : 0);
+    put_u40le(&f[n + 3 * 5], (uint64_t)(uint16_t)(int16_t)PEER_TEMP);
+    put_u40le(&f[n + 4 * 5], PEER_VBAT);
+    put_u40le(&f[n + 5 * 5], PEER_RX);
+    put_u40le(&f[n + 6 * 5], 0);
+    put_u40le(&f[n + 7 * 5], (with_rf ? 1u : 0u) | 2u);
+    stub_deliver(s, peer, peerlen, f, sizeof(f));
+}
+
+static void
 stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 	    uint64_t id, const uint8_t *payload, size_t paylen)
 {
@@ -272,15 +367,54 @@ stub_uwb_io(struct stub *s, const struct sockaddr_un *peer, socklen_t peerlen,
 		  RSVC_HDR_FLG_INTERRUPT, &out,
 		  offsetof(struct dw1000_driver_iopkt, tx_done.timestamp) +
 		  sizeof(out.tx_done.timestamp));
+
+	/* The stand-in responder. Only probe frames for it get an answer,
+	 * and each after a pause of the kind a real one takes, so that the
+	 * node's receiver (put up by WAIT4RESP) is listening for it. */
+	if (s->peer != PEER_OFF && memcmp(in.tx.frame, "dwp", 3) == 0) {
+	    uint8_t type = in.tx.frame[3];
+	    uint8_t seq  = in.tx.frame[4];
+
+	    if (type == 'P') {
+		uint8_t f[12];
+
+		dw1000_probe_port_sleep(1000);
+		stub_deliver(s, peer, peerlen, f, peer_header(f, 'R', seq));
+		if (s->peer_ss && s->peer == PEER_ANSWERS) {
+		    /* The initiator re-arms its receiver for REPORT: the
+		     * RX_CONFIG that follows delivers it. */
+		    pthread_mutex_lock(&s->lock);
+		    s->report_pending = true;
+		    s->pending_seq    = seq;
+		    pthread_mutex_unlock(&s->lock);
+		}
+	    } else if (type == 'F' && s->peer == PEER_ANSWERS) {
+		dw1000_probe_port_sleep(2000);
+		peer_report(s, peer, peerlen, seq, true);
+	    }
+	}
 	break;
     }
 
     case DW1000_RSVC_RX_CONFIG: {
 	struct queued q;
 	bool     deliver;
+	bool     report;
+	uint8_t  report_seq;
 	uint64_t stamp = 0;
 
 	stub_send(s, peer, peerlen, RSVC_UWB_IO, id, 0, 0, NULL, 0);
+
+	pthread_mutex_lock(&s->lock);
+	report            = s->report_pending;
+	report_seq        = s->pending_seq;
+	s->report_pending = false;
+	pthread_mutex_unlock(&s->lock);
+	if (report) {
+	    dw1000_probe_port_sleep(2000);
+	    peer_report(s, peer, peerlen, report_seq, false);
+	    break;
+	}
 
 	pthread_mutex_lock(&s->lock);
 	deliver = s->sent < s->queued;
@@ -572,47 +706,39 @@ corrupt_last(struct stub *s)
 /* Steps                                                                */
 /*----------------------------------------------------------------------*/
 
-/* A run nobody answers ends, and says so once per attempt. */
+/* A responder nobody polls ends, and says so in its STATS line. */
 static const char *
 step_silence(struct stub *s)
 {
     struct dw1000_probe_twr_resp_result r;
-    unsigned i;
 
     pthread_mutex_lock(&s->lock);
     s->queued = s->sent = 0;
+    s->peer   = PEER_OFF;
     pthread_mutex_unlock(&s->lock);
 
     nlines = 0;
     r = dw1000_probe_twr_resp_run(&dw, 3, false, OWN_ADDR, PEER_ADDR,
 				  "T1", collect);
 
-    if (r.attempted != 3 || r.resolved != 0)
-	return REASON("attempted=%u resolved=%u, wanted 3 and 0",
-		      r.attempted, r.resolved);
-    if (nlines != 4)
-	return REASON("%u lines, wanted 3 records and a STATS", nlines);
-
-    for (i = 0; i < 3; i++) {
-	if (strstr(lines[i], "status=no-poll") == NULL)
-	    return REASON("record %u is not no-poll: %s", i, lines[i]);
-	/* record.h promises the near end's die reading is in every
-	 * record, a no-poll record included. */
-	if (strstr(lines[i], "resp_temp=-") != NULL)
-	    return REASON("record %u has no temperature: %s", i, lines[i]);
-    }
-    if (strncmp(lines[3], "STATS ", 6) != 0)
-	return REASON("last line is not STATS: %s", lines[3]);
-    if (field(lines[3], "heard") != 0)
+    if (r.polled != 0 || r.answered != 0)
+	return REASON("polled=%u answered=%u, wanted 0 and 0",
+		      (unsigned)r.polled, (unsigned)r.answered);
+    /* The responder records nothing: its one line is STATS. */
+    if (nlines != 1 || strncmp(lines[0], "STATS ", 6) != 0)
+	return REASON("%u lines, wanted a STATS line alone", nlines);
+    if (strstr(lines[0], " role=twr_resp ") == NULL)
+	return REASON("not the responder's: %s", lines[0]);
+    if (field(lines[0], "heard") != 0)
 	return REASON("heard=%ld with nothing sent: %s",
-		      field(lines[3], "heard"), lines[3]);
-    if (field(lines[3], "of") != 3 || field(lines[3], "completed") != 0)
-	return REASON("STATS counts wrong: %s", lines[3]);
+		      field(lines[0], "heard"), lines[0]);
+    if (field(lines[0], "of") != 0 || field(lines[0], "completed") != 0)
+	return REASON("STATS counts wrong: %s", lines[0]);
 
     return NULL;
 }
 
-/* ... and a run that hears only frames it cannot use says which kind. */
+/* ... and one that hears only frames it cannot use says which kind. */
 static const char *
 step_account(struct stub *s)
 {
@@ -627,6 +753,7 @@ step_account(struct stub *s)
 	{ "drop_type",      1 },
 	{ "drop_dst",       1 },
 	{ "drop_overrun",   0 },
+	{ "of",             0 },
     };
     unsigned i;
 
@@ -647,22 +774,170 @@ step_account(struct stub *s)
     r = dw1000_probe_twr_resp_run(&dw, 1, false, OWN_ADDR, PEER_ADDR,
 				  "T1", collect);
 
-    if (r.attempted != 1 || r.resolved != 0)
-	return REASON("attempted=%u resolved=%u, wanted 1 and 0",
-		      r.attempted, r.resolved);
-    if (nlines != 2 || strncmp(lines[1], "STATS ", 6) != 0)
-	return REASON("%u lines, wanted a record and a STATS", nlines);
-    if (strstr(lines[0], "status=no-poll") == NULL)
-	return REASON("the record is not no-poll: %s", lines[0]);
+    if (r.polled != 0)
+	return REASON("polled=%u, wanted 0", (unsigned)r.polled);
+    if (nlines != 1 || strncmp(lines[0], "STATS ", 6) != 0)
+	return REASON("%u lines, wanted a STATS line alone", nlines);
 
     for (i = 0; i < sizeof(expect) / sizeof(expect[0]); i++) {
-	long got = field(lines[1], expect[i].key);
+	long got = field(lines[0], expect[i].key);
 
 	if (got != expect[i].want)
 	    return REASON("%s=%ld, wanted %ld: %s",
-			  expect[i].key, got, expect[i].want, lines[1]);
+			  expect[i].key, got, expect[i].want, lines[0]);
     }
 
+    return NULL;
+}
+
+/*----------------------------------------------------------------------*/
+/* The initiator, which records                                         */
+/*----------------------------------------------------------------------*/
+
+/* Set the stand-in responder up and clear what a previous step left. */
+static void
+peer_set(struct stub *s, int peer, bool ss)
+{
+    pthread_mutex_lock(&s->lock);
+    s->queued = s->sent = 0;
+    s->peer           = peer;
+    s->peer_ss        = ss;
+    s->report_pending = false;
+    pthread_mutex_unlock(&s->lock);
+}
+
+/* `key=value` as printed, or NULL. */
+static const char *
+has(const char *line, const char *kv)
+{
+    char pattern[96];
+
+    snprintf(pattern, sizeof(pattern), " %s ", kv);
+    return strstr(line, pattern);
+}
+
+/* Four frames, the stand-in answering all of them: every counted attempt
+ * resolves, carries REPORT's numbers as sent, and the warm-up attempt is
+ * run but not recorded. */
+static const char *
+step_init_resolves(struct stub *s)
+{
+    struct dw1000_probe_twr_init_result r;
+    char want[64];
+    unsigned i;
+
+    peer_set(s, PEER_ANSWERS, false);
+    nlines = 0;
+    r = dw1000_probe_twr_init_run(&dw, 3, false, 1, OWN_ADDR, PEER_ADDR,
+				  "T1", collect);
+    peer_set(s, PEER_OFF, false);
+
+    if (r.attempted != 3 || r.resolved != 3)
+	return REASON("attempted=%u resolved=%u, wanted 3 and 3",
+		      r.attempted, r.resolved);
+    if (nlines != 4 || strncmp(lines[3], "STATS ", 6) != 0)
+	return REASON("%u lines, wanted 3 records and a STATS", nlines);
+
+    for (i = 0; i < 3; i++) {
+	const char *l = lines[i];
+
+	if (strncmp(l, "TWR ", 4) != 0 || field(l, "seq") != (long)i)
+	    return REASON("record %u: %s", i, l);
+	if (!has(l, "status=ok") || !has(l, "exchange=ds") ||
+	    !has(l, "role=twr_init"))
+	    return REASON("record %u did not resolve: %s", i, l);
+	snprintf(want, sizeof(want), "t_rp=%" PRIu64, (uint64_t)PEER_T_RP);
+	if (!has(l, want))
+	    return REASON("record %u lacks %s: %s", i, want, l);
+	snprintf(want, sizeof(want), "t_sr=%" PRIu64, (uint64_t)PEER_T_SR);
+	if (!has(l, want))
+	    return REASON("record %u lacks %s: %s", i, want, l);
+	snprintf(want, sizeof(want), "t_rf=%" PRIu64, (uint64_t)PEER_T_RF);
+	if (!has(l, want))
+	    return REASON("record %u lacks %s: %s", i, want, l);
+	/* Sign-extended on receipt, the voltage and the receive power as
+	 * sent, and the first-path power, marked absent, printed `-`. */
+	if (field(l, "resp_temp") != PEER_TEMP ||
+	    field(l, "resp_vbat") != PEER_VBAT ||
+	    field(l, "resp_rx")   != PEER_RX   || !has(l, "resp_fp=-"))
+	    return REASON("record %u, the responder's readings: %s", i, l);
+	/* The recording end's own die, in every record. */
+	if (has(l, "init_temp=-") || has(l, "init_vbat=-"))
+	    return REASON("record %u lacks the initiator's die: %s", i, l);
+	if (has(l, "sym_mm=-") || has(l, "asym_mm=-") || has(l, "ss_mm=-"))
+	    return REASON("record %u lacks an estimate: %s", i, l);
+    }
+    if (field(lines[3], "of") != 3 || field(lines[3], "completed") != 3 ||
+	!has(lines[3], "role=twr_init"))
+	return REASON("STATS: %s", lines[3]);
+    return NULL;
+}
+
+/* Three frames, POLL, RESPONSE, REPORT: the single-sided estimate and
+ * nothing that needs FINAL. */
+static const char *
+step_init_ss(struct stub *s)
+{
+    struct dw1000_probe_twr_init_result r;
+
+    peer_set(s, PEER_ANSWERS, true);
+    nlines = 0;
+    r = dw1000_probe_twr_init_run(&dw, 2, true, 0, OWN_ADDR, PEER_ADDR,
+				  "T1", collect);
+    peer_set(s, PEER_OFF, false);
+
+    if (r.attempted != 2 || r.resolved != 2)
+	return REASON("attempted=%u resolved=%u, wanted 2 and 2",
+		      r.attempted, r.resolved);
+    if (nlines != 3)
+	return REASON("%u lines, wanted 2 records and a STATS", nlines);
+    if (!has(lines[0], "status=ok") || !has(lines[0], "exchange=ss") ||
+	has(lines[0], "ss_mm=-") || !has(lines[0], "t_sf=-") ||
+	!has(lines[0], "t_rf=-") || !has(lines[0], "sym_mm=-"))
+	return REASON("record: %s", lines[0]);
+    return NULL;
+}
+
+/* The responder answers the POLL and never sends REPORT: no-report, and
+ * no distance at all, every estimate needing t_sr. */
+static const char *
+step_init_no_report(struct stub *s)
+{
+    struct dw1000_probe_twr_init_result r;
+
+    peer_set(s, PEER_NO_REPORT, false);
+    nlines = 0;
+    r = dw1000_probe_twr_init_run(&dw, 1, false, 0, OWN_ADDR, PEER_ADDR,
+				  "T1", collect);
+    peer_set(s, PEER_OFF, false);
+
+    if (r.attempted != 1 || r.resolved != 0 || nlines != 2)
+	return REASON("attempted=%u resolved=%u lines=%u",
+		      r.attempted, r.resolved, nlines);
+    if (!has(lines[0], "status=no-report") || has(lines[0], "t_sp=-") ||
+	has(lines[0], "t_rr=-") || has(lines[0], "t_sf=-") ||
+	!has(lines[0], "t_sr=-") || !has(lines[0], "ss_mm=-"))
+	return REASON("record: %s", lines[0]);
+    return NULL;
+}
+
+/* Nobody there: the POLL leaves and nothing answers. */
+static const char *
+step_init_nobody(struct stub *s)
+{
+    struct dw1000_probe_twr_init_result r;
+
+    peer_set(s, PEER_OFF, false);
+    nlines = 0;
+    r = dw1000_probe_twr_init_run(&dw, 1, false, 0, OWN_ADDR, PEER_ADDR,
+				  "T1", collect);
+
+    if (r.attempted != 1 || r.resolved != 0 || nlines != 2)
+	return REASON("attempted=%u resolved=%u lines=%u",
+		      r.attempted, r.resolved, nlines);
+    if (!has(lines[0], "status=no-response") || has(lines[0], "t_sp=-") ||
+	!has(lines[0], "t_rr=-"))
+	return REASON("record: %s", lines[0]);
     return NULL;
 }
 
@@ -1118,6 +1393,10 @@ main(void)
 
     step("a run nobody answers ends", step_silence(&stub));
     step("and says what it heard",    step_account(&stub));
+    step("initiator: four frames",    step_init_resolves(&stub));
+    step("initiator: single-sided",   step_init_ss(&stub));
+    step("initiator: REPORT lost",    step_init_no_report(&stub));
+    step("initiator: nobody answers", step_init_nobody(&stub));
     step("tx sends and is told",      step_tx(&stub));
     step("rx counts, and rejections", step_rx(&stub));
     step("rx ends when settled",      step_rx_settle(&stub));

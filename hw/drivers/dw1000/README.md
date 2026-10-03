@@ -357,15 +357,15 @@ Worth reading as a whole before turning `cfg->dblbuff` on.
 > needs this. A single-buffered responder hears the first and the
 > middle frame and never the last, with every drop counter at zero: the
 > read-out window is simply deaf, and `rxauto` does not cover it. A
-> double-buffered one resolves every exchange. AUDIT.md carries the
-> measurement.
+> double-buffered one resolves every exchange. A sender that pauses
+> before a frame nothing times removes the need, which is what the
+> probe's REPORT does. AUDIT.md carries the measurements.
 
-Which mode carries a ranging bias is not established. Enabling it moves
-double-sided distances by a small amount (a couple of centimetres on
-the asymmetric estimate), and the obvious experiment is not available,
-because the both-ends-single-buffered case does not resolve at all. The
-estimators disagree in sign, so the number to expect is small and the
-direction is unsettled. See AUDIT.md.
+Both modes carry a ranging shift. Each end's buffering moves the
+asymmetric double-sided estimate by about two centimetres, and the two
+ends' shares add, to about five with both switched; which mode is
+closer to the true distance is not established. Compare distances taken
+in the same mode. See AUDIT.md.
 
 ### `rx_keep_on`: the driver keeps the receiver on
 

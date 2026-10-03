@@ -37,33 +37,33 @@
 /*===========================================================================*/
 
 /**
- * @brief How an exchange attempt ended, FROM THE RESPONDER'S SIDE.
+ * @brief How an exchange attempt ended, FROM THE INITIATOR'S SIDE.
  *
- * The responder is the only end that emits a record: it is the one
- * holding both ends' numbers, because the far end's arrived in REPORT,
- * so these name what the responder saw. An initiator-side vocabulary
- * would have no way to describe the responder's own first failure.
+ * The initiator is the only end that emits a record: it is the one
+ * holding both ends' numbers, because the responder's arrived in REPORT,
+ * so these name the step at which the initiator's attempt stopped. Each
+ * names the frame that did not happen, in the order the frames go.
  *
  * The reference instrument emits nothing at all for an attempt that did
  * not resolve. This one emits a line regardless, because the count of
  * attempts that resolved is the one statistic a board could already
  * produce, and losing it would be a regression.
  *
- * NO_POLL is the one status that says nothing arrived at all, and it
- * exists only because the responder's wait for a POLL is bounded. While
- * that wait had no deadline there was no such outcome to name: a
- * responder that heard nothing sat in it, emitted no record and no
- * STATS, and was indistinguishable from a crashed one. An attempt that
- * ends here carries the responder's own die reading and nothing else.
+ * NO_RESPONSE does not say which way the loss went: a POLL the responder
+ * never heard and a RESPONSE the initiator never heard look the same from
+ * here. The responder's own STATS line (`of=`, the POLLs it answered)
+ * tells them apart across a run.
  */
 typedef enum {
-    DW1000_PROBE_STATUS_OK = 0,        /**< four frames, distances computed       */
-    DW1000_PROBE_STATUS_NO_POLL,       /**< no POLL arrived before the attempt's
-                                     own deadline: nothing was exchanged   */
-    DW1000_PROBE_STATUS_NO_RESPONSE,   /**< POLL received, RESPONSE never left:
-                                     no transmit completion, t_sr absent   */
-    DW1000_PROBE_STATUS_NO_FINAL,      /**< RESPONSE sent, no FINAL by deadline   */
-    DW1000_PROBE_STATUS_NO_REPORT,     /**< FINAL received, no REPORT             */
+    DW1000_PROBE_STATUS_OK = 0,        /**< every frame, distances computed       */
+    DW1000_PROBE_STATUS_NO_POLL,       /**< the POLL could not be sent: no
+                                     transmit completion, t_sp absent      */
+    DW1000_PROBE_STATUS_NO_RESPONSE,   /**< POLL sent, no RESPONSE by deadline    */
+    DW1000_PROBE_STATUS_NO_FINAL,      /**< RESPONSE received, FINAL could not be
+                                     sent: t_sf absent                     */
+    DW1000_PROBE_STATUS_NO_REPORT,     /**< FINAL sent (or, single-sided,
+                                     RESPONSE received), no REPORT: no
+                                     distance, every estimate needing t_sr */
     DW1000_PROBE_STATUS_BAD_DISTANCE,  /**< six instants, intervals sum to zero   */
     DW1000_PROBE_STATUS__COUNT
 } dw1000_probe_status_t;
@@ -113,9 +113,9 @@ const char *dw1000_probe_exchange_name(dw1000_probe_exchange_t exchange);
  * A field is absent for one of three reasons, and a reader need not tell
  * them apart: `-` is `-`:
  *
- *  - it never travelled. The far end's readings ride in REPORT and its
- *    instants in FINAL and REPORT, so an attempt that ended earlier has
- *    the near end's and not the far end's;
+ *  - it never travelled. The responder's readings and instants ride in
+ *    REPORT, so an attempt that ended earlier has the initiator's and
+ *    not the responder's;
  *  - it could not be computed: both distances, when the four intervals
  *    sum to zero (DW1000_PROBE_STATUS_BAD_DISTANCE);
  *  - there was no estimate: dw1000_rx_get_power_estimate() yields
@@ -127,7 +127,8 @@ const char *dw1000_probe_exchange_name(dw1000_probe_exchange_t exchange);
  *    reader could notice without being told.
  *
  * Temperature and voltage have no failure path (the driver's read is a
- * void function), so the near end's pair is present in every record.
+ * void function), so the initiator's pair, the recording end's, is
+ * present in every record.
  */
 #define DW1000_PROBE_F_T_SP        (1u <<  0)
 #define DW1000_PROBE_F_T_RP        (1u <<  1)
@@ -177,29 +178,32 @@ const char *dw1000_probe_exchange_name(dw1000_probe_exchange_t exchange);
  *  - voltage         millivolts
  *  - receive power   hundredths of a dBm, NEGATED: 8825 is -88.25 dBm
  *
- * `resp_` is the responder, the node that emits the record; `init_` is
- * the initiator, whose readings arrived in REPORT.
+ * `init_` is the initiator, the node that emits the record; `resp_` is
+ * the responder, whose readings arrived in REPORT. `resp_rx` and
+ * `resp_fp` are what the responder made of the POLL, `init_rx` and
+ * `init_fp` what the initiator made of the RESPONSE.
  *
  * Two places where the wire is narrower than the field, both of them the
  * reference instrument's doing and neither worth copying:
  *
  *  - @p seq is a single byte on the wire and wraps at 256; it is widened
  *    here so a run longer than that still counts up;
- *  - @p init_temp travels masked to 16 bits unsigned and is read back
- *    unsigned, so the reference prints a sub-zero far-end temperature as
- *    65xxx. It is signed here, and the probe sign-extends on receipt.
+ *  - the far end's temperature travels masked to 16 bits unsigned and
+ *    is read back unsigned, so the reference prints a sub-zero far-end
+ *    temperature as 65xxx. It is signed here, and the probe
+ *    sign-extends on receipt.
  */
 struct dw1000_probe_record {
     uint16_t       seq;         /**< exchange number within the run      */
     dw1000_probe_status_t status;      /**< how it ended                        */
     uint32_t       present;     /**< DW1000_PROBE_F_* for the fields below      */
 
-    uint64_t t_sp;              /**< initiator sent POLL       (in FINAL)  */
-    uint64_t t_rp;              /**< responder received POLL   (local)     */
-    uint64_t t_sr;              /**< responder sent RESPONSE   (local)     */
-    uint64_t t_rr;              /**< initiator recvd RESPONSE  (in FINAL)  */
-    uint64_t t_sf;              /**< initiator sent FINAL      (in REPORT) */
-    uint64_t t_rf;              /**< responder received FINAL  (local)     */
+    uint64_t t_sp;              /**< initiator sent POLL       (local)     */
+    uint64_t t_rp;              /**< responder received POLL   (in REPORT) */
+    uint64_t t_sr;              /**< responder sent RESPONSE   (in REPORT) */
+    uint64_t t_rr;              /**< initiator recvd RESPONSE  (local)     */
+    uint64_t t_sf;              /**< initiator sent FINAL      (local)     */
+    uint64_t t_rf;              /**< responder received FINAL  (in REPORT) */
 
     dw1000_probe_exchange_t exchange; /**< two frames or four            */
 
@@ -335,7 +339,10 @@ size_t dw1000_probe_record_format(char *buf, size_t len,
  *
  * Printed keys, fixed because a parser reads them: `role=` `tx_power_db=`
  * `tx_power_req_db=` `driver=` `completed=` `of=`, then the reception
- * account below. The first, fourth and fifth-through-sixth match the
+ * account below. Both ends emit one. From the initiator, `of=` is the
+ * counted attempts and `completed=` those that resolved; from the
+ * responder, `of=` is the POLLs it answered (warm-up included) and
+ * `completed=` the REPORTs that left. The first, fourth and fifth-through-sixth match the
  * reference; everything after them is an addition, appended rather than
  * interleaved for the reason the record line gives.
  *
@@ -385,8 +392,9 @@ struct dw1000_probe_stats {
     const char *driver_version;      /**< which driver produced these
                                           numbers; the instrument and its
                                           driver must be one commit         */
-    uint16_t    attempted;           /**< printed `of=`                     */
-    uint16_t    resolved;            /**< of those, how many reached OK;
+    uint16_t    attempted;           /**< printed `of=`; per role, see
+                                          above                             */
+    uint16_t    resolved;            /**< of those, how many went through;
                                           printed `completed=`              */
 
     /* The reception account. See the note above for what partitions

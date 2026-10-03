@@ -340,8 +340,11 @@ usage(FILE *out, const char *prog)
         "  twr_init <own_addr> <peer_addr> <count>\n"
         "  twr_resp <own_addr> <peer_addr> <count>\n"
         "              the two-node exchange; addresses in hex accepted\n"
-        "              (0xc939); twr_resp answers whoever polls it, so\n"
-        "              its peer_addr is unused, but required for symmetry\n"
+        "              (0xc939); the initiator records (TWR lines); for\n"
+        "              twr_resp, count is the most exchanges to answer,\n"
+        "              and it stops when the initiator stops; twr_resp\n"
+        "              answers whoever polls it, so its peer_addr is\n"
+        "              unused, but required for symmetry\n"
         "  tx <count>  transmit count frames, --gap apart\n"
         "  rx <seconds>\n"
         "              listen, counting received and rejected frames\n"
@@ -830,24 +833,24 @@ main(int argc, char *argv[])
             dw1000_probe_twr_resp_run(&dw0, count, ss, own_addr, peer_addr,
                                       node_name, line_buf_append);
         line_buf_dump();
-        INFO("twr_resp: %u/%u resolved", result.resolved, result.attempted);
+        INFO("twr_resp: %" PRIu32 " POLLs answered, %" PRIu32
+            " REPORTs sent", result.polled, result.answered);
+        /* Only worth a line when it happened: an unconfirmed REPORT send
+         * is the difference between "the peer did not hear us" and "we
+         * never got it out", and the peer cannot tell them apart. */
+        if (result.report_failed > 0)
+            INFO("twr_resp: %" PRIu32 " REPORT send(s) unconfirmed",
+                 result.report_failed);
         break;
     }
 
     case DW1000_PROBE_ROLE_TWR_INIT: {
         struct dw1000_probe_twr_init_result result =
             dw1000_probe_twr_init_run(&dw0, count, ss, warmup, own_addr,
-                                      peer_addr, node_name);
-        INFO("twr_init: %" PRIu32 "/%" PRIu32
-            " exchanges reached %s (warmup=%ld, not counted)",
-            result.reached, result.attempted,
-            ss ? "FINAL" : "REPORT", warmup);
-        /* Only worth a line when it happened: an unconfirmed REPORT send
-         * is the difference between "the peer did not hear us" and "we
-         * never got it out", and the peer cannot tell them apart. */
-        if (result.report_failed > 0)
-            INFO("twr_init: %" PRIu32 " REPORT send(s) unconfirmed",
-                 result.report_failed);
+                                      peer_addr, node_name, line_buf_append);
+        line_buf_dump();
+        INFO("twr_init: %u/%u resolved (warmup=%ld, not counted)",
+            result.resolved, result.attempted, warmup);
         break;
     }
 
