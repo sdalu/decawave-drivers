@@ -303,9 +303,8 @@ Each item is something the bench needed and could not get from a board.
 6. **The same core on Zephyr and on Linux.** Not a reimplementation:
    the same `probe/` sources, over `OSAL=zephyr` and `OSAL=unix`. This
    is what makes a board-to-host pair measurable at all. It holds for
-   every role and every read-back: the one-way and idle roles were
-   first written as Zephyr shell commands, which made items 4 and 5
-   board-only, and they moved into `probe/src/solo.c` for that reason.
+   every role and every read-back: all of them are in `probe/src`, and
+   a shell only chooses the values it hands them.
 
 ## The exchange
 
