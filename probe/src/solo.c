@@ -169,7 +169,9 @@ sampler_end(struct sampler *s)
     sample_emit(s, dw1000_probe_port_now(), temp, vbat);
 }
 
-/* Sleep until @p deadline, emitting TEMP lines as they fall due. */
+/* Sleep until @p deadline, emitting TEMP lines as they fall due. The
+ * deadline is tested first, so that a sample falling due exactly at the
+ * end of a run is left to the closing one rather than taken twice. */
 static void
 sampler_wait_until(struct sampler *s, dw1000_probe_time_t deadline)
 {
@@ -179,12 +181,14 @@ sampler_wait_until(struct sampler *s, dw1000_probe_time_t deadline)
         int16_t  temp;
         uint16_t vbat;
 
+        if (now >= deadline)
+            return;
         if (sampler_due(s, &at, &temp, &vbat)) {
             sample_emit(s, at, temp, vbat);
             now = dw1000_probe_port_now();
+            if (now >= deadline)
+                return;
         }
-        if (now >= deadline)
-            return;
 
         uint64_t left = deadline - now;
         dw1000_probe_port_sleep(left < SOLO_TICK_US ? (uint32_t)left
@@ -323,6 +327,10 @@ rx_run(dw1000_t *dw, uint32_t seconds, uint32_t interval_ms,
         int16_t  temp;
         uint16_t vbat;
 
+        /* The end first, for the reason sampler_wait_until() gives. */
+        if (settle == NULL && dw1000_probe_port_now() >= end)
+            break;
+
         if (rearm) {
             dw1000_probe_port_bus_lock();
             uint32_t now_seen = _dw1000_probe_rx_count();
@@ -350,9 +358,6 @@ rx_run(dw1000_t *dw, uint32_t seconds, uint32_t interval_ms,
                     break;
             }
         }
-        if (settle == NULL && dw1000_probe_port_now() >= end)
-            break;
-
         dw1000_probe_port_sleep(tick);
     }
 

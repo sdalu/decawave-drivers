@@ -675,6 +675,28 @@ temp_elapsed_ds(const char *line)
     return (long)whole * 10 + tenth;
 }
 
+/* Every TEMP line later than the one before it: a reading falling due at
+ * the very end of a run is the closing one, not a second line at the same
+ * time (which is what the bench showed before it was fixed). */
+static const char *
+temp_lines_increase(void)
+{
+    long prev = -1;
+    unsigned i;
+
+    for (i = 0; i < nlines && i < LINES_MAX; i++) {
+	long ds = temp_elapsed_ds(lines[i]);
+
+	if (ds < 0)
+	    continue;
+	if (ds <= prev)
+	    return REASON("line %u at %ld.%ld s, not after the one before: %s",
+			  i, ds / 10, ds % 10, lines[i]);
+	prev = ds;
+    }
+    return NULL;
+}
+
 static const char *
 step_tx(struct stub *s)
 {
@@ -734,7 +756,7 @@ step_rx(struct stub *s)
     for (i = 0; i < nlines; i++)
 	if (temp_elapsed_ds(lines[i]) < 0)
 	    return REASON("line %u is not TEMP: %s", i, lines[i]);
-    return NULL;
+    return temp_lines_increase();
 }
 
 static const char *
@@ -796,7 +818,7 @@ step_temperature(struct stub *s)
 	return REASON("%u lines for one second at 4 Hz", nlines);
     if (temp_elapsed_ds(lines[nlines - 1]) < 10)
 	return REASON("ended before a second: %s", lines[nlines - 1]);
-    return NULL;
+    return temp_lines_increase();
 }
 
 /*----------------------------------------------------------------------*/
