@@ -501,12 +501,14 @@ two source trees side by side and noticing a field the probe did not
 set.
 
 The second took far longer, and the reason is that the boot log carried
-the antenna delay and nothing else. So the probe logs its **full** radio
-configuration at boot (channel, PRF, bitrate, preamble length, PAC,
-both codes, the SFD bit, and both antenna delays) in one line, in a
-fixed order. A difference then costs a diff rather than an afternoon,
-and the next such field cannot hide by being one nobody thought to
-check.
+the antenna delay and nothing else. So every run states its **full**
+radio configuration (channel, PRF, bitrate, preamble length, PAC, both
+codes, the SFD, both antenna delays and the transmit power) in one
+line, in a fixed order, read back off the chip: the `SETUP` line each
+role emits before anything else. A difference then costs a diff rather
+than an afternoon, the next such field cannot hide by being one nobody
+thought to check, and two runs at different settings cannot be
+confused afterwards.
 
 Antenna delay alone is not enough for the same reason: channel, PRF,
 preamble length, PAC size, data rate, SFD mode and preamble code all
@@ -518,6 +520,24 @@ it**: `dw1000_rx_get_power_estimate()` already does, citing UM §4.7.1
 and §4.7.2. That is the shared-driver boundary working as intended,
 and it is also why a defect in that estimate is one the probe cannot
 see.
+
+Every one of these is a run-time setting on both platforms, as transmit
+power is. The shell takes the value; `probe/src/radio.c` spells the
+options, so both shells take the same ones, and validates through the
+driver before the chip is touched: each field by
+`<dw1000/dw1000_validate.h>`, the combination by
+`dw1000_radio_is_valid()`, the check `dw1000_configure()` itself
+makes. `dw1000_configure()` then applies the radio, and in doing so
+moves the estimate's PRF constant and RXPACC adjustment with it, so the
+power fields always describe the configuration the run had. The
+antenna delays are written by `dw1000_initialise()` alone, so a board
+changing one brings the chip up again, and a host sets them before it
+brings the chip up at all.
+
+An antenna delay is calibrated on one channel. A run on another
+channel keeps the default delay unless given one, and its absolute
+distances are then off by the difference, which is tens of centimetres
+between channels: give such a run its own `--antenna-delay`.
 
 **Temperature is absolute, by construction.** DW1000 die temperature is
 absolute only after the OTP calibration reading is applied, and the

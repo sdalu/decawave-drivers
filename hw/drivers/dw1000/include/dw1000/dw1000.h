@@ -1145,6 +1145,27 @@ int dw1000_initialise(dw1000_t *dw);
 
 
 /**
+ * @brief Whether the DW1000 accepts a radio configuration
+ *
+ * The check @p dw1000_configure() makes before it writes anything, on
+ * its own: every field in range, and the fields consistent with one
+ * another (a preamble code that goes with the PRF, UM §10.5). No chip,
+ * no driver context: a host that has to do something irreversible before
+ * configuring (bring the chip up again to change an antenna delay, say)
+ * asks here first, rather than keep a second copy of the rules.
+ *
+ * Says yes or no and not why. To say why to an operator, validate each
+ * field with <dw1000/dw1000_validate.h> first; a configuration whose
+ * fields all pass there and which this still refuses is refused for the
+ * combination.
+ *
+ * @param radio     radio configuration (NULL is refused)
+ *
+ * @return true when @p dw1000_configure() would accept @p radio
+ */
+bool dw1000_radio_is_valid(dw1000_radio_t radio);
+
+/**
  * @brief Configure the DW1000 driver
  *
  * @note  The configuration is validated in every build, not only where
@@ -1176,7 +1197,8 @@ int dw1000_initialise(dw1000_t *dw);
  * @param radio     radio configuration
  *
  * @retval  0       DW1000 configured
- * @retval -1       Invalid or unsupported radio configuration:
+ * @retval -1       Invalid or unsupported radio configuration
+ *                  (@p dw1000_radio_is_valid() says false):
  *                  channel not one of 1, 2, 3, 4, 5, 7; unknown bitrate,
  *                  PAC or preamble length; preamble code outside 1..24
  *                  or not matching the PRF (1..8 for 16MHz, 9..24 for

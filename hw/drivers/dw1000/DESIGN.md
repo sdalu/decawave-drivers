@@ -57,7 +57,7 @@ Two properties follow, and both are load-bearing:
 **An out-of-range radio value would be an out-of-range read.** Because
 the configuration indexes tables, a bad channel number is not merely a
 wrong setting; it is a read past the end of an array. So
-`_dw1000_radio_is_valid()` runs inside `dw1000_configure()` in every
+`dw1000_radio_is_valid()` runs inside `dw1000_configure()` in every
 build, not under an assert, and `dw1000_configure()` returns `-1`
 without touching the chip. This is the one validation the driver cannot
 delegate to the caller.

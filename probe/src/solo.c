@@ -39,6 +39,7 @@
 #include <dw1000/probe/port.h>
 #include <dw1000/probe/settle.h>
 #include <dw1000/probe/solo.h>
+#include <dw1000/probe/radio.h>
 
 #include "capture.h"
 
@@ -211,6 +212,8 @@ dw1000_probe_tx_run(dw1000_t *dw, long count, uint32_t gap_us,
     uint32_t tx_before;
     long     i;
 
+    dw1000_probe_radio_emit(dw, DW1000_PROBE_ROLE_TX, node_name);
+
     /* The receiver off, and kept off: this role heats the far end. */
     dw1000_probe_port_bus_lock();
     dw1000_txrx_off(dw);
@@ -292,6 +295,8 @@ rx_run(dw1000_t *dw, uint32_t seconds, uint32_t interval_ms,
     bool     rearm = !dw->config->dblbuff;
     uint32_t tick  = rearm ? SOLO_TICK_REARM_US : SOLO_TICK_US;
     int      rc;
+
+    dw1000_probe_radio_emit(dw, DW1000_PROBE_ROLE_RX, node_name);
 
     memset(&result, 0, sizeof(result));
     result.settle = DW1000_PROBE_SETTLE_SAMPLING;
@@ -403,6 +408,8 @@ dw1000_probe_temperature_run(dw1000_t *dw, uint32_t seconds,
 {
     struct dw1000_probe_temperature_result result;
     struct sampler s;
+
+    dw1000_probe_radio_emit(dw, DW1000_PROBE_ROLE_TEMPERATURE, node_name);
 
     /* Radio stopped: this is the baseline, and the cooling curve. */
     dw1000_probe_port_bus_lock();

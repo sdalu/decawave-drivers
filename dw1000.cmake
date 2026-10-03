@@ -190,16 +190,19 @@ set(DW1000_PROBE_INCLUDE_DIR
     ${CMAKE_CURRENT_LIST_DIR}/probe/include)
 # Two layers, the same shape as DW1000_SOURCES_CORE / _SEND above. CORE is
 # the record, the role names and the settle rule, free of
-# <dw1000/dw1000.h>; EXCHANGE drives the chip: the two-node exchange and
-# the roles a node runs alone (tx, rx, temperature). A consumer wanting
-# the format with no driver takes CORE alone.
+# <dw1000/dw1000.h>; EXCHANGE drives the chip: the two-node exchange,
+# the roles a node runs alone (tx, rx, temperature) and the run's radio.
+# EXCHANGE also needs DW1000_SOURCES_STATE, which the SETUP line reads the
+# chip back through. A consumer wanting the format with no driver takes
+# CORE alone.
 set(DW1000_PROBE_SOURCES_CORE
     ${CMAKE_CURRENT_LIST_DIR}/probe/src/role.c
     ${CMAKE_CURRENT_LIST_DIR}/probe/src/record.c
     ${CMAKE_CURRENT_LIST_DIR}/probe/src/settle.c)
 set(DW1000_PROBE_SOURCES_EXCHANGE
     ${CMAKE_CURRENT_LIST_DIR}/probe/src/exchange.c
-    ${CMAKE_CURRENT_LIST_DIR}/probe/src/solo.c)
+    ${CMAKE_CURRENT_LIST_DIR}/probe/src/solo.c
+    ${CMAKE_CURRENT_LIST_DIR}/probe/src/radio.c)
 
 set(DW1000_PROBE_SOURCES
     ${DW1000_PROBE_SOURCES_CORE}

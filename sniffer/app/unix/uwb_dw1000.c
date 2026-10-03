@@ -373,7 +373,7 @@ uwb_config_dw1000_radio(struct dw1000_radio *radio)
     dw1000_t *drv = &DW0;
 
     /* The hand-written PRF/preamble-code check that used to be here is
-     * gone: dw1000_configure() runs _dw1000_radio_is_valid() on every
+     * gone: dw1000_configure() runs dw1000_radio_is_valid() on every
      * call, which checks the same rule and more (it looks at rx_pcode
      * too, which this did not, and at the preamble length against the
      * build's options). Its return value used to be discarded, so a

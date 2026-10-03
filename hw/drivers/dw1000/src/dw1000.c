@@ -621,7 +621,7 @@ void _dw1000_softreset(dw1000_t *dw) {
  */
 static inline
 void _dw1000_radio_tuning(dw1000_t *dw) {
-    /* The driver's own copy, already validated by _dw1000_radio_is_valid()
+    /* The driver's own copy, already validated by dw1000_radio_is_valid()
      * and stored by dw1000_configure() before this is called.
      */
     const struct dw1000_radio *radio = &dw->radio;
@@ -1450,9 +1450,9 @@ int dw1000_initialise(dw1000_t *dw) {
 }
 
 
-/**
- * @internal
- * @brief Check a radio configuration against what the DW1000 accepts
+/*
+ * Check a radio configuration against what the DW1000 accepts; public,
+ * documented in <dw1000/dw1000.h>.
  *
  * Every field checked here indexes a tuning table, so a bad value is an
  * out of range read and not merely a wrong setting: a channel of 0 or 6
@@ -1464,12 +1464,8 @@ int dw1000_initialise(dw1000_t *dw) {
  * ports, so it vanished under NDEBUG, without CONFIG_ASSERT, or without
  * CH_DBG_ENABLE_ASSERTS: exactly the builds that ship.
  *
- * @param[in]  radio    radio configuration
- *
- * @return true when every field is usable
  */
-static
-bool _dw1000_radio_is_valid(dw1000_radio_t radio) {
+bool dw1000_radio_is_valid(dw1000_radio_t radio) {
     if (radio == NULL)
 	return false;
 
@@ -1550,7 +1546,7 @@ int dw1000_configure(dw1000_t *dw, dw1000_radio_t radio) {
      * and dw->radio is left alone, so the driver keeps whatever
      * configuration it already had.
      */
-    if (! _dw1000_radio_is_valid(radio))
+    if (! dw1000_radio_is_valid(radio))
 	return -1;
 
     /* Configure SYS_CFG

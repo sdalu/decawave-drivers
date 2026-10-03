@@ -29,7 +29,10 @@
  * The roles themselves print nothing; what they counted is returned, and
  * the application reports it.
  *
- * THE LINES. Every role samples the die: a `TEMP` line
+ * THE LINES. Every role first emits its `SETUP` line, directly
+ * (dw1000_probe_radio_emit(): nothing is in flight yet), so that each
+ * run says which radio produced it. Then every role samples the die: a
+ * `TEMP` line
  * (dw1000_probe_temp_format()) when it starts, one every @p interval_ms
  * while it runs, and one when it ends. A sample that falls due while the
  * role is busy is taken late rather than twice, so the elapsed times say

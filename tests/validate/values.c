@@ -6,7 +6,7 @@
  */
 
 /*
- * <dw1000/dw1000_validate.h> against what _dw1000_radio_is_valid()
+ * <dw1000/dw1000_validate.h> against what dw1000_radio_is_valid()
  * accepts in dw1000.c. The two have to agree field for field, and the
  * reason this test exists is that the hand-written copy this API replaced
  * disagreed in three places:

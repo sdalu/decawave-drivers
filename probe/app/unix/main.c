@@ -57,6 +57,7 @@
 #include <dw1000/probe/record.h>
 #include <dw1000/probe/role.h>
 #include <dw1000/probe/exchange.h>
+#include <dw1000/probe/radio.h>
 #include <dw1000/probe/settle.h>
 #include <dw1000/probe/solo.h>
 
@@ -118,6 +119,9 @@ static dw1000_spi_driver_t dw1000_spi_drv = {
  * is floating point for that reason, so the figure is written in metres
  * as it is everywhere it is measured and written down. Same answer:
  * 154.6 m is 32951 ticks either way, 16475 after halving.
+ *
+ * A default and no more: --antenna-delay= (and its tx/rx halves) sets
+ * another for one run, in the ticks the SETUP line prints.
  */
 #define PROBE_ANTENNA_DELAY_ROUNDTRIP_M 154.6
 
@@ -163,23 +167,11 @@ static const dw1000_config_t dw1000_config = {
 
 static dw1000_t dw0;
 
-/* Same channel/PRF/preamble choice as zephyr-redskin/probe/src/main.c's
- * probe_radio, so a run from this host and a run from either Zephyr
- * board are comparable. tx_power is filled in from argv, in main(). */
-static struct dw1000_radio probe_radio = {
-    .channel  = 5,
-    .bitrate  = DW1000_BITRATE_6800KBPS,
-    .prf      = DW1000_PRF_64MHZ,
-    .tx_plen  = DW1000_PLEN_128,
-    .rx_pac   = DW1000_PAC8,
-    .tx_pcode = 10,
-    .rx_pcode = 10,
-#if DW1000_WITH_PROPRIETARY_SFD
-    .proprietary = {
-        .sfd = 1,
-    },
-#endif
-};
+/* The radio itself is not written here: its defaults are the library's
+ * (dw1000_probe_radio_default(), the same on a board), every field can
+ * be changed from argv, and the antenna delays above are this platform's
+ * defaults for the two it leaves to the shell. main() resolves the lot
+ * through the driver's own validation before the chip is touched. */
 
 
 /*======================================================================*/
@@ -366,6 +358,16 @@ usage(const char *prog)
         "options, every role:\n"
         "  --power=<dB>|auto transmit power, 0..30.5 on the 0.5 dB grid\n"
         "                    (default: auto)\n"
+        "  --channel=N       1 2 3 4 5 7 (default 5)\n"
+        "  --bitrate=KBPS    110 850 6800 (default 6800)\n"
+        "  --prf=MHZ         16 64 (default 64)\n"
+        "  --preamble=SYMBOLS  preamble length (default 128)\n"
+        "  --pac=SYMBOLS     8 16 32 64 (default 8)\n"
+        "  --code=N          preamble code, both ways (default 10);\n"
+        "                    --tx-code=N, --rx-code=N for one of them\n"
+        "  --sfd=decawave|standard  (default decawave)\n"
+        "  --antenna-delay=TICKS  both ways (default 16475);\n"
+        "                    --tx-antenna-delay=, --rx-antenna-delay=\n"
         "  --node=NAME       origin node name emitted lines carry\n"
         "                    (default: this host's hostname)\n"
         "  --dblbuff         double-buffered receive (default)\n"
@@ -499,11 +501,29 @@ main(int argc, char *argv[])
      * them, which is the only way to compare them against the same air:
      * rpi-redskin has the same pair of flags, for the same reason. */
     bool     dblbuff      = dw1000_config.dblbuff;
+    struct dw1000_probe_radio radio;
     unsigned long v;
     int      rc           = EXIT_OK;
 
+    dw1000_probe_radio_default(&radio, dw1000_config.tx_antenna_delay,
+                               dw1000_config.rx_antenna_delay);
+
     while (argc > 1 && argv[1][0] == '-') {
         const char *a = argv[1];
+        const char *why;
+
+        /* The radio's own options, spelt by the library so that a board
+         * takes exactly the same ones. */
+        switch (dw1000_probe_radio_option(&radio, a, &why)) {
+        case DW1000_PROBE_RADIO_OPTION_SET:
+            argc--; argv++;
+            continue;
+        case DW1000_PROBE_RADIO_OPTION_BAD:
+            fprintf(stderr, "%s: %s: %s\n", prog, a, why);
+            return EXIT_USAGE;
+        case DW1000_PROBE_RADIO_OPTION_NONE:
+            break;
+        }
 
         if (strcmp(a, "--ss") == 0) {
             ss = true;
@@ -653,11 +673,23 @@ main(int argc, char *argv[])
             strcpy(node_name, "-");
     }
 
+    /* The combination, by the driver's rule, before the chip is touched:
+     * a refused radio is a usage error, not a run that fails half-way. */
+    struct dw1000_radio probe_radio;
+    {
+        const char *why;
+
+        if (!dw1000_probe_radio_resolve(&radio, power, &probe_radio, &why)) {
+            fprintf(stderr, "%s: %s\n", prog, why);
+            return EXIT_USAGE;
+        }
+    }
+
     INFO("probe (unix): dw1000 %s / bitters %s",
         DW1000_VERSION_FULL, bitters_version());
     INFO("PID = %d", getpid());
     INFO("Antenna delay tx=%u / rx=%u",
-        dw1000_config.tx_antenna_delay, dw1000_config.rx_antenna_delay);
+        radio.tx_antenna_delay, radio.rx_antenna_delay);
 
     if (bitters_init() < 0)
         DIE_ERRNO("bitters library initialisation failed");
@@ -689,8 +721,10 @@ main(int argc, char *argv[])
     /* dw1000_init() keeps the pointer, so the copy the switch writes to
      * is static rather than automatic; the template above stays const. */
     static dw1000_config_t dw1000_config_run;
-    dw1000_config_run         = dw1000_config;
-    dw1000_config_run.dblbuff = dblbuff;
+    dw1000_config_run                  = dw1000_config;
+    dw1000_config_run.dblbuff          = dblbuff;
+    dw1000_config_run.tx_antenna_delay = radio.tx_antenna_delay;
+    dw1000_config_run.rx_antenna_delay = radio.rx_antenna_delay;
 
     dw1000_init(&dw0, &dw1000_config_run);
     /* init -> hardreset -> initialise, which is what
@@ -704,7 +738,6 @@ main(int argc, char *argv[])
     if (dw1000_initialise(&dw0) < 0)
         DIE("DW1000 not identified");
 
-    probe_radio.tx_power = power;
     if (dw1000_configure(&dw0, &probe_radio) < 0)
         DIE("DW1000 radio configuration rejected");
 
@@ -793,7 +826,8 @@ main(int argc, char *argv[])
 
     case DW1000_PROBE_ROLE_TWR_INIT: {
         struct dw1000_probe_twr_init_result result =
-            dw1000_probe_twr_init_run(&dw0, count, ss, warmup, own_addr, peer_addr);
+            dw1000_probe_twr_init_run(&dw0, count, ss, warmup, own_addr,
+                                      peer_addr, node_name);
         INFO("twr_init: %" PRIu32 "/%" PRIu32
             " exchanges reached %s (warmup=%ld, not counted)",
             result.reached, result.attempted,

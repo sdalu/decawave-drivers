@@ -34,6 +34,12 @@
  * the settle step settles on the second window it can compare, which is
  * the rule's own minimum.
  *
+ * And the run's radio (<dw1000/probe/radio.h>): that the shared option
+ * spelling takes what the driver takes and refuses, with a reason, what
+ * it refuses, the combination included; that the SETUP line reads back
+ * the radio the chip holds; and that reconfiguring moves it, the PRF and
+ * the RXPACC adjustment the power estimate rests on included.
+ *
  * Both budgets are overridden to milliseconds below. A gate cannot prove
  * that a wait ends by waiting out a thirty-second wait, and the defaults
  * are a property of the bench's harness rather than of this code; see
@@ -81,6 +87,7 @@
 #include "dw1000/probe/port.h"
 #include "dw1000/probe/record.h"
 #include "dw1000/probe/role.h"
+#include "dw1000/probe/radio.h"
 #include "dw1000/probe/settle.h"
 #include "dw1000/probe/solo.h"
 #include "rsvc.h"
@@ -822,6 +829,152 @@ step_temperature(struct stub *s)
 }
 
 /*----------------------------------------------------------------------*/
+/* The run's radio                                                      */
+/*----------------------------------------------------------------------*/
+
+static const char *
+step_radio_options(struct stub *s)
+{
+    static const struct {
+	const char                 *arg;
+	dw1000_probe_radio_option_t want;
+    } cases[] = {
+	{ "--channel=7",            DW1000_PROBE_RADIO_OPTION_SET  },
+	{ "--channel=6",            DW1000_PROBE_RADIO_OPTION_BAD  },
+	{ "--channel=5x",           DW1000_PROBE_RADIO_OPTION_BAD  },
+	{ "--channel=-1",           DW1000_PROBE_RADIO_OPTION_BAD  },
+	{ "--bitrate=850",          DW1000_PROBE_RADIO_OPTION_SET  },
+	{ "--bitrate=1000",         DW1000_PROBE_RADIO_OPTION_BAD  },
+	{ "--prf=4",                DW1000_PROBE_RADIO_OPTION_BAD  },
+	{ "--preamble=1024",        DW1000_PROBE_RADIO_OPTION_SET  },
+	{ "--preamble=100",         DW1000_PROBE_RADIO_OPTION_BAD  },
+	{ "--pac=16",               DW1000_PROBE_RADIO_OPTION_SET  },
+	{ "--pac=12",               DW1000_PROBE_RADIO_OPTION_BAD  },
+	{ "--code=25",              DW1000_PROBE_RADIO_OPTION_BAD  },
+	{ "--sfd=standard",         DW1000_PROBE_RADIO_OPTION_SET  },
+	{ "--sfd=other",            DW1000_PROBE_RADIO_OPTION_BAD  },
+	{ "--antenna-delay=70000",  DW1000_PROBE_RADIO_OPTION_BAD  },
+	{ "--node=rpi-c",           DW1000_PROBE_RADIO_OPTION_NONE },
+	{ "--channelx=5",           DW1000_PROBE_RADIO_OPTION_NONE },
+    };
+    struct dw1000_probe_radio r;
+    struct dw1000_radio       out;
+    const char *why;
+    unsigned i;
+
+    (void)s;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+	dw1000_probe_radio_default(&r, 16436, 16436);
+	dw1000_probe_radio_option_t got =
+	    dw1000_probe_radio_option(&r, cases[i].arg, &why);
+
+	if (got != cases[i].want)
+	    return REASON("%s gave %d, wanted %d", cases[i].arg,
+			  (int)got, (int)cases[i].want);
+	if (got == DW1000_PROBE_RADIO_OPTION_BAD && (why == NULL || !*why))
+	    return REASON("%s refused with no reason", cases[i].arg);
+    }
+
+    /* The defaults are a radio the driver takes. */
+    dw1000_probe_radio_default(&r, 16436, 16436);
+    if (!dw1000_probe_radio_resolve(&r, DW1000_TX_POWER_AUTO, &out, &why))
+	return REASON("the defaults are refused: %s", why);
+
+    /* Antenna delays one at a time, or both. */
+    dw1000_probe_radio_option(&r, "--tx-antenna-delay=100", NULL);
+    if (r.tx_antenna_delay != 100 || r.rx_antenna_delay != 16436)
+	return "--tx-antenna-delay moved the rx one";
+    dw1000_probe_radio_option(&r, "--antenna-delay=200", NULL);
+    if (r.tx_antenna_delay != 200 || r.rx_antenna_delay != 200)
+	return "--antenna-delay did not set both";
+
+    /* Code 5 is a good code and 64 MHz a good PRF, and together they are
+     * refused: by the driver's rule, before anything touches a chip. */
+    dw1000_probe_radio_default(&r, 16436, 16436);
+    if (dw1000_probe_radio_option(&r, "--code=5", NULL) !=
+	DW1000_PROBE_RADIO_OPTION_SET)
+	return "--code=5 refused on its own";
+    if (dw1000_probe_radio_resolve(&r, DW1000_TX_POWER_AUTO, &out, &why))
+	return "code 5 at 64 MHz accepted";
+    if (why == NULL || strstr(why, "combination") == NULL)
+	return REASON("the refusal does not say it is the combination: %s",
+		      why ? why : "(none)");
+    dw1000_probe_radio_option(&r, "--prf=16", NULL);
+    if (!dw1000_probe_radio_resolve(&r, DW1000_TX_POWER_AUTO, &out, &why))
+	return REASON("code 5 at 16 MHz refused: %s", why);
+    return NULL;
+}
+
+/* The line reads back what the chip holds, and follows a reconfigure.
+ * Leaves the node configured as main() had it. */
+static const char *
+step_radio_line(struct stub *s)
+{
+    static const char want_boot[] =
+	"SETUP channel=5 bitrate=6800 prf=64 preamble=128 pac=8"
+	" tx_code=10 rx_code=10 sfd=standard tx_antd=16436 rx_antd=16436"
+	" tx_power_db=";
+    static const char want_new[] =
+	"SETUP channel=2 bitrate=850 prf=16 preamble=1024 pac=32"
+	" tx_code=3 rx_code=4 sfd=decawave tx_antd=16436 rx_antd=16436"
+	" tx_power_db=";
+    struct dw1000_probe_origin o = {
+	.node = "T1", .role = DW1000_PROBE_ROLE_RX, .run = NULL,
+    };
+    struct dw1000_probe_radio r;
+    struct dw1000_radio       boot = dw.radio, out;
+    char line[DW1000_PROBE_RECORD_MAX];
+    const char *why;
+    static const char *const args[] = {
+	"--channel=2", "--bitrate=850", "--prf=16", "--preamble=1024",
+	"--pac=32", "--tx-code=3", "--rx-code=4", "--sfd=decawave",
+    };
+    unsigned i;
+    int adj_boot;
+
+    (void)s;
+    dw1000_probe_radio_format(line, sizeof(line), &dw, NULL);
+    if (strncmp(line, want_boot, sizeof(want_boot) - 1) != 0)
+	return REASON("boot radio: %s", line);
+    dw1000_probe_radio_format(line, sizeof(line), &dw, &o);
+    if (strstr(line, " node=T1 role=rx run=-") == NULL)
+	return REASON("no origin: %s", line);
+
+    adj_boot = dw.rxpacc_adj;
+    dw1000_probe_radio_default(&r, 16436, 16436);
+    for (i = 0; i < sizeof(args) / sizeof(args[0]); i++)
+	if (dw1000_probe_radio_option(&r, args[i], &why) !=
+	    DW1000_PROBE_RADIO_OPTION_SET)
+	    return REASON("%s refused: %s", args[i], why ? why : "?");
+    if (!dw1000_probe_radio_resolve(&r, DW1000_TX_POWER_AUTO, &out, &why))
+	return REASON("refused: %s", why);
+
+    dw1000_probe_port_bus_lock();
+    int rc = dw1000_configure(&dw, &out);
+    dw1000_probe_port_bus_unlock();
+    if (rc != 0)
+	return "dw1000_configure() refused what resolve accepted";
+
+    dw1000_probe_radio_format(line, sizeof(line), &dw, NULL);
+    if (strncmp(line, want_new, sizeof(want_new) - 1) != 0)
+	return REASON("after reconfiguring: %s", line);
+    /* What the power estimate reads: the applied PRF, and an RXPACC
+     * adjustment for the applied SFD. Standard at 6.8 Mb/s was -5; the
+     * Decawave SFD at 850 kb/s is sixteen symbols long, so -18. */
+    if (dw.radio.prf != DW1000_PRF_16MHZ)
+	return "the driver's PRF did not follow";
+    if (adj_boot != -5 || dw.rxpacc_adj != -18)
+	return REASON("rxpacc_adj %d (was %d), wanted -18 (was -5)",
+		      dw.rxpacc_adj, adj_boot);
+
+    /* Back as main() had it, for the steps after this one. */
+    dw1000_probe_port_bus_lock();
+    rc = dw1000_configure(&dw, &boot);
+    dw1000_probe_port_bus_unlock();
+    return rc == 0 ? NULL : "could not restore the boot radio";
+}
+
+/*----------------------------------------------------------------------*/
 /* Bring-up                                                             */
 /*----------------------------------------------------------------------*/
 
@@ -969,6 +1122,8 @@ main(void)
     step("rx counts, and rejections", step_rx(&stub));
     step("rx ends when settled",      step_rx_settle(&stub));
     step("temperature samples",       step_temperature(&stub));
+    step("radio options and refusals",step_radio_options(&stub));
+    step("SETUP line follows the chip",step_radio_line(&stub));
 
     pthread_mutex_lock(&evt.lock);
     evt.stop = true;

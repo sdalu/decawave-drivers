@@ -74,8 +74,9 @@ struct dw1000_probe_twr_init_result {
 /**
  * @brief Responder role: listen for @p count exchanges.
  *
- * Emits the `READY` line directly (dw1000_probe_port_emit(), before any
- * exchange is in flight, so that is safe on its own) and then, for each
+ * Emits the `SETUP` line (dw1000_probe_radio_emit()) and the `READY`
+ * line directly (dw1000_probe_port_emit(), before any exchange is in
+ * flight, so that is safe on its own) and then, for each
  * attempt, formats one `TWR` line and hands it to @p emit_line, never
  * to dw1000_probe_port_emit() directly. dw1000_probe_port_emit() may be
  * called only between runs (see <dw1000/probe/port.h>), never between
@@ -127,17 +128,20 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
  * @brief Initiator role: run @p warmup uncounted exchanges, then
  * @p count counted ones.
  *
- * Emits nothing: the initiator never holds both ends' numbers (see
+ * Emits the `SETUP` line before the first exchange, directly, and no
+ * other: the initiator never holds both ends' numbers (see
  * <dw1000/probe/record.h>'s note on why the responder is the one that
  * emits a record), so there is no line to buffer or hand to a
  * callback here.
  *
- * @param warmup  exchanges run first and never counted, to get the
- *                link (and the chip) into steady state
+ * @param warmup     exchanges run first and never counted, to get the
+ *                   link (and the chip) into steady state
+ * @param node_name  the origin `node=` the SETUP line carries
  */
 struct dw1000_probe_twr_init_result
 dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
-                          uint16_t own_addr, uint16_t peer_addr);
+                          uint16_t own_addr, uint16_t peer_addr,
+                          const char *node_name);
 
 /*===========================================================================*/
 /* Capture: filled by the application's radio event callbacks              */

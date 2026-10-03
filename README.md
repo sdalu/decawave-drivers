@@ -103,6 +103,9 @@ never proceeds on a half-configured radio. Most of the radio
 configuration indexes a tuning table, so an out-of-range value would be
 an out-of-range read rather than merely a wrong setting; the check that
 catches it runs in every build, not only where assertions are enabled.
+`dw1000_radio_is_valid()` is that same check on its own, for a host that
+must know a configuration is acceptable before it does something it
+cannot undo.
 
 `dw1000_config_t` must outlive the driver (`dw1000_init()` keeps the
 pointer), while `dw1000_radio_t` is copied by value, so a local is

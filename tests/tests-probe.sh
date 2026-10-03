@@ -46,7 +46,9 @@ cflags=${CFLAGS:--Wall -Wextra}
 m="sh $top/scripts/manifest.sh"
 inc="-I$top/`$m probeincdir` -I$top/`$m incdir` -I$top/`$m inc emulation`"
 src=
-for f in `$m probesrc` `$m probeportsrc emulation` `$m sources` `$m src emulation`; do
+# `state` too: the SETUP line every role emits reads the chip back
+# through it (dw1000.cmake says so beside DW1000_PROBE_SOURCES_EXCHANGE).
+for f in `$m probesrc` `$m probeportsrc emulation` `$m sources` `$m state` `$m src emulation`; do
     src="$src $top/$f"
 done
 libs=`$m libs`

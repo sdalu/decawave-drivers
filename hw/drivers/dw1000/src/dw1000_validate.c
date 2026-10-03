@@ -6,7 +6,7 @@
  */
 
 /*
- * The accepted values here are the same ones _dw1000_radio_is_valid()
+ * The accepted values here are the same ones dw1000_radio_is_valid()
  * enforces in dw1000.c, field for field, including the option guard on
  * the proprietary preamble lengths. That is a deliberate pairing and the
  * reason this file is worth having: a caller that writes its own table
@@ -16,7 +16,7 @@
  * length whether the build had proprietary lengths or not.
  *
  * What is NOT here is anything about a combination of fields. Those rules
- * live in _dw1000_radio_is_valid() alone, and dw1000_configure() runs
+ * live in dw1000_radio_is_valid() alone, and dw1000_configure() runs
  * them on every call.
  */
 
@@ -90,7 +90,7 @@ dw1000_validate_prf(int mhz, uint8_t *val, const char **errmsg)
 	break;
     case 4:
 	/* DW1000_PRF_4MHZ exists in the API; the receiver does not
-	 * support it and _dw1000_radio_is_valid() refuses it. Say which
+	 * support it and dw1000_radio_is_valid() refuses it. Say which
 	 * of the two it is, rather than "not a PRF". */
 	msg = "a PRF of 4MHz is not supported by the DW1000 receiver";
 	break;
@@ -110,7 +110,7 @@ dw1000_validate_pcode(int pcode, uint8_t *val, const char **errmsg)
     const char *msg = NULL;
 
     /* All of 1..24. lde_repc_tunning[] in dw1000.c has an entry for every
-     * one of them, and _dw1000_radio_is_valid() accepts the same range.
+     * one of them, and dw1000_radio_is_valid() accepts the same range.
      * Which ones go with which PRF is dw1000_configure()'s business. */
     if ((pcode >= 1) && (pcode <= 24)) {
 	if (val) *val = (uint8_t)pcode;
@@ -139,7 +139,7 @@ dw1000_validate_plen(int symbols, uint8_t *val, const char **errmsg)
 	if (val) *val = DW1000_PLEN_4096;
 	break;
 
-    /* Proprietary, and gated exactly as _dw1000_radio_is_valid() gates
+    /* Proprietary, and gated exactly as dw1000_radio_is_valid() gates
      * them: accepting one here in a build without the option would hand
      * the caller a value dw1000_configure() then refuses, which is the
      * worst of both: a validator that passes and a configure that

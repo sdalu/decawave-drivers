@@ -77,6 +77,18 @@ probe [options] info | config | power
   --dblbuff         double-buffered receive (default)
   --no-dblbuff      single-buffered, to compare against
 
+  the radio, every role (defaults in brackets):
+  --channel=N              1 2 3 4 5 7                     [5]
+  --bitrate=KBPS           110 850 6800                    [6800]
+  --prf=MHZ                16 64                           [64]
+  --preamble=SYMBOLS       64 128 256 512 1024 1536 2048 4096  [128]
+  --pac=SYMBOLS            8 16 32 64                      [8]
+  --code=N                 preamble code, both ways        [10]
+  --tx-code=N, --rx-code=N one way only
+  --sfd=decawave|standard                                  [decawave]
+  --antenna-delay=TICKS    both ways, device ticks         [16475]
+  --tx-antenna-delay=TICKS, --rx-antenna-delay=TICKS
+
   one role (refused by the others):
   --ss              twr_*: two-frame single-sided estimate only
   --warmup=N        twr_init: uncounted exchanges first (default 5)
@@ -90,7 +102,11 @@ probe [options] info | config | power
                     each --settle-* implies --settle
 ```
 
-The options come before the role. `info`, `config` and `power` bring
+The options come before the role. The radio is validated by the
+driver's own rules before the chip is touched, so a preamble code that
+does not suit the PRF, say, is a usage error that names the reason. An
+antenna delay is calibrated on one channel: on another, give the run
+its own. `info`, `config` and `power` bring
 the radio up, print what the chip holds and exit: the chip and lot id
 with the OTP calibration references, the radio configuration read back,
 and the applied transmit power. A role run prints the configuration
@@ -139,6 +155,14 @@ the millimetre, which is the useful part:
 | `asym_mm` | asymmetric double-sided; does not, and is tightest |
 | `ss_mm`   | single-sided, from two frames; drift-sensitive     |
 
+Every role's first line is `SETUP`, the radio the run had, read back
+off the chip, so that runs at different settings stay apart in a
+capture:
+
+```text
+SETUP channel=5 bitrate=6800 prf=64 preamble=128 pac=8 tx_code=10 rx_code=10 sfd=decawave tx_antd=16475 rx_antd=16475 tx_power_db=7.5 node=rpi-d role=twr_resp run=-
+```
+
 The roles a node runs alone emit `TEMP` lines instead: elapsed seconds,
 the die in hundredths of a degree, the supply in millivolts, at the
 start, once a second and at the end. Under `--settle`, `rx` emits a
@@ -176,8 +200,9 @@ around them.
 | | Raspberry Pi (`app/unix`) | Zephyr board (`probe` shell noun) |
 | :-- | :-- | :-- |
 | roles | `twr_init` `twr_resp` `tx` `rx` `temperature` | the same, plus `temp` as an old name for `temperature` |
-| read-backs | `info` `config` `power` | the same; `power <dB>` also sets |
-| settings | `node`, `addr`, `power`, `dblbuff` hold for the process | `probe node`, `probe addr`, `probe power`, `probe dblbuff` |
+| read-backs | `info` `config` `power` | the same, plus `radio`; `power <dB>` and `radio <options>` also set |
+| radio | the options above | the same options, on a role or on `probe radio`; antenna delays default to 16433 |
+| settings | node, addresses, radio, power, buffering hold for the process | `probe node`, `probe addr`, `probe radio`, `probe power`, `probe dblbuff` |
 | role options | before the role | after it; also `--own=` `--peer=` |
 | a setting lasts | one invocation, defaults every time | until changed: settings stick |
 | run length | unbounded: the line buffer grows | the 64-line buffer: twr counts up to 60, `rx`/`temperature` up to 62 s, the settle give-up up to 62 windows |
@@ -199,7 +224,10 @@ gaps alone and says afterwards if lines were lost.
   line says what it heard and why none of it was used; that `tx` is
   told of every frame it sent, that `rx` counts received and rejected
   frames apart, that `rx --settle` ends on the rule's verdict, and that
-  `temperature` samples as asked. It overrides the POLL budgets,
+  `temperature` samples as asked; and that the radio options take what
+  the driver takes and refuse what it refuses, the combination
+  included, and that the `SETUP` line follows a reconfiguration. It
+  overrides the POLL budgets,
   because a gate cannot prove a wait terminates by waiting out a
   sixty-second one.
 

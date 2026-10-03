@@ -108,13 +108,15 @@ if DW1000_PROBE
 config DW1000_PROBE_EXCHANGE
         bool "The probe's roles: the ranging exchange, tx, rx, temperature"
 	depends on DW1000
+	select DW1000_STATE
 	default y if DW1000
 	help
 	  The single- and double-sided two-way ranging exchange, and the
 	  roles a node runs alone (transmit only, receive only, idle
 	  temperature sampling), all of which drive the chip through the
 	  driver. Off, the probe can still format and emit records; on, it
-	  can produce them.
+	  can produce them. Selects DW1000_STATE: every run's SETUP line is
+	  the radio configuration read back off the chip.
 
 endif
 

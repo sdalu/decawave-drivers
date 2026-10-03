@@ -103,6 +103,7 @@
 #include <dw1000/probe/record.h>
 #include <dw1000/probe/port.h>
 #include <dw1000/probe/exchange.h>
+#include <dw1000/probe/radio.h>
 
 #include "capture.h"
 
@@ -602,6 +603,10 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
 
     heard_reset();
 
+    /* What radio this run has, then READY: both safe to emit directly,
+     * no exchange being in flight yet. */
+    dw1000_probe_radio_emit(dw, DW1000_PROBE_ROLE_TWR_RESP, node_name);
+
     char line[DW1000_PROBE_RECORD_MAX];
     dw1000_probe_ready_format(line, sizeof(line), &origin);
     dw1000_probe_port_emit(line); /* safe here: no exchange is in flight yet */
@@ -832,7 +837,8 @@ dw1000_probe_twr_resp_run(dw1000_t *dw, long count, bool ss,
 
 struct dw1000_probe_twr_init_result
 dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
-                          uint16_t own_addr, uint16_t peer_addr)
+                          uint16_t own_addr, uint16_t peer_addr,
+                          const char *node_name)
 {
     uint8_t  wire_seq  = 0;
     long     total     = warmup + count;
@@ -844,6 +850,8 @@ dw1000_probe_twr_init_run(dw1000_t *dw, long count, bool ss, long warmup,
      * responder run on the same node report this run's frames as its
      * own. */
     heard_reset();
+
+    dw1000_probe_radio_emit(dw, DW1000_PROBE_ROLE_TWR_INIT, node_name);
 
     for (i = 0; i < total; i++) {
         bool counted = (i >= warmup);
