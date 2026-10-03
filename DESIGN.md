@@ -269,7 +269,7 @@ its own program built and actually run, none needing hardware.
 | ----------------- | -------------------------------------------------------- |
 | `tests-validate`  | the radio-value validation matches `dw1000_configure()` |
 | `tests-emulation` | the driver runs against a model of the chip             |
-| `tests-probe`     | the probe's record format and its exchange              |
+| `tests-probe`     | the probe's record format, settle rule and roles        |
 | `tests-sniffer`   | the sniffer's host-buildable logic                      |
 
 `tests-emulation` needs `port/emulation`, which is the one port requiring

@@ -25,6 +25,15 @@
  *    defects with different fixes, and the STATS line now separates
  *    them: `heard=` against the seven `drop_` counts.
  *
+ * And the roles a node runs alone (<dw1000/probe/solo.h>), against the
+ * same medium: that tx sends what it was asked and is told of every
+ * completion; that rx counts what arrives and, separately, what the chip
+ * rejected; that rx under the settle rule ends on the rule's verdict; and
+ * that temperature takes one reading when given no duration and a
+ * reading per interval when given one. The medium's die never moves, so
+ * the settle step settles on the second window it can compare, which is
+ * the rule's own minimum.
+ *
  * Both budgets are overridden to milliseconds below. A gate cannot prove
  * that a wait ends by waiting out a thirty-second wait, and the defaults
  * are a property of the bench's harness rather than of this code; see
@@ -72,6 +81,8 @@
 #include "dw1000/probe/port.h"
 #include "dw1000/probe/record.h"
 #include "dw1000/probe/role.h"
+#include "dw1000/probe/settle.h"
+#include "dw1000/probe/solo.h"
 #include "rsvc.h"
 
 /*----------------------------------------------------------------------*/
@@ -388,6 +399,7 @@ static void
 cb_rx_error(dw1000_t *d, uint32_t status)
 {
     (void)status;
+    dw1000_probe_rx_error_capture();
     dw1000_rx_start(d, DW1000_RX_IMMEDIATE);
 }
 
@@ -535,6 +547,20 @@ enqueue(struct stub *s, const char *mark, char type, uint8_t seq,
     pthread_mutex_unlock(&s->lock);
 }
 
+/* Spoil the FCS of the frame queued last, so that the model reports it
+ * as a receive error rather than delivering it. */
+static void
+corrupt_last(struct stub *s)
+{
+    pthread_mutex_lock(&s->lock);
+    if (s->queued > 0) {
+	struct queued *q = &s->queue[s->queued - 1];
+
+	q->data[q->len - 1] ^= 0xff;
+    }
+    pthread_mutex_unlock(&s->lock);
+}
+
 /*----------------------------------------------------------------------*/
 /* Steps                                                                */
 /*----------------------------------------------------------------------*/
@@ -630,6 +656,146 @@ step_account(struct stub *s)
 			  expect[i].key, got, expect[i].want, lines[1]);
     }
 
+    return NULL;
+}
+
+/*----------------------------------------------------------------------*/
+/* The roles a node runs alone                                          */
+/*----------------------------------------------------------------------*/
+
+/* The TEMP line's elapsed field, in tenths, or -1 if @p line is not
+ * a TEMP line. */
+static long
+temp_elapsed_ds(const char *line)
+{
+    unsigned whole, tenth;
+
+    if (sscanf(line, "TEMP %u.%u ", &whole, &tenth) != 2)
+	return -1;
+    return (long)whole * 10 + tenth;
+}
+
+static const char *
+step_tx(struct stub *s)
+{
+    struct dw1000_probe_tx_result r;
+
+    (void)s;
+    nlines = 0;
+    r = dw1000_probe_tx_run(&dw, 5, 2000, DW1000_PROBE_SAMPLE_INTERVAL_MS,
+			    "T1", collect);
+
+    if (r.attempted != 5 || r.started != 5 || r.completed != 5)
+	return REASON("attempted=%u started=%u completed=%u, wanted 5 each",
+		      (unsigned)r.attempted, (unsigned)r.started,
+		      (unsigned)r.completed);
+    if (nlines < 2 || nlines > LINES_MAX)
+	return REASON("%u lines, wanted an opening and a closing TEMP",
+		      nlines);
+    if (temp_elapsed_ds(lines[0]) != 0)
+	return REASON("first line is not TEMP at 0.0: %s", lines[0]);
+    if (temp_elapsed_ds(lines[nlines - 1]) < 0)
+	return REASON("last line is not TEMP: %s", lines[nlines - 1]);
+    return NULL;
+}
+
+static const char *
+step_rx(struct stub *s)
+{
+    struct dw1000_probe_rx_result r;
+    unsigned i;
+
+    pthread_mutex_lock(&s->lock);
+    s->queued = s->sent = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    /* Whoever's frames: the rx role counts them all. The middle one is
+     * spoilt, and is the chip's to reject. */
+    enqueue(s, "xyz", 'P', 0, OWN_ADDR, PEER_ADDR, 12);
+    enqueue(s, "dwp", 'P', 0, OWN_ADDR, PEER_ADDR, 12);
+    corrupt_last(s);
+    enqueue(s, "dwp", 'R', 0, 0x0042,   PEER_ADDR, 12);
+
+    nlines = 0;
+    r = dw1000_probe_rx_run(&dw, 1, DW1000_PROBE_SAMPLE_INTERVAL_MS,
+			    "T1", collect);
+
+    if (r.failed)
+	return "the receiver did not start";
+    if (r.received != 2 || r.rejected != 1)
+	return REASON("received=%u rejected=%u, wanted 2 and 1",
+		      (unsigned)r.received, (unsigned)r.rejected);
+    if (r.elapsed_ds < 10)
+	return REASON("listened %u ds of 10", (unsigned)r.elapsed_ds);
+    if (r.settle != DW1000_PROBE_SETTLE_SAMPLING)
+	return "a timed run reports a settle verdict";
+    if (nlines < 2 || nlines > dw1000_probe_sampled_lines(1, 1000))
+	return REASON("%u lines for one second at 1 Hz", nlines);
+    for (i = 0; i < nlines; i++)
+	if (temp_elapsed_ds(lines[i]) < 0)
+	    return REASON("line %u is not TEMP: %s", i, lines[i]);
+    return NULL;
+}
+
+static const char *
+step_rx_settle(struct stub *s)
+{
+    static const struct dw1000_probe_settle_params p = {
+	.interval_ms = 100, .window_s = 1, .windows = 2,
+	.threshold_cdeg = 20, .give_up_s = 4,
+    };
+    struct dw1000_probe_rx_result r;
+
+    pthread_mutex_lock(&s->lock);
+    s->queued = s->sent = 0;
+    pthread_mutex_unlock(&s->lock);
+
+    nlines = 0;
+    r = dw1000_probe_rx_settle_run(&dw, &p, "T1", collect);
+
+    if (r.failed)
+	return "the receiver did not start";
+    if (r.settle != DW1000_PROBE_SETTLE_SETTLED)
+	return REASON("a still die ended %s",
+		      dw1000_probe_settle_state_name(r.settle));
+    if (nlines != 4)
+	return REASON("%u lines, wanted TEMP, two SETTLE, TEMP", nlines);
+    if (temp_elapsed_ds(lines[0]) != 0 || temp_elapsed_ds(lines[3]) < 0)
+	return REASON("not bracketed by TEMP: %s / %s", lines[0], lines[3]);
+    if (strstr(lines[1], "SETTLE window=1 ") != lines[1] ||
+	strstr(lines[1], " spread=- ") == NULL ||
+	strstr(lines[1], " state=unsettled ") == NULL)
+	return REASON("first window: %s", lines[1]);
+    if (strstr(lines[2], "SETTLE window=2 ") != lines[2] ||
+	strstr(lines[2], " spread=0 ") == NULL ||
+	strstr(lines[2], " state=settled ") == NULL ||
+	strstr(lines[2], " role=rx ") == NULL)
+	return REASON("second window: %s", lines[2]);
+    return NULL;
+}
+
+static const char *
+step_temperature(struct stub *s)
+{
+    struct dw1000_probe_temperature_result r;
+
+    (void)s;
+    nlines = 0;
+    r = dw1000_probe_temperature_run(&dw, 0, DW1000_PROBE_SAMPLE_INTERVAL_MS,
+				     "T1", collect);
+    if (r.samples != 1 || nlines != 1 || temp_elapsed_ds(lines[0]) != 0)
+	return REASON("no duration: %u samples, %u lines, first %s",
+		      (unsigned)r.samples, nlines, lines[0]);
+
+    nlines = 0;
+    r = dw1000_probe_temperature_run(&dw, 1, 250, "T1", collect);
+    if (r.samples != nlines)
+	return REASON("%u samples reported, %u lines emitted",
+		      (unsigned)r.samples, nlines);
+    if (nlines < 3 || nlines > dw1000_probe_sampled_lines(1, 250))
+	return REASON("%u lines for one second at 4 Hz", nlines);
+    if (temp_elapsed_ds(lines[nlines - 1]) < 10)
+	return REASON("ended before a second: %s", lines[nlines - 1]);
     return NULL;
 }
 
@@ -777,6 +943,10 @@ main(void)
 
     step("a run nobody answers ends", step_silence(&stub));
     step("and says what it heard",    step_account(&stub));
+    step("tx sends and is told",      step_tx(&stub));
+    step("rx counts, and rejections", step_rx(&stub));
+    step("rx ends when settled",      step_rx_settle(&stub));
+    step("temperature samples",       step_temperature(&stub));
 
     pthread_mutex_lock(&evt.lock);
     evt.stop = true;

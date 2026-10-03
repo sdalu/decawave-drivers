@@ -289,7 +289,8 @@ calibration constant, and the demo's checked-in campaign data are from
 `DW1000.md`, "The bench, for scale", settled that 299 of 355 frames
 counted as lost were prefixes the later node never listened for, and
 that the apparent link asymmetry was whichever node the harness
-brought up second. Two harnesses still have the shape that caused it:
+brought up second. Two harnesses had the shape that caused it, and
+one still does:
 
 - rpi-redskin's synchronisation hook is dead.
   `main.c:601-609` defines
@@ -298,11 +299,13 @@ brought up second. Two harnesses still have the shape that caused it:
   the `I_ULOCK` flag it was to read is written and never consulted
   (`main.c:588-593`). `test.sh:23` starts the two nodes with a
   `sleep 1` between them and no confirmation that both are listening.
-- the Zephyr probe paces a burst from the end of each send.
-  `probe/src/shell.c:324-350` sleeps `gap_ms` after each
-  `dw1000_tx_start()`, which is the shape `DW1000.md` found drifts two
-  nodes into each other within a few dozen frames. The fix is the
-  absolute schedule, the i-th frame at start plus i times the gap.
+- the Zephyr probe paced a burst from the end of each send:
+  `probe/src/shell.c:324-350` at zephyr-redskin `d8e00c4` slept
+  `gap_ms` after each `dw1000_tx_start()`, the shape `DW1000.md` found
+  drifts two nodes into each other within a few dozen frames. Paid
+  2026-10-03: the tx role moved into this tree's `probe/src/solo.c`,
+  which both probe applications now call, and it paces on the absolute
+  schedule, the i-th frame at start plus i times the gap.
 
 ruby-dw1000's harness already says GO to both roles once both are
 listening (`test/support/remote.rb`, `Job#go`) and paces absolutely;
@@ -426,6 +429,7 @@ registered callbacks exactly; the `dblbuff` plus `rx_error` pairing
 everywhere it is set; the do-not-re-arm-under-dblbuff rule in
 rpi-redskin (`main.c:136`) and zephyr-redskin (`redskin.c:254`); the
 lead-time check at start-up in rpi-redskin (`main.c:674-694`) and
-zephyr-redskin (`redskin.c:520-531`); the transmit power read-back in
-the Zephyr probe (`probe/src/shell.c:252`); and the frame ring in
+zephyr-redskin (`redskin.c:520-531`); the transmit power read-back,
+now both probe applications' (`probe/src/solo.c`,
+`dw1000_probe_power_format()`); and the frame ring in
 `probe/src/exchange.c:306`.

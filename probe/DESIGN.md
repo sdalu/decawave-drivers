@@ -302,7 +302,10 @@ Each item is something the bench needed and could not get from a board.
 
 6. **The same core on Zephyr and on Linux.** Not a reimplementation:
    the same `probe/` sources, over `OSAL=zephyr` and `OSAL=unix`. This
-   is what makes a board-to-host pair measurable at all.
+   is what makes a board-to-host pair measurable at all. It holds for
+   every role and every read-back: the one-way and idle roles were
+   first written as Zephyr shell commands, which made items 4 and 5
+   board-only, and they moved into `probe/src/solo.c` for that reason.
 
 ## The exchange
 
@@ -533,6 +536,16 @@ power, then capture the console for the duration. Set-then-measure is
 the order the bench already uses. On Zephyr the commands register under
 one top-level noun, `probe`, with subcommands named after the roles.
 
+The two shells differ in one way worth stating, because it is a
+difference of behaviour and not of spelling: **a board's settings
+stick, a host's do not.** On a board, node name, addresses, transmit
+power and double buffering hold until changed, whether by their own
+command or by a role's option, because a board is a long-lived shell
+and every console attachment is expensive. On a host every invocation
+starts from the defaults. A host's line buffer grows; a board's holds
+64 lines, and a board refuses a run that would not fit rather than lose
+its end.
+
 **Records are buffered and dumped after the run, never emitted inline.**
 The reference does this because a write that blocked between the frames
 of an exchange would land in the measurement. On a board the channel is
@@ -580,6 +593,19 @@ because a chip climbing steadily has a small spread inside any short
 window. Concretely, and adjustable once measured: **four consecutive
 30 s windows whose means differ by less than 0.2 °C, giving up at
 15 minutes.**
+
+"Differ by less than" is read as the **spread** of the four means, the
+largest minus the smallest, not as each step between neighbours. A die
+climbing 0.15 °C a window passes a step test indefinitely while moving
+0.45 °C across the four, and a steady climb is exactly what the rule is
+there to refuse. The rule is `probe/src/settle.c`, free of the driver
+and tested on readings alone; it runs inside the rx role
+(`rx --settle`), because the receiver being on is what settles a die,
+and its windows are counted in readings, thirty at 1 Hz, so that it is
+a pure function of what it was fed. Its output is a `SETTLE` line per
+window rather than a `TEMP` line per reading, which bounds a settle
+run's lines by its give-up time: thirty-two at the defaults, which a
+board's buffer holds.
 
 **The threshold is below what one reading can resolve, and that is not
 a mistake.** Consecutive samples of a chip sitting still read one of

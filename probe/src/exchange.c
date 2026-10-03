@@ -7,7 +7,9 @@
 
 /**
  * The two-node ranging exchange: the wire frame (build/parse), the
- * bounded waits, and the `twr_resp` / `twr_init` role bodies.
+ * bounded waits, and the `twr_resp` / `twr_init` role bodies. Also the
+ * capture every role reads, the ones in solo.c included (through
+ * capture.h).
  *
  * FRAME MATCHING, in one predicate (frame_classify() below): a captured
  * frame is ours only if the "dwp" mark is there, the type is the one
@@ -75,20 +77,20 @@
  * dw1000_cb_rx_ok(), registered in dw1000_config_t.cb.rx_ok, because
  * attaching a callback into the driver's bring-up config is an
  * application concern; it now does nothing but call
- * dw1000_probe_rx_capture() and re-arm the receiver. The same split
- * applies to tx completion: dw1000_probe_tx_capture() is new here,
- * replacing the atomic counter frame_send() used to poll; the
- * application's own tx-done counter (used by a `probe tx` command that
- * has nothing to do with this exchange) is untouched and kept entirely
- * separate: the two counters share a callback, not a variable.
+ * dw1000_probe_rx_capture() (double buffered, the driver has re-armed
+ * the receiver already). The same split applies to tx completion,
+ * dw1000_probe_tx_capture(), replacing the atomic counter frame_send()
+ * used to poll, and to receive errors, dw1000_probe_rx_error_capture().
+ * The application's own tx-done, rx-ok and rx-error counters, kept for
+ * its `probe tx` and `probe rx` commands, went when those roles moved
+ * into solo.c: every count a role reports is now this file's capture.
  *
  * The per-run line buffering that <dw1000/probe/port.h> requires
  * (dw1000_probe_port_emit() called "only between runs") stays a host
  * decision for the same memory-budget reason the rx capture size does
- * not: dw1000_probe_twr_resp_run() takes an @p emit_line callback
- * rather than owning a buffer of its own, so a RAM-constrained
- * application can hand it the same static buffer it already reuses for
- * `probe tx` / `probe rx`, instead of this library doubling that
+ * not: every role takes an @p emit_line callback rather than owning a
+ * buffer of its own, so a RAM-constrained application hands them all
+ * the one static buffer, instead of this library doubling that
  * footprint.
  */
 
@@ -101,6 +103,8 @@
 #include <dw1000/probe/record.h>
 #include <dw1000/probe/port.h>
 #include <dw1000/probe/exchange.h>
+
+#include "capture.h"
 
 
 /*======================================================================*/
@@ -308,6 +312,7 @@ struct rx_capture {
 static struct rx_capture rx_ring[RX_RING];
 static uint32_t          rx_frame_seq;   /* frames captured, monotonic */
 static uint32_t          tx_done_seq;
+static uint32_t          rx_error_seq;   /* frames the chip rejected     */
 
 void
 dw1000_probe_rx_capture(dw1000_t *dw, size_t length)
@@ -329,6 +334,32 @@ void
 dw1000_probe_tx_capture(void)
 {
     tx_done_seq++;
+}
+
+void
+dw1000_probe_rx_error_capture(void)
+{
+    rx_error_seq++;
+}
+
+/* For probe/src/solo.c, whose roles count what these three count; see
+ * capture.h. Same rule as every reader in this file: under the bus lock. */
+uint32_t
+_dw1000_probe_rx_count(void)
+{
+    return rx_frame_seq;
+}
+
+uint32_t
+_dw1000_probe_tx_count(void)
+{
+    return tx_done_seq;
+}
+
+uint32_t
+_dw1000_probe_rx_error_count(void)
+{
+    return rx_error_seq;
 }
 
 

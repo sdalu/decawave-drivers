@@ -82,14 +82,16 @@ endif
 # Two symbols, because the probe has two layers with different dependencies
 # and the Kconfig should not pretend otherwise in either direction.
 #
-# DW1000_PROBE is the record, the roles and the host ports. It is free of
+# DW1000_PROBE is the record, the role names, the settle rule and the host
+# ports. It is free of
 # <dw1000/dw1000.h> by design -- that is what lets the line format be proved
 # with no chip and no driver (tests/tests-probe.sh) -- so it is NOT under
 # `if DW1000`, and nesting it there would invent a dependency the code does
 # not have.
 #
-# DW1000_PROBE_EXCHANGE is the ranging exchange, which drives the chip and
-# therefore does depend on the driver. When it was first written it lived
+# DW1000_PROBE_EXCHANGE is the ranging exchange and the roles a node runs
+# alone (tx, rx, temperature), which drive the chip and therefore do
+# depend on the driver. When it was first written it lived
 # in an application; moving it into the library is what created this
 # second layer, and the earlier single-symbol comment here became stale at
 # that moment. An implementer caught it.
@@ -98,19 +100,21 @@ menuconfig DW1000_PROBE
 	default n
 	help
 	  The measurement-only instrument's chip-free layer: the record, the
-	  roles, and the host glue. Not the production stack, and not a driver
+	  role names, the settle rule, and the host glue. Not the production stack, and not a driver
 	  for anything -- see probe/include/dw1000/probe/record.h.
 
 if DW1000_PROBE
 
 config DW1000_PROBE_EXCHANGE
-        bool "The probe's two-node ranging exchange"
+        bool "The probe's roles: the ranging exchange, tx, rx, temperature"
 	depends on DW1000
 	default y if DW1000
 	help
-	  The single- and double-sided two-way ranging exchange, which drives
-	  the chip through the driver. Off, the probe can still format and
-	  emit records; on, it can produce them.
+	  The single- and double-sided two-way ranging exchange, and the
+	  roles a node runs alone (transmit only, receive only, idle
+	  temperature sampling), all of which drive the chip through the
+	  driver. Off, the probe can still format and emit records; on, it
+	  can produce them.
 
 endif
 

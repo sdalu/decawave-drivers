@@ -28,7 +28,13 @@
  *    and Neirynck disagreeing by the stated amounts), the 40-bit counter
  *    wrap, single-sided only, a missing instant, and the four intervals
  *    summing to zero;
- *  - dw1000_probe_exchange_name(), canonical and out of range.
+ *  - dw1000_probe_exchange_name(), canonical and out of range;
+ *  - the settle rule (<dw1000/probe/settle.h>): which parameters it
+ *    refuses, a still die settling on the fourth window, a die
+ *    dithering a whole LSB between readings settling all the same, a
+ *    steady climb that a neighbour-to-neighbour test would have passed
+ *    giving up instead, the threshold being strict, the rounding of a
+ *    negative mean, and the SETTLE line byte for byte.
  *
  * One line per case; a failing case says why on its own line. Run by
  * tests/tests-probe.sh.
@@ -45,6 +51,7 @@
 #include <dw1000/probe/port.h>
 #include <dw1000/probe/record.h>
 #include <dw1000/probe/role.h>
+#include <dw1000/probe/settle.h>
 
 static int failures;
 
@@ -634,6 +641,230 @@ case_exchange_names(void)
 
 
 /*----------------------------------------------------------------------*/
+/* 13. The settle rule                                                  */
+/*----------------------------------------------------------------------*/
+
+static const char *
+case_settle_params(void)
+{
+    static const struct dw1000_probe_settle_params def =
+	DW1000_PROBE_SETTLE_PARAMS_DEFAULT;
+    struct dw1000_probe_settle_params p;
+
+    if (!dw1000_probe_settle_params_valid(&def))
+	return "the defaults are refused";
+    if (dw1000_probe_settle_lines(&def) != 32)
+	return REASON("default line bound %zu, want 30 windows and 2 TEMP",
+		      dw1000_probe_settle_lines(&def));
+    if (dw1000_probe_settle_params_valid(NULL))
+	return "NULL accepted";
+
+#define REFUSED(field, value, why)					\
+    do {								\
+	p = def; p.field = (value);					\
+	if (dw1000_probe_settle_params_valid(&p))			\
+	    return why " accepted";					\
+    } while (0)
+
+    REFUSED(interval_ms,    0,    "a zero interval");
+    REFUSED(window_s,       0,    "a zero window");
+    REFUSED(threshold_cdeg, 0,    "a zero threshold");
+    REFUSED(windows,        1,    "a single window");
+    REFUSED(windows,        DW1000_PROBE_SETTLE_WINDOWS_MAX + 1,
+	    "more windows than the ring");
+    REFUSED(interval_ms,    31000, "a window holding no reading");
+    REFUSED(give_up_s,      119,  "a give-up shorter than the windows");
+#undef REFUSED
+
+    p = def; p.give_up_s = 120;
+    if (!dw1000_probe_settle_params_valid(&p))
+	return "a give-up exactly the windows' length refused";
+    return NULL;
+}
+
+/* Feeds @p temp() for each reading until the rule leaves SAMPLING for the
+ * last time or @p limit readings have gone in; returns the final state
+ * and leaves the rule where it ended. */
+static dw1000_probe_settle_state_t
+settle_until_final(struct dw1000_probe_settle *rule,
+		   int16_t (*temp)(uint32_t i), uint32_t limit)
+{
+    dw1000_probe_settle_state_t st = DW1000_PROBE_SETTLE_SAMPLING;
+    uint32_t i;
+
+    for (i = 0; i < limit; i++) {
+	st = dw1000_probe_settle_feed(rule, temp(i));
+	if (st == DW1000_PROBE_SETTLE_SETTLED ||
+	    st == DW1000_PROBE_SETTLE_GAVE_UP)
+	    break;
+    }
+    return st;
+}
+
+static int16_t still(uint32_t i)    { (void)i; return 3100; }
+static int16_t dither(uint32_t i)   { return (i & 1) ? 3211 : 3100; }
+/* 0.15 degree a window: every step between neighbours is under 0.2, and
+ * four windows span 0.45. */
+static int16_t climb(uint32_t i)    { return (int16_t)(3000 + (i / 30) * 15); }
+
+static const char *
+case_settle_still(void)
+{
+    static const struct dw1000_probe_settle_params def =
+	DW1000_PROBE_SETTLE_PARAMS_DEFAULT;
+    struct dw1000_probe_settle rule;
+    dw1000_probe_settle_state_t st;
+    uint32_t i;
+
+    dw1000_probe_settle_start(&rule, &def);
+
+    /* Twenty-nine readings leave the first window open. */
+    for (i = 0; i < 29; i++)
+	if ((st = dw1000_probe_settle_feed(&rule, 3100)) !=
+	    DW1000_PROBE_SETTLE_SAMPLING)
+	    return REASON("reading %u closed a window (%s)", i,
+			  dw1000_probe_settle_state_name(st));
+    /* The thirtieth closes it, and one window has no spread. */
+    st = dw1000_probe_settle_feed(&rule, 3100);
+    if (st != DW1000_PROBE_SETTLE_UNSETTLED || rule.spread != -1)
+	return REASON("first window: %s, spread %ld",
+		      dw1000_probe_settle_state_name(st), (long)rule.spread);
+
+    st = settle_until_final(&rule, still, 1000);
+    if (st != DW1000_PROBE_SETTLE_SETTLED)
+	return REASON("a still die ended %s",
+		      dw1000_probe_settle_state_name(st));
+    if (rule.closed != 4 || rule.mean != 3100 || rule.spread != 0)
+	return REASON("settled at window %lu, mean %d, spread %ld; "
+		      "want 4, 3100, 0", (unsigned long)rule.closed,
+		      rule.mean, (long)rule.spread);
+    /* Final: more readings change nothing. */
+    if (dw1000_probe_settle_feed(&rule, 9999) != DW1000_PROBE_SETTLE_SETTLED ||
+	rule.closed != 4)
+	return "a reading after SETTLED moved the rule";
+    return NULL;
+}
+
+/* No two consecutive readings within 1.1 degree, and settled all the
+ * same: the means are what is compared. */
+static const char *
+case_settle_dither(void)
+{
+    static const struct dw1000_probe_settle_params def =
+	DW1000_PROBE_SETTLE_PARAMS_DEFAULT;
+    struct dw1000_probe_settle rule;
+    dw1000_probe_settle_state_t st;
+
+    dw1000_probe_settle_start(&rule, &def);
+    st = settle_until_final(&rule, dither, 1000);
+    if (st != DW1000_PROBE_SETTLE_SETTLED || rule.closed != 4)
+	return REASON("a dithering die ended %s at window %lu",
+		      dw1000_probe_settle_state_name(st),
+		      (unsigned long)rule.closed);
+    /* 3155.5, halves away from zero. */
+    if (rule.mean != 3156)
+	return REASON("mean %d, want 3156", rule.mean);
+    return NULL;
+}
+
+static const char *
+case_settle_climb(void)
+{
+    static const struct dw1000_probe_settle_params def =
+	DW1000_PROBE_SETTLE_PARAMS_DEFAULT;
+    struct dw1000_probe_settle rule;
+    dw1000_probe_settle_state_t st;
+
+    dw1000_probe_settle_start(&rule, &def);
+    st = settle_until_final(&rule, climb, 10000);
+    if (st != DW1000_PROBE_SETTLE_GAVE_UP)
+	return REASON("a climbing die ended %s",
+		      dw1000_probe_settle_state_name(st));
+    if (rule.closed != 30)
+	return REASON("gave up at window %lu, want 30 (15 min of 30 s)",
+		      (unsigned long)rule.closed);
+    if (rule.spread != 45)
+	return REASON("spread %ld, want 45", (long)rule.spread);
+    if (dw1000_probe_settle_feed(&rule, 3000) != DW1000_PROBE_SETTLE_GAVE_UP)
+	return "a reading after GAVE_UP moved the rule";
+    return NULL;
+}
+
+/* Two readings a window, two windows, threshold 20: means 3100 and 3120
+ * are a spread of exactly the threshold, which is not below it. */
+static const char *
+case_settle_strict_and_negative(void)
+{
+    static const struct dw1000_probe_settle_params p = {
+	.interval_ms = 1000, .window_s = 2, .windows = 2,
+	.threshold_cdeg = 20, .give_up_s = 100,
+    };
+    struct dw1000_probe_settle rule;
+    dw1000_probe_settle_state_t st;
+
+    dw1000_probe_settle_start(&rule, &p);
+    dw1000_probe_settle_feed(&rule, 3100);
+    dw1000_probe_settle_feed(&rule, 3100);
+    dw1000_probe_settle_feed(&rule, 3120);
+    st = dw1000_probe_settle_feed(&rule, 3120);
+    if (st != DW1000_PROBE_SETTLE_UNSETTLED || rule.spread != 20)
+	return REASON("spread %ld at the threshold gave %s",
+		      (long)rule.spread, dw1000_probe_settle_state_name(st));
+    dw1000_probe_settle_feed(&rule, 3139);
+    st = dw1000_probe_settle_feed(&rule, 3139);
+    if (st != DW1000_PROBE_SETTLE_SETTLED || rule.spread != 19)
+	return REASON("spread %ld under the threshold gave %s",
+		      (long)rule.spread, dw1000_probe_settle_state_name(st));
+
+    /* -1.5 hundredths rounds away from zero, as +1.5 would. */
+    dw1000_probe_settle_start(&rule, &p);
+    dw1000_probe_settle_feed(&rule, -1);
+    dw1000_probe_settle_feed(&rule, -2);
+    if (rule.mean != -2)
+	return REASON("mean of -1 and -2 is %d, want -2", rule.mean);
+    return NULL;
+}
+
+static const char *
+case_settle_line(void)
+{
+    static const struct dw1000_probe_settle_params def =
+	DW1000_PROBE_SETTLE_PARAMS_DEFAULT;
+    static const char want1[] =
+	"SETTLE window=1 elapsed=29.0 mean=3100 spread=- threshold=20"
+	" state=unsettled node=rpi-d role=rx run=-";
+    static const char want4[] =
+	"SETTLE window=4 elapsed=119.0 mean=3100 spread=0 threshold=20"
+	" state=settled node=rpi-d role=rx run=r7";
+    struct dw1000_probe_origin o = {
+	.node = "rpi-d", .role = DW1000_PROBE_ROLE_RX, .run = NULL,
+    };
+    struct dw1000_probe_settle rule;
+    char buf[DW1000_PROBE_RECORD_MAX];
+    size_t n;
+    uint32_t i;
+
+    dw1000_probe_settle_start(&rule, &def);
+    for (i = 0; i < 30; i++)
+	dw1000_probe_settle_feed(&rule, 3100);
+    n = dw1000_probe_settle_format(buf, sizeof(buf), &rule, 290, &o);
+    if (strcmp(buf, want1) != 0 || n != strlen(want1))
+	return REASON("got \"%s\"", buf);
+
+    settle_until_final(&rule, still, 1000);
+    o.run = "r7";
+    dw1000_probe_settle_format(buf, sizeof(buf), &rule, 1190, &o);
+    if (strcmp(buf, want4) != 0)
+	return REASON("got \"%s\"", buf);
+
+    if (strcmp(dw1000_probe_settle_state_name(DW1000_PROBE_SETTLE__COUNT),
+	       "invalid") != 0)
+	return "state __COUNT should be 'invalid'";
+    return NULL;
+}
+
+
+/*----------------------------------------------------------------------*/
 /* Plumbing                                                             */
 /*----------------------------------------------------------------------*/
 
@@ -658,6 +889,12 @@ main(void)
     step("distances: missing instant", case_distances_missing_instant());
     step("distances: zero-sum",        case_distances_bad_distance());
     step("exchange names",             case_exchange_names());
+    step("settle: parameters",         case_settle_params());
+    step("settle: a still die",        case_settle_still());
+    step("settle: a dithering die",    case_settle_dither());
+    step("settle: a steady climb",     case_settle_climb());
+    step("settle: strict, negative",   case_settle_strict_and_negative());
+    step("settle: the SETTLE line",    case_settle_line());
 
     return failures == 0 ? 0 : 1;
 }

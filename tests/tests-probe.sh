@@ -18,10 +18,13 @@
 # in without calling it just to prove that builds too.
 #
 # TWO TESTS, each saying in its own header comment what it covers:
-#   format    the four lines and the arithmetic behind them, no radio
-#   exchange  the responder against port/emulation: that a run nobody
-#             answers ends rather than hanging, and that its STATS line
-#             says what the receiver heard and why none of it was used
+#   format    the lines, the arithmetic behind them and the settle rule,
+#             no radio
+#   exchange  the roles against port/emulation: that a responder run
+#             nobody answers ends rather than hanging, and that its STATS
+#             line says what the receiver heard and why none of it was
+#             used; and the roles a node runs alone (tx, rx, rx under the
+#             settle rule, temperature)
 #
 # The second is why exchange.c being linked in is no longer merely a
 # link check. It overrides the two POLL budgets, because a gate cannot
@@ -57,9 +60,10 @@ tmp=`mktemp -d`
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 # 0.4 s for the first POLL and 0.2 s for each one after it, against 60 s
-# and 2 s in the field. Both steps of the exchange test spend their whole
-# budget by construction (nothing ever answers), so the run is about a
-# second and a half, and the test's own alarm(20) is the backstop.
+# and 2 s in the field. Both responder steps of the exchange test spend
+# their whole budget by construction (nothing ever answers), about a
+# second and a half; the solo steps run on their own clocks, about four
+# more. The test's own alarm(20) is the backstop.
 budgets='-DPROBE_EXCHANGE_FIRST_POLL_TIMEOUT_US=400000
 	 -DPROBE_EXCHANGE_POLL_TIMEOUT_US=200000'
 

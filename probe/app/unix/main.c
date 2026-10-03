@@ -8,10 +8,12 @@
 /**
  * DW1000 probe: Linux/Raspberry Pi application.
  *
- * Where zephyr-redskin/probe's src/shell.c offers `probe twr_resp` and
- * `probe twr_init` as shell commands, this offers the same two roles as
+ * Where zephyr-redskin/probe's src/shell.c offers the roles as `probe`
+ * shell commands, this offers the same five (twr_init, twr_resp, tx, rx,
+ * temperature) and the same three read-backs (info, config, power) as
  * one argv-driven run: bring the radio up, run the selected role once,
- * report a summary, exit. It is deliberately not a daemon, unlike
+ * report a summary, exit. Both drive the roles in probe/src, so what is
+ * left here is choosing values: argv, defaults and the pin wiring. It is deliberately not a daemon, unlike
  * rpi-redskin/main.c, which this is modelled on for the bring-up shape
  * (bitters GPIO/SPI wiring, the DW1000 pin map, the processing thread),
  * there is no protocol running underneath needing a long-lived process,
@@ -40,6 +42,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <limits.h>
 
 #include <bitters.h>
 #include <bitters/gpio.h>
@@ -54,6 +57,8 @@
 #include <dw1000/probe/record.h>
 #include <dw1000/probe/role.h>
 #include <dw1000/probe/exchange.h>
+#include <dw1000/probe/settle.h>
+#include <dw1000/probe/solo.h>
 
 #include "config.h"
 
@@ -215,6 +220,8 @@ dw1000_cb_rx_error(dw1000_t *dw, uint32_t status)
 {
     (void)status;
 
+    /* Counted for the rx role's account of what the chip rejected. */
+    dw1000_probe_rx_error_capture();
     dw1000_rx_start(dw, DW1000_RX_IMMEDIATE);
 }
 
@@ -265,32 +272,35 @@ dw1000_event_thread(void *arg)
 
 
 /*======================================================================*/
-/* Line buffering for twr_resp: see <dw1000/probe/exchange.h>'s note    */
-/* on why dw1000_probe_twr_resp_run() takes a callback rather than       */
-/* owning a buffer of its own: a Linux process has no RAM budget to      */
-/* protect the way the DWM1001 does, so this simply heap-allocates       */
-/* enough for the run it is about to make, rather than reusing a fixed   */
-/* static buffer the way the embedded application does.                 */
+/* Line buffering: see <dw1000/probe/exchange.h>'s note on why the      */
+/* roles take a callback rather than owning a buffer of their own. A    */
+/* Linux process has no RAM budget to protect the way the DWM1001 does, */
+/* so this one grows as the run needs it and has no cap: a board refuses */
+/* a run its fixed buffer cannot hold, this does not have to.           */
 /*======================================================================*/
 
 static char   *line_buf;
-static size_t  line_buf_cap;
+static size_t  line_buf_cap;    /* in lines */
 static size_t  line_buf_used;
-
-static void
-line_buf_start(size_t capacity)
-{
-    free(line_buf);
-    line_buf      = malloc(capacity * DW1000_PROBE_RECORD_MAX);
-    line_buf_cap  = (line_buf != NULL) ? capacity : 0;
-    line_buf_used = 0;
-}
+static size_t  line_buf_dropped;
 
 static void
 line_buf_append(const char *line)
 {
-    if (line_buf_used >= line_buf_cap)
-        return; /* dropped, same policy as the embedded application's */
+    if (line_buf_used >= line_buf_cap) {
+        /* Grown between frames only in the sense that a role calls this
+         * at the end of a step, never inside a wait; a doubling makes it
+         * rare, and a run of 64 lines never grows at all. */
+        size_t cap = line_buf_cap ? 2 * line_buf_cap : 64;
+        char  *buf = realloc(line_buf, cap * DW1000_PROBE_RECORD_MAX);
+
+        if (buf == NULL) {
+            line_buf_dropped++;
+            return;
+        }
+        line_buf     = buf;
+        line_buf_cap = cap;
+    }
 
     char *slot = line_buf + line_buf_used * DW1000_PROBE_RECORD_MAX;
     strncpy(slot, line, DW1000_PROBE_RECORD_MAX - 1);
@@ -305,7 +315,22 @@ line_buf_dump(void)
 
     for (i = 0; i < line_buf_used; i++)
         dw1000_probe_port_emit(line_buf + i * DW1000_PROBE_RECORD_MAX);
-    line_buf_used = 0;
+    if (line_buf_dropped > 0)
+        WARN("%zu line(s) lost: out of memory", line_buf_dropped);
+    line_buf_used    = 0;
+    line_buf_dropped = 0;
+}
+
+/* A multi-line block (the driver's radio state, the probe's chip info)
+ * one INFO line at a time. */
+static void
+print_lines(char *text)
+{
+    for (char *p = text, *nl; p; p = nl) {
+        nl = strchr(p, '\n');
+        if (nl) *nl++ = '\0';
+        INFO("%s", p);
+    }
 }
 
 
@@ -317,24 +342,44 @@ static void
 usage(const char *prog)
 {
     fprintf(stderr,
-        "usage: %s [options] <role> <own_addr> <peer_addr> <count>\n"
+        "usage: %s [options] <role> <arguments>\n"
         "\n"
-        "  role        twr_init | twr_resp\n"
-        "  own_addr    this node's address (hex accepted, e.g. 0xc939)\n"
-        "  peer_addr   the peer's address (twr_resp: RESPONSE answers\n"
-        "              whoever sent the POLL, so this is unused but\n"
-        "              still required, for symmetry with twr_init)\n"
-        "  count       exchanges to run\n"
+        "roles:\n"
+        "  twr_init <own_addr> <peer_addr> <count>\n"
+        "  twr_resp <own_addr> <peer_addr> <count>\n"
+        "              the two-node exchange; addresses in hex accepted\n"
+        "              (0xc939); twr_resp answers whoever polls it, so\n"
+        "              its peer_addr is unused, but required for symmetry\n"
+        "  tx <count>  transmit count frames, --gap apart\n"
+        "  rx <seconds>\n"
+        "              listen, counting received and rejected frames\n"
+        "  rx          with --settle: listen until the die settles\n"
+        "  temperature [<seconds>]\n"
+        "              radio stopped, sample the die; no seconds: one\n"
+        "              reading\n"
         "\n"
-        "options:\n"
-        "  --ss              two-frame single-sided estimate only\n"
-        "  --warmup=N        twr_init: uncounted exchanges first (default 5)\n"
+        "read-backs (bring the radio up, print, exit):\n"
+        "  info        chip and lot id, OTP references, radio, power\n"
+        "  config      the radio configuration read back off the chip\n"
+        "  power       the applied transmit power read back off the chip\n"
+        "\n"
+        "options, every role:\n"
         "  --power=<dB>|auto transmit power, 0..30.5 on the 0.5 dB grid\n"
         "                    (default: auto)\n"
         "  --node=NAME       origin node name emitted lines carry\n"
         "                    (default: this host's hostname)\n"
         "  --dblbuff         double-buffered receive (default)\n"
-        "  --no-dblbuff      single-buffered, to compare against\n",
+        "  --no-dblbuff      single-buffered, to compare against\n"
+        "options, one role:\n"
+        "  --ss              twr_*: two-frame single-sided estimate only\n"
+        "  --warmup=N        twr_init: uncounted exchanges first (default 5)\n"
+        "  --gap=MS          tx: between frames (default 10)\n"
+        "  --settle          rx: until settled, rather than for <seconds>\n"
+        "  --settle-window=S      rx: window length (default 30)\n"
+        "  --settle-windows=N     rx: windows that must agree (default 4)\n"
+        "  --settle-threshold=DEG rx: their means' spread below (0.2)\n"
+        "  --settle-give-up=S     rx: give up after (default 900)\n"
+        "                    each --settle-* implies --settle\n",
         prog);
 }
 
@@ -385,10 +430,55 @@ parse_power(const char *s, uint8_t *encoded)
     return true;
 }
 
+/* A whole number in [min, max]. */
+static bool
+parse_ulong(const char *s, unsigned long min, unsigned long max,
+            unsigned long *out)
+{
+    char *end;
+    unsigned long v;
+
+    if (*s < '0' || *s > '9')
+        return false;
+    v = strtoul(s, &end, 10);
+    if (*end != '\0' || v < min || v > max)
+        return false;
+    *out = v;
+    return true;
+}
+
+/* Degrees with at most two decimals, to hundredths: "0.2" -> 20. By hand
+ * for the reason parse_power() gives; the same grammar as the Zephyr
+ * shell's --settle-threshold. */
+static bool
+parse_cdeg(const char *s, uint16_t *out)
+{
+    const char *p = s;
+    unsigned long v = 0;
+    int digits = 0, decimals = 0;
+
+    for (; *p >= '0' && *p <= '9' && v < 1000; p++, digits++)
+        v = v * 10 + (unsigned long)(*p - '0');
+    if (*p == '.')
+        for (p++; *p >= '0' && *p <= '9' && decimals < 2; p++, decimals++)
+            v = v * 10 + (unsigned long)(*p - '0');
+    if (digits == 0 || *p != '\0')
+        return false;
+    for (; decimals < 2; decimals++)
+        v *= 10;
+    if (v == 0 || v > 65535)
+        return false;
+    *out = (uint16_t)v;
+    return true;
+}
+
 
 /*======================================================================*/
 /* main                                                                  */
 /*======================================================================*/
+
+/* What argv asked for: a role, or one of the read-backs. */
+enum action { ACTION_ROLE, ACTION_INFO, ACTION_CONFIG, ACTION_POWER };
 
 int
 main(int argc, char *argv[])
@@ -396,6 +486,12 @@ main(int argc, char *argv[])
     const char *prog = argv[0];
     bool     ss          = false;
     long     warmup      = 5;
+    bool     warmup_set  = false;
+    uint32_t gap_us      = DW1000_PROBE_TX_GAP_US;
+    bool     gap_set     = false;
+    bool     settle      = false;
+    struct dw1000_probe_settle_params settle_params =
+        DW1000_PROBE_SETTLE_PARAMS_DEFAULT;
     uint8_t  power        = DW1000_TX_POWER_AUTO;
     char     node_name[64] = {0};
     /* Default on, as the config template has it. The switch exists so a
@@ -403,60 +499,153 @@ main(int argc, char *argv[])
      * them, which is the only way to compare them against the same air:
      * rpi-redskin has the same pair of flags, for the same reason. */
     bool     dblbuff      = dw1000_config.dblbuff;
+    unsigned long v;
+    int      rc           = EXIT_OK;
 
     while (argc > 1 && argv[1][0] == '-') {
-        if (strcmp(argv[1], "--ss") == 0) {
+        const char *a = argv[1];
+
+        if (strcmp(a, "--ss") == 0) {
             ss = true;
-        } else if (strncmp(argv[1], "--warmup=", 9) == 0) {
-            warmup = strtol(argv[1] + 9, NULL, 10);
-        } else if (strncmp(argv[1], "--power=", 8) == 0) {
-            if (!parse_power(argv[1] + 8, &power))
-                DIE("invalid --power value '%s'", argv[1] + 8);
-        } else if (strncmp(argv[1], "--node=", 7) == 0) {
-            strncpy(node_name, argv[1] + 7, sizeof(node_name) - 1);
-        } else if (strcmp(argv[1], "--dblbuff") == 0) {
+        } else if (strncmp(a, "--warmup=", 9) == 0) {
+            if (!parse_ulong(a + 9, 0, 100000, &v))
+                DIE("invalid --warmup value '%s'", a + 9);
+            warmup     = (long)v;
+            warmup_set = true;
+        } else if (strncmp(a, "--gap=", 6) == 0) {
+            if (!parse_ulong(a + 6, 0, UINT32_MAX / 1000, &v))
+                DIE("invalid --gap value '%s'", a + 6);
+            gap_us  = (uint32_t)v * 1000u;
+            gap_set = true;
+        } else if (strcmp(a, "--settle") == 0) {
+            settle = true;
+        } else if (strncmp(a, "--settle-window=", 16) == 0) {
+            if (!parse_ulong(a + 16, 1, UINT32_MAX, &v))
+                DIE("invalid --settle-window value '%s'", a + 16);
+            settle_params.window_s = (uint32_t)v;
+            settle = true;
+        } else if (strncmp(a, "--settle-windows=", 17) == 0) {
+            if (!parse_ulong(a + 17, 2, DW1000_PROBE_SETTLE_WINDOWS_MAX, &v))
+                DIE("invalid --settle-windows value '%s' (2..%d)", a + 17,
+                    DW1000_PROBE_SETTLE_WINDOWS_MAX);
+            settle_params.windows = (uint8_t)v;
+            settle = true;
+        } else if (strncmp(a, "--settle-threshold=", 19) == 0) {
+            if (!parse_cdeg(a + 19, &settle_params.threshold_cdeg))
+                DIE("invalid --settle-threshold value '%s' (degrees, "
+                    "two decimals at most)", a + 19);
+            settle = true;
+        } else if (strncmp(a, "--settle-give-up=", 17) == 0) {
+            if (!parse_ulong(a + 17, 1, UINT32_MAX, &v))
+                DIE("invalid --settle-give-up value '%s'", a + 17);
+            settle_params.give_up_s = (uint32_t)v;
+            settle = true;
+        } else if (strncmp(a, "--power=", 8) == 0) {
+            if (!parse_power(a + 8, &power))
+                DIE("invalid --power value '%s'", a + 8);
+        } else if (strncmp(a, "--node=", 7) == 0) {
+            strncpy(node_name, a + 7, sizeof(node_name) - 1);
+        } else if (strcmp(a, "--dblbuff") == 0) {
             dblbuff = true;
-        } else if (strcmp(argv[1], "--no-dblbuff") == 0) {
+        } else if (strcmp(a, "--no-dblbuff") == 0) {
             dblbuff = false;
-        } else if (strcmp(argv[1], "--") == 0) {
+        } else if (strcmp(a, "--") == 0) {
             argc--; argv++;
             break;
         } else {
-            fprintf(stderr, "%s: unknown option %s\n", prog, argv[1]);
+            fprintf(stderr, "%s: unknown option %s\n", prog, a);
             usage(prog);
             return EXIT_USAGE;
         }
         argc--; argv++;
     }
 
-    if (argc != 5) {
+    if (argc < 2) {
         usage(prog);
         return EXIT_USAGE;
     }
 
-    const char *role_name = argv[1];
-    bool is_resp;
-    if (strcmp(role_name, "twr_resp") == 0) {
-        is_resp = true;
-    } else if (strcmp(role_name, "twr_init") == 0) {
-        is_resp = false;
-    } else {
-        fprintf(stderr, "%s: unknown role '%s' (twr_init or twr_resp)\n",
-               prog, role_name);
+    /* The verb: a canonical role name, read through the one table that
+     * spells them (<dw1000/probe/role.h>), or a read-back. */
+    const char          *verb   = argv[1];
+    char               **args   = argv + 2;
+    int                  nargs  = argc - 2;
+    enum action          action = ACTION_ROLE;
+    dw1000_probe_role_t  role   = DW1000_PROBE_ROLE__COUNT;
+
+    if      (strcmp(verb, "info")   == 0) action = ACTION_INFO;
+    else if (strcmp(verb, "config") == 0) action = ACTION_CONFIG;
+    else if (strcmp(verb, "power")  == 0) action = ACTION_POWER;
+    else if (!dw1000_probe_role_lookup(verb, &role)) {
+        fprintf(stderr, "%s: unknown role '%s'\n", prog, verb);
+        usage(prog);
         return EXIT_USAGE;
     }
 
-    uint16_t own_addr, peer_addr;
-    if (!parse_addr(argv[2], &own_addr) || !parse_addr(argv[3], &peer_addr)) {
-        fprintf(stderr, "%s: invalid address\n", prog);
+    bool is_twr = action == ACTION_ROLE &&
+                  (role == DW1000_PROBE_ROLE_TWR_INIT ||
+                   role == DW1000_PROBE_ROLE_TWR_RESP);
+
+    /* An option meant for one role and given to another is refused rather
+     * than ignored: a run that silently dropped --settle would look like
+     * one that settled. */
+    if ((ss && !is_twr) ||
+        (warmup_set && !(action == ACTION_ROLE &&
+                         role == DW1000_PROBE_ROLE_TWR_INIT)) ||
+        (gap_set && !(action == ACTION_ROLE && role == DW1000_PROBE_ROLE_TX)) ||
+        (settle && !(action == ACTION_ROLE && role == DW1000_PROBE_ROLE_RX))) {
+        fprintf(stderr, "%s: an option given does not apply to '%s'\n",
+                prog, verb);
+        return EXIT_USAGE;
+    }
+    if (settle && !dw1000_probe_settle_params_valid(&settle_params)) {
+        fprintf(stderr, "%s: these settle values cannot settle: the give-up "
+                "must cover the windows, a window one reading\n", prog);
         return EXIT_USAGE;
     }
 
-    char *end;
-    long count = strtol(argv[4], &end, 10);
-    if (*end != '\0' || count <= 0) {
-        fprintf(stderr, "%s: invalid count '%s'\n", prog, argv[4]);
+    uint16_t      own_addr = 0, peer_addr = 0;
+    long          count    = 0;
+    unsigned long seconds  = 0;
+    int           want     = 0;     /* positional arguments the verb takes */
+
+    if (action == ACTION_ROLE) {
+        switch (role) {
+        case DW1000_PROBE_ROLE_TWR_INIT:
+        case DW1000_PROBE_ROLE_TWR_RESP:  want = 3;               break;
+        case DW1000_PROBE_ROLE_TX:        want = 1;               break;
+        case DW1000_PROBE_ROLE_RX:        want = settle ? 0 : 1;  break;
+        case DW1000_PROBE_ROLE_TEMPERATURE:
+                                          want = nargs > 0 ? 1 : 0; break;
+        default:                                                  break;
+        }
+    }
+    if (nargs != want) {
+        usage(prog);
         return EXIT_USAGE;
+    }
+
+    if (is_twr) {
+        if (!parse_addr(args[0], &own_addr) || !parse_addr(args[1], &peer_addr)) {
+            fprintf(stderr, "%s: invalid address\n", prog);
+            return EXIT_USAGE;
+        }
+        args += 2;
+    }
+    if (is_twr || (action == ACTION_ROLE && role == DW1000_PROBE_ROLE_TX)) {
+        if (!parse_ulong(args[0], 1, LONG_MAX, &v)) {
+            fprintf(stderr, "%s: invalid count '%s'\n", prog, args[0]);
+            return EXIT_USAGE;
+        }
+        count = (long)v;
+    } else if (want == 1) {
+        /* rx and temperature: seconds, bounded so that the sampling
+         * arithmetic stays in range. */
+        if (!parse_ulong(args[0], role == DW1000_PROBE_ROLE_RX ? 1 : 0,
+                         UINT32_MAX / 1000, &seconds)) {
+            fprintf(stderr, "%s: invalid seconds '%s'\n", prog, args[0]);
+            return EXIT_USAGE;
+        }
     }
 
     if (node_name[0] == '\0') {
@@ -522,20 +711,34 @@ main(int argc, char *argv[])
     /* Read back off the chip, not echoed from the config: the two are
      * the same only when the chip honoured what it was asked. Printed
      * once at start-up, never inside an exchange: it is SPI traffic.
-     * The identical lines come out of the Zephyr shell's `probe config`,
-     * so the two platforms diff directly. */
+     * The identical lines come out of the Zephyr shell's `probe info`,
+     * `probe config` and `probe power`, so the two platforms diff
+     * directly. A role run prints the configuration and the power, so
+     * that every run's log says what the radio was; a read-back prints
+     * what it was asked for and nothing else. */
     {
         dw1000_radio_state_t st;
-        char                 line[DW1000_RADIO_STATE_MAX];
+        char                 text[DW1000_PROBE_INFO_MAX > DW1000_RADIO_STATE_MAX
+                                  ? DW1000_PROBE_INFO_MAX
+                                  : DW1000_RADIO_STATE_MAX];
 
-        dw1000_get_radio_state(&dw0, &st);
-        dw1000_radio_state_format(line, sizeof(line), &st);
-        for (char *p = line, *nl; p; p = nl) {
-            nl = strchr(p, '\n');
-            if (nl) *nl++ = '\0';
-            INFO("%s", p);
+        if (action == ACTION_INFO) {
+            dw1000_probe_info_format(text, sizeof(text), &dw0);
+            print_lines(text);
+        }
+        if (action != ACTION_POWER) {
+            dw1000_get_radio_state(&dw0, &st);
+            dw1000_radio_state_format(text, sizeof(text), &st);
+            print_lines(text);
+        }
+        if (action != ACTION_CONFIG) {
+            dw1000_probe_power_format(text, sizeof(text), &dw0);
+            INFO("%s", text);
         }
     }
+
+    if (action != ACTION_ROLE)
+        goto pins;
 
 
     if (bitters_gpio_irq_callback(&dw1000_irq, dw1000_irq_cb, NULL) < 0)
@@ -578,15 +781,17 @@ main(int argc, char *argv[])
     if (pthread_create(&event_tid, NULL, dw1000_event_thread, NULL) != 0)
         DIE_ERRNO("failed to start the event thread");
 
-    int rc = EXIT_OK;
-    if (is_resp) {
-        line_buf_start((size_t)count + 1);
+    switch (role) {
+    case DW1000_PROBE_ROLE_TWR_RESP: {
         struct dw1000_probe_twr_resp_result result =
             dw1000_probe_twr_resp_run(&dw0, count, ss, own_addr, peer_addr,
                                       node_name, line_buf_append);
         line_buf_dump();
         INFO("twr_resp: %u/%u resolved", result.resolved, result.attempted);
-    } else {
+        break;
+    }
+
+    case DW1000_PROBE_ROLE_TWR_INIT: {
         struct dw1000_probe_twr_init_result result =
             dw1000_probe_twr_init_run(&dw0, count, ss, warmup, own_addr, peer_addr);
         INFO("twr_init: %" PRIu32 "/%" PRIu32
@@ -599,6 +804,56 @@ main(int argc, char *argv[])
         if (result.report_failed > 0)
             INFO("twr_init: %" PRIu32 " REPORT send(s) unconfirmed",
                  result.report_failed);
+        break;
+    }
+
+    case DW1000_PROBE_ROLE_TX: {
+        struct dw1000_probe_tx_result result =
+            dw1000_probe_tx_run(&dw0, count, gap_us,
+                                DW1000_PROBE_SAMPLE_INTERVAL_MS,
+                                node_name, line_buf_append);
+        line_buf_dump();
+        INFO("tx: %" PRIu32 "/%ld started, %" PRIu32 " completed",
+             result.started, count, result.completed);
+        break;
+    }
+
+    case DW1000_PROBE_ROLE_RX: {
+        struct dw1000_probe_rx_result result = settle
+            ? dw1000_probe_rx_settle_run(&dw0, &settle_params,
+                                         node_name, line_buf_append)
+            : dw1000_probe_rx_run(&dw0, (uint32_t)seconds,
+                                  DW1000_PROBE_SAMPLE_INTERVAL_MS,
+                                  node_name, line_buf_append);
+        line_buf_dump();
+        if (result.failed) {
+            WARN("rx: failed to start the receiver");
+            rc = EXIT_ERROR;
+            break;
+        }
+        INFO("rx: %" PRIu32 " frame%s received over %" PRIu32 ".%" PRIu32 " s",
+             result.received, result.received == 1 ? "" : "s",
+             result.elapsed_ds / 10, result.elapsed_ds % 10);
+        INFO("rx: %" PRIu32 " frames REJECTED by the chip "
+             "(rx_error: bad CRC, PHR, SFD timeout)", result.rejected);
+        if (settle)
+            INFO("rx: %s", dw1000_probe_settle_state_name(result.settle));
+        break;
+    }
+
+    case DW1000_PROBE_ROLE_TEMPERATURE: {
+        struct dw1000_probe_temperature_result result =
+            dw1000_probe_temperature_run(&dw0, (uint32_t)seconds,
+                                         DW1000_PROBE_SAMPLE_INTERVAL_MS,
+                                         node_name, line_buf_append);
+        line_buf_dump();
+        INFO("temperature: %" PRIu32 " sample%s", result.samples,
+             result.samples == 1 ? "" : "s");
+        break;
+    }
+
+    default:
+        break;
     }
 
     /* Shut the radio down before tearing down the event thread and the
@@ -620,6 +875,7 @@ main(int argc, char *argv[])
     dw1000_probe_port_wake(); /* nudge the event thread out of its wait */
     pthread_join(event_tid, NULL);
 
+ pins:
     if (bitters_spi_disable(&dw1000_spi) < 0)
         WARN_ERRNO("unable to disable spi for dw1000");
     if (bitters_gpio_pin_disable(&dw1000_irq) < 0 ||

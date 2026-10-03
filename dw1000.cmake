@@ -29,8 +29,10 @@
 #   DW1000_OSAL_<PORT>_SOURCES       NULL UNIX ZEPHYR
 #
 #   DW1000_PROBE_INCLUDE_DIR        the probe API, add to your include path
-#   DW1000_PROBE_SOURCES            the probe core -- record and role, no chip,
-#                            no port, and deliberately no <dw1000/dw1000.h>
+#   DW1000_PROBE_SOURCES            the probe: _CORE (record, role names, the
+#                            settle rule: no chip, no port, deliberately
+#                            no <dw1000/dw1000.h>) and _EXCHANGE (the
+#                            roles, which drive the chip)
 #   DW1000_PROBE_PORTS              the probe ports this tree ships
 #   DW1000_PROBE_<PORT>_SOURCES     for PORT in EMULATION; a probe port needs no
 #                            include directory of its own, since it only
@@ -178,22 +180,26 @@ set(DW1000_OSAL_ZEPHYR_SOURCES
 
 # --- probe --------------------------------------------------------------
 # What one exchange produced, and how it is written down: see
-# probe/include/dw1000/probe/record.h. record.c and role.c are free of
-# <dw1000/dw1000.h> by design; exchange.c is not -- it drives the chip --
-# which is why it is its own translation unit rather than folded into
-# either. All three are still a source list of their own rather than part
-# of DW1000_SOURCES, since a consumer that wants the probe wants it
-# addressed separately from the driver core.
+# probe/include/dw1000/probe/record.h. record.c, role.c and settle.c are
+# free of <dw1000/dw1000.h> by design; exchange.c and solo.c are not
+# (they drive the chip), which is why they are a layer of their own
+# rather than folded into the others. All of it is still a source list of
+# its own rather than part of DW1000_SOURCES, since a consumer that wants
+# the probe wants it addressed separately from the driver core.
 set(DW1000_PROBE_INCLUDE_DIR
     ${CMAKE_CURRENT_LIST_DIR}/probe/include)
 # Two layers, the same shape as DW1000_SOURCES_CORE / _SEND above. CORE is
-# the record and the roles, free of <dw1000/dw1000.h>; EXCHANGE drives the
-# chip. A consumer wanting the format with no driver takes CORE alone.
+# the record, the role names and the settle rule, free of
+# <dw1000/dw1000.h>; EXCHANGE drives the chip: the two-node exchange and
+# the roles a node runs alone (tx, rx, temperature). A consumer wanting
+# the format with no driver takes CORE alone.
 set(DW1000_PROBE_SOURCES_CORE
     ${CMAKE_CURRENT_LIST_DIR}/probe/src/role.c
-    ${CMAKE_CURRENT_LIST_DIR}/probe/src/record.c)
+    ${CMAKE_CURRENT_LIST_DIR}/probe/src/record.c
+    ${CMAKE_CURRENT_LIST_DIR}/probe/src/settle.c)
 set(DW1000_PROBE_SOURCES_EXCHANGE
-    ${CMAKE_CURRENT_LIST_DIR}/probe/src/exchange.c)
+    ${CMAKE_CURRENT_LIST_DIR}/probe/src/exchange.c
+    ${CMAKE_CURRENT_LIST_DIR}/probe/src/solo.c)
 
 set(DW1000_PROBE_SOURCES
     ${DW1000_PROBE_SOURCES_CORE}

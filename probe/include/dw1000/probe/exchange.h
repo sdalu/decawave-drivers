@@ -169,16 +169,25 @@ void dw1000_probe_rx_capture(dw1000_t *dw, size_t length);
 
 /**
  * @brief Note one transmit completion, for the exchange roles' settle
- * wait on their own transmits.
+ * wait on their own transmits, and for the tx role's completion count
+ * (<dw1000/probe/solo.h>).
  *
  * Called by the application's tx_done callback (dw1000_config_t.cb.
  * tx_done), under the same bus-lock guarantee as
- * dw1000_probe_rx_capture() above. Self-contained: an application with
- * its own reasons to count tx completions (a `probe tx` command, say)
- * keeps its own counter and calls this in addition, from the same
- * callback: the two are unrelated and neither reads the other's.
+ * dw1000_probe_rx_capture() above.
  */
 void dw1000_probe_tx_capture(void);
+
+/**
+ * @brief Note one frame the chip rejected (bad CRC, bad PHR, SFD
+ * timeout), for the rx role's account (<dw1000/probe/solo.h>).
+ *
+ * Called by the application's rx_error callback (dw1000_config_t.cb.
+ * rx_error), under the same bus-lock guarantee as the two above, and
+ * before it re-arms the receiver. It is what lets a listener tell
+ * "corrupt frames arriving" from "nothing arriving".
+ */
+void dw1000_probe_rx_error_capture(void);
 
 /** @} */
 
